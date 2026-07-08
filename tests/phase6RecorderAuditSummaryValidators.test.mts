@@ -1,0 +1,903 @@
+/**
+ * P6-I5L: isolated tests for the Phase 6 Recorder Audit Summary validators.
+ *
+ * Imports ONLY node:test, node:assert/strict, and the module public surface
+ * (app/lib/phase6/recorderAuditSummary/index.ts), plus — for the Phase 7
+ * static source guards only — node:fs / node:url to READ (never mutate) the
+ * module source files. No app runtime modules, no app/lib/persistence, no
+ * app/lib/phase6/persistenceAuditEvidence, no app/lib/phase6/
+ * persistenceTargetDecision, no P6-I0..I5K tests, no fixtures, no harness, no
+ * P7.1 utilities, no network, no GitHub API, no child_process, no file
+ * mutation, no secrets, no ApprovalStore, no external actions, no D1, no SQL,
+ * no LLM. Validators are exercised over in-memory objects only.
+ *
+ * Expected key/value literals below are hardcoded independently of the source
+ * modules' own constant arrays (rather than imported and reflected back), so a
+ * regression in the source's literal lists would be caught here instead of
+ * trivially self-matching.
+ */
+
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
+import {
+  validateRecorderAuditSummaryRecord,
+  isRecorderAuditSummaryScope,
+  isRecorderAuditOperationName,
+  isRecorderAuditOperationCountKey,
+  isRecorderAuditStatusCountKey,
+  isRecorderAuditOutcomeCountKey,
+  isRecorderAuditValidationResultCountKey,
+  isRecorderAuditIssueCode,
+  isRecorderAuditNoGoFlag,
+  isSha256Hex,
+  isIsoTimestamp,
+} from "../app/lib/phase6/recorderAuditSummary/index.ts"
+
+const HASH = "a".repeat(64)
+const TS = "2026-07-08T12:00:00Z"
+const NA =
+  "This summary is descriptive: it is not approval, not execution permission, not summary runtime, not audit runtime, not audit event emission, not persistence, not durable storage, not Evidence Ledger append, not Graph Model write, and not production readiness."
+
+const DEFERRED_TARGET_CLASSES = [
+  "local_ephemeral_dev_store",
+  "append_only_audit_candidate_store",
+  "tenant_scoped_artifact_candidate_store",
+  "future_d1_store_after_separate_d1_gate",
+]
+const BLOCKED_TARGET_CLASS = "blocked_target"
+
+const ALL_NO_GO_FLAGS = [
+  "p6_i5j_not_merged",
+  "missing_foundation_file",
+  "missing_explicit_human_go",
+  "recorder_summary_runtime_implemented",
+  "summary_emitter_implemented",
+  "audit_runtime_implemented",
+  "audit_event_emitter_implemented",
+  "persistence_implementation_added",
+  "durable_storage_added",
+  "d1_access_added",
+  "sql_execution_added",
+  "evidence_ledger_append_added",
+  "graph_write_added",
+  "recorder_summary_treated_as_approval",
+  "recorder_summary_treated_as_execution",
+  "recorder_summary_treated_as_persistence",
+  "recorder_summary_treated_as_durable_storage",
+  "recorder_summary_treated_as_production_readiness",
+  "raw_event_payload_echo_allowed",
+  "secret_like_value_echo_allowed",
+  "redaction_failure_allowed",
+  "tenant_scope_bypassed",
+  "validator_result_bypassed",
+  "duplicate_conflict_treated_as_success",
+  "clear_all_treated_as_production_capability",
+  "validation_failed",
+]
+
+function zeroCountMap(keys: readonly string[]): Record<string, number> {
+  const map: Record<string, number> = {}
+  for (const k of keys) map[k] = 0
+  return map
+}
+
+const FULL_NO_GO_FLAG_COUNTS = zeroCountMap(ALL_NO_GO_FLAGS)
+
+const FULL_FIXTURE_COVERAGE_FALSE = {
+  put_fixture_covered: false,
+  get_fixture_covered: false,
+  list_fixture_covered: false,
+  count_fixture_covered: false,
+  clear_tenant_fixture_covered: false,
+  clear_all_fixture_covered: false,
+  blocked_no_go_fixture_covered: false,
+  all_required_fixtures_covered: false,
+}
+
+const FULL_FIXTURE_COVERAGE_TRUE = {
+  put_fixture_covered: true,
+  get_fixture_covered: true,
+  list_fixture_covered: true,
+  count_fixture_covered: true,
+  clear_tenant_fixture_covered: true,
+  clear_all_fixture_covered: true,
+  blocked_no_go_fixture_covered: true,
+  all_required_fixtures_covered: true,
+}
+
+function baseTenantSummary(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    summary_id: "summary_1",
+    tenant_id: "tenant_1",
+    recorder_target_class: "in_memory_test_only_store",
+    selected_target_class: "in_memory_test_only_store",
+    summary_scope: "tenant",
+    summarized_operation_names: ["recordAuditEvent"],
+    total_record_attempts: 1,
+    accepted_record_count: 1,
+    rejected_record_count: 0,
+    stored_event_count: 1,
+    returned_event_count: 0,
+    listed_event_count: 0,
+    cleared_event_count: 0,
+    not_found_count: 0,
+    validation_failed_count: 0,
+    tenant_mismatch_count: 0,
+    duplicate_conflict_count: 0,
+    idempotent_duplicate_count: 0,
+    forbidden_target_class_count: 0,
+    recorder_exception_count: 0,
+    operation_counts: { record: 1, get: 0, list: 0, count: 0, clear_tenant: 0, clear_all: 0 },
+    status_counts: { attempted: 1, accepted: 1, rejected: 0, not_found: 0, cleared: 0, blocked_no_go: 0 },
+    outcome_counts: { pass: 1, warn: 0, fail: 0, no_go: 0 },
+    validation_result_counts: {
+      validator_passed: 1,
+      validator_failed: 0,
+      validator_not_applicable: 0,
+      validator_not_run_no_go: 0,
+    },
+    issue_code_counts: {
+      invalid_input: 0,
+      invalid_event: 0,
+      validation_failed: 0,
+      tenant_mismatch: 0,
+      duplicate_conflict: 0,
+      forbidden_target_class: 0,
+      recorder_exception: 0,
+      blocked_no_go: 0,
+    },
+    no_go_flag_counts: FULL_NO_GO_FLAG_COUNTS,
+    fixture_coverage: FULL_FIXTURE_COVERAGE_FALSE,
+    tenant_scope_summary: "tenant_1 scoped recorder summary; not tenant authorization.",
+    deterministic_ordering_summary: "Events ordered by created_at then audit_event_id.",
+    defensive_snapshot_summary: "Returned events are frozen snapshots; not persistence evidence.",
+    non_durability_summary:
+      "Recorder is in-memory only, process-lifetime-only, test-only; durability is not claimed.",
+    clear_scope_summary: "No clear operation summarized in this record.",
+    failure_summary: "No failures; stable issue codes only.",
+    redaction_summary: "No raw payload echo; no secret-like value echo.",
+    source_loop: "P6-I5L",
+    source_recorder_loop: "P6-I5J",
+    source_fixture_loop: "P6-I5I",
+    source_validator_loop: "P6-I5G",
+    created_at: TS,
+    payload_hash: HASH,
+    non_authorization_statement: NA,
+    no_go_flags: [],
+    ...overrides,
+  }
+}
+
+function allTestMemorySummary(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return baseTenantSummary({
+    tenant_id: "all_tenants",
+    summary_scope: "all_test_memory",
+    summarized_operation_names: ["clearAllAuditEvents"],
+    total_record_attempts: 0,
+    accepted_record_count: 0,
+    rejected_record_count: 0,
+    stored_event_count: 0,
+    cleared_event_count: 3,
+    operation_counts: { record: 0, get: 0, list: 0, count: 0, clear_tenant: 0, clear_all: 1 },
+    status_counts: { attempted: 1, accepted: 0, rejected: 0, not_found: 0, cleared: 1, blocked_no_go: 0 },
+    outcome_counts: { pass: 1, warn: 0, fail: 0, no_go: 0 },
+    validation_result_counts: {
+      validator_passed: 0,
+      validator_failed: 0,
+      validator_not_applicable: 1,
+      validator_not_run_no_go: 0,
+    },
+    clear_scope_summary: "clearAllAuditEvents cleared all_test_memory scope; test-only, non-durable.",
+    ...overrides,
+  })
+}
+
+function operationSubsetSummary(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return baseTenantSummary({
+    summary_scope: "operation_subset",
+    summarized_operation_names: ["getAuditEvent", "listAuditEvents"],
+    total_record_attempts: 0,
+    accepted_record_count: 0,
+    rejected_record_count: 0,
+    stored_event_count: 0,
+    returned_event_count: 2,
+    listed_event_count: 3,
+    operation_counts: { record: 0, get: 2, list: 1, count: 0, clear_tenant: 0, clear_all: 0 },
+    status_counts: { attempted: 3, accepted: 0, rejected: 0, not_found: 0, cleared: 0, blocked_no_go: 0 },
+    outcome_counts: { pass: 3, warn: 0, fail: 0, no_go: 0 },
+    validation_result_counts: {
+      validator_passed: 0,
+      validator_failed: 0,
+      validator_not_applicable: 3,
+      validator_not_run_no_go: 0,
+    },
+    ...overrides,
+  })
+}
+
+function fixtureSuiteSummary(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return baseTenantSummary({
+    summary_scope: "fixture_suite",
+    summarized_operation_names: [
+      "recordAuditEvent",
+      "getAuditEvent",
+      "listAuditEvents",
+      "countAuditEvents",
+      "clearTenantAuditEvents",
+      "clearAllAuditEvents",
+    ],
+    fixture_coverage: FULL_FIXTURE_COVERAGE_TRUE,
+    total_record_attempts: 1,
+    accepted_record_count: 1,
+    rejected_record_count: 0,
+    stored_event_count: 1,
+    returned_event_count: 1,
+    listed_event_count: 1,
+    cleared_event_count: 1,
+    operation_counts: { record: 1, get: 1, list: 1, count: 1, clear_tenant: 1, clear_all: 1 },
+    status_counts: { attempted: 1, accepted: 1, rejected: 0, not_found: 0, cleared: 1, blocked_no_go: 0 },
+    outcome_counts: { pass: 1, warn: 0, fail: 0, no_go: 0 },
+    clear_scope_summary:
+      "Fixture suite exercises tenant_only and all_test_memory clear scopes; not production capability.",
+    ...overrides,
+  })
+}
+
+function withField(
+  base: Record<string, unknown>,
+  field: string,
+  value: unknown,
+): Record<string, unknown> {
+  const r = { ...base }
+  r[field] = value
+  return r
+}
+
+function withoutField(base: Record<string, unknown>, field: string): Record<string, unknown> {
+  const r = { ...base }
+  delete r[field]
+  return r
+}
+
+function hasCode(result: { issues: readonly { code: string }[] }, code: string): boolean {
+  return result.issues.some((i) => i.code === code)
+}
+
+// 1-4
+test("valid tenant summary record passes", () => {
+  const r = validateRecorderAuditSummaryRecord(baseTenantSummary())
+  assert.equal(r.ok, true, JSON.stringify(r.issues))
+})
+test("valid all_test_memory summary record passes", () => {
+  const r = validateRecorderAuditSummaryRecord(allTestMemorySummary())
+  assert.equal(r.ok, true, JSON.stringify(r.issues))
+})
+test("valid operation_subset summary record passes", () => {
+  const r = validateRecorderAuditSummaryRecord(operationSubsetSummary())
+  assert.equal(r.ok, true, JSON.stringify(r.issues))
+})
+test("valid fixture_suite summary record passes", () => {
+  const r = validateRecorderAuditSummaryRecord(fixtureSuiteSummary())
+  assert.equal(r.ok, true, JSON.stringify(r.issues))
+})
+
+// 5-6
+test("recorder_target_class must be in_memory_test_only_store", () => {
+  const r = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "recorder_target_class", "something_else"),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "invalid_recorder_target_class"))
+})
+test("selected_target_class must be in_memory_test_only_store", () => {
+  const r = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "selected_target_class", "something_else"),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "invalid_selected_target_class"))
+})
+
+// 7-8
+test("deferred target class cannot be recorder_target_class", () => {
+  for (const deferred of DEFERRED_TARGET_CLASSES) {
+    const r = validateRecorderAuditSummaryRecord(
+      withField(baseTenantSummary(), "recorder_target_class", deferred),
+    )
+    assert.equal(r.ok, false, deferred)
+    assert.ok(hasCode(r, "invalid_recorder_target_class"), deferred)
+  }
+})
+test("deferred target class cannot be selected_target_class", () => {
+  for (const deferred of DEFERRED_TARGET_CLASSES) {
+    const r = validateRecorderAuditSummaryRecord(
+      withField(baseTenantSummary(), "selected_target_class", deferred),
+    )
+    assert.equal(r.ok, false, deferred)
+    assert.ok(hasCode(r, "invalid_selected_target_class"), deferred)
+  }
+})
+
+// 9-10
+test("blocked_target cannot be recorder_target_class", () => {
+  const r = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "recorder_target_class", BLOCKED_TARGET_CLASS),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "invalid_recorder_target_class"))
+})
+test("blocked_target cannot be selected_target_class", () => {
+  const r = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "selected_target_class", BLOCKED_TARGET_CLASS),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "invalid_selected_target_class"))
+})
+
+// 11
+test("missing required field fails", () => {
+  const r = validateRecorderAuditSummaryRecord(withoutField(baseTenantSummary(), "summary_id"))
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "missing_required_field"))
+})
+
+// 12
+test("null required field fails", () => {
+  const r = validateRecorderAuditSummaryRecord(withField(baseTenantSummary(), "summary_id", null))
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "null_required_field"))
+})
+
+// 13
+test("non-object input fails", () => {
+  for (const bad of [42, "x", true, undefined, null]) {
+    const r = validateRecorderAuditSummaryRecord(bad)
+    assert.equal(r.ok, false, JSON.stringify(bad))
+    assert.ok(hasCode(r, "invalid_summary"), JSON.stringify(bad))
+  }
+})
+
+// 14
+test("array input fails", () => {
+  const r = validateRecorderAuditSummaryRecord([])
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "invalid_summary"))
+})
+
+// 15
+test("unknown top-level field fails", () => {
+  const r = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "totally_unknown_field", "x"),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "unknown_field"))
+})
+
+// 16
+test("invalid timestamp fails", () => {
+  const r = validateRecorderAuditSummaryRecord(withField(baseTenantSummary(), "created_at", "not-a-timestamp"))
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "invalid_timestamp"))
+})
+
+// 17
+test("invalid payload_hash fails", () => {
+  const r = validateRecorderAuditSummaryRecord(withField(baseTenantSummary(), "payload_hash", "xyz"))
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "invalid_sha256_hex"))
+})
+
+// 18
+test("invalid summary_scope fails", () => {
+  const r = validateRecorderAuditSummaryRecord(withField(baseTenantSummary(), "summary_scope", "bogus_scope"))
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "invalid_summary_scope"))
+})
+
+// 19
+test("invalid recorder operation name fails", () => {
+  const r = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "summarized_operation_names", ["bogusOperation"]),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "invalid_operation_name"))
+})
+
+// 20
+test("summarized_operation_names must be array", () => {
+  const r = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "summarized_operation_names", "recordAuditEvent"),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "invalid_array"))
+})
+
+// 21
+test("summarized_operation_names must be non-empty", () => {
+  const r = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "summarized_operation_names", []),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "invalid_array"))
+})
+
+// 22
+test("count fields must be non-negative safe integers", () => {
+  const r1 = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "total_record_attempts", -1),
+  )
+  assert.equal(r1.ok, false)
+  assert.ok(hasCode(r1, "invalid_count"))
+  const r2 = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "total_record_attempts", 1.5),
+  )
+  assert.equal(r2.ok, false)
+  assert.ok(hasCode(r2, "invalid_count"))
+})
+
+// 23
+test("negative count fails", () => {
+  const r = validateRecorderAuditSummaryRecord(withField(baseTenantSummary(), "recorder_exception_count", -3))
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "invalid_count"))
+})
+
+// 24
+test("non-integer count fails", () => {
+  const r = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "recorder_exception_count", 2.25),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "invalid_count"))
+})
+
+// 25
+test("operation_counts must contain all required keys", () => {
+  const opCounts = { record: 1, get: 0, list: 0, count: 0, clear_tenant: 0 } // missing clear_all
+  const r = validateRecorderAuditSummaryRecord(withField(baseTenantSummary(), "operation_counts", opCounts))
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "missing_count_key"))
+})
+
+// 26
+test("operation_counts unknown key fails", () => {
+  const opCounts = {
+    record: 1,
+    get: 0,
+    list: 0,
+    count: 0,
+    clear_tenant: 0,
+    clear_all: 0,
+    bogus_operation_key: 1,
+  }
+  const r = validateRecorderAuditSummaryRecord(withField(baseTenantSummary(), "operation_counts", opCounts))
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "unknown_count_key"))
+  assert.ok(hasCode(r, "invalid_operation_count_key"))
+})
+
+// 27
+test("status_counts must contain all required keys", () => {
+  const statusCounts = { attempted: 1, accepted: 1, rejected: 0, not_found: 0, cleared: 0 } // missing blocked_no_go
+  const r = validateRecorderAuditSummaryRecord(withField(baseTenantSummary(), "status_counts", statusCounts))
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "missing_count_key"))
+})
+
+// 28
+test("outcome_counts must contain all required keys", () => {
+  const outcomeCounts = { pass: 1, warn: 0, fail: 0 } // missing no_go
+  const r = validateRecorderAuditSummaryRecord(withField(baseTenantSummary(), "outcome_counts", outcomeCounts))
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "missing_count_key"))
+})
+
+// 29
+test("validation_result_counts must contain all required keys", () => {
+  const validationResultCounts = { validator_passed: 1, validator_failed: 0, validator_not_applicable: 0 } // missing validator_not_run_no_go
+  const r = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "validation_result_counts", validationResultCounts),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "missing_count_key"))
+})
+
+// 30
+test("issue_code_counts must contain stable issue keys", () => {
+  const issueCodeCounts = {
+    invalid_input: 0,
+    invalid_event: 0,
+    validation_failed: 0,
+    tenant_mismatch: 0,
+    duplicate_conflict: 0,
+    forbidden_target_class: 0,
+    recorder_exception: 0,
+    // missing blocked_no_go
+  }
+  const r = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "issue_code_counts", issueCodeCounts),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "missing_count_key"))
+})
+
+// 31
+test("no_go_flag_counts must contain known no-go keys", () => {
+  const incomplete = zeroCountMap(ALL_NO_GO_FLAGS.slice(1)) // missing the first flag key
+  const r = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "no_go_flag_counts", incomplete),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "missing_count_key"))
+})
+
+// 32
+test("fixture_coverage must contain all fixture fields", () => {
+  const incomplete = { ...FULL_FIXTURE_COVERAGE_TRUE } as Record<string, unknown>
+  delete incomplete.blocked_no_go_fixture_covered
+  const r = validateRecorderAuditSummaryRecord(
+    withField(fixtureSuiteSummary(), "fixture_coverage", incomplete),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "invalid_fixture_coverage"))
+})
+
+// 33
+test("fixture_suite requires all fixtures covered", () => {
+  const partial = { ...FULL_FIXTURE_COVERAGE_TRUE, all_required_fixtures_covered: false }
+  const r = validateRecorderAuditSummaryRecord(withField(fixtureSuiteSummary(), "fixture_coverage", partial))
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "fixture_suite_incomplete"))
+})
+
+// 34
+test("no_go_flags non-empty fails unless blocked/no_go evidence exists", () => {
+  const r = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "no_go_flags", ["validation_failed"]),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "no_go_flags_present"))
+
+  const withEvidence = baseTenantSummary({
+    no_go_flags: ["validation_failed"],
+    status_counts: { attempted: 1, accepted: 0, rejected: 1, not_found: 0, cleared: 0, blocked_no_go: 1 },
+    outcome_counts: { pass: 0, warn: 0, fail: 0, no_go: 1 },
+    validation_result_counts: {
+      validator_passed: 0,
+      validator_failed: 1,
+      validator_not_applicable: 0,
+      validator_not_run_no_go: 0,
+    },
+    accepted_record_count: 0,
+    rejected_record_count: 1,
+    stored_event_count: 0,
+    validation_failed_count: 1,
+    issue_code_counts: {
+      invalid_input: 0,
+      invalid_event: 0,
+      validation_failed: 1,
+      tenant_mismatch: 0,
+      duplicate_conflict: 0,
+      forbidden_target_class: 0,
+      recorder_exception: 0,
+      blocked_no_go: 1,
+    },
+  })
+  const r2 = validateRecorderAuditSummaryRecord(withEvidence)
+  assert.equal(r2.ok, true, JSON.stringify(r2.issues))
+})
+
+// 35
+test("duplicate_conflict_count must fail closed", () => {
+  const r = validateRecorderAuditSummaryRecord(
+    baseTenantSummary({
+      accepted_record_count: 0,
+      rejected_record_count: 1,
+      duplicate_conflict_count: 1,
+      status_counts: { attempted: 1, accepted: 0, rejected: 1, not_found: 0, cleared: 0, blocked_no_go: 0 },
+      // outcome_counts.fail and no_go both 0 -> not fail-closed
+    }),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "duplicate_conflict_not_fail_closed"))
+})
+
+// 36
+test("tenant_mismatch_count must fail closed", () => {
+  const r = validateRecorderAuditSummaryRecord(
+    baseTenantSummary({
+      accepted_record_count: 0,
+      rejected_record_count: 1,
+      tenant_mismatch_count: 1,
+      status_counts: { attempted: 1, accepted: 0, rejected: 1, not_found: 0, cleared: 0, blocked_no_go: 0 },
+    }),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "invalid_count_consistency"))
+})
+
+// 37
+test("validation_failed_count must fail closed", () => {
+  const r = validateRecorderAuditSummaryRecord(
+    baseTenantSummary({
+      accepted_record_count: 0,
+      rejected_record_count: 1,
+      validation_failed_count: 1,
+      status_counts: { attempted: 1, accepted: 0, rejected: 1, not_found: 0, cleared: 0, blocked_no_go: 0 },
+    }),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "invalid_count_consistency"))
+})
+
+// 38
+test("forbidden_target_class_count must fail closed", () => {
+  const r = validateRecorderAuditSummaryRecord(
+    baseTenantSummary({
+      accepted_record_count: 0,
+      rejected_record_count: 1,
+      forbidden_target_class_count: 1,
+      status_counts: { attempted: 1, accepted: 0, rejected: 1, not_found: 0, cleared: 0, blocked_no_go: 0 },
+    }),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "invalid_count_consistency"))
+})
+
+// 39
+test("duplicate_conflict_count cannot count as accepted", () => {
+  const r = validateRecorderAuditSummaryRecord(
+    baseTenantSummary({
+      total_record_attempts: 1,
+      accepted_record_count: 1,
+      rejected_record_count: 0,
+      duplicate_conflict_count: 1, // exceeds rejected_record_count (0) -> not truly rejected
+      outcome_counts: { pass: 1, warn: 0, fail: 0, no_go: 0 },
+    }),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "invalid_count_consistency"))
+})
+
+// 40
+test("clear_all requires all_test_memory wording and non-durability wording", () => {
+  const r = validateRecorderAuditSummaryRecord(
+    allTestMemorySummary({ clear_scope_summary: "Cleared some events." }),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "clear_all_treated_as_production_capability"))
+})
+
+// 41
+test("redaction summary must not allow raw event payload echo", () => {
+  const r = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "redaction_summary", "raw payload echo allowed for debugging"),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "raw_event_payload_field_present"))
+})
+
+// 42
+test("redaction summary must not allow secret-like value echo", () => {
+  const r = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "redaction_summary", "secret-like value echo allowed for debugging"),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "secret_like_echo_field_present"))
+})
+
+// 43
+test("non_authorization_statement is required", () => {
+  const r1 = validateRecorderAuditSummaryRecord(
+    withoutField(baseTenantSummary(), "non_authorization_statement"),
+  )
+  assert.equal(r1.ok, false)
+  assert.ok(hasCode(r1, "missing_required_field"))
+
+  const r2 = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "non_authorization_statement", "This summary is fine."),
+  )
+  assert.equal(r2.ok, false)
+  assert.ok(hasCode(r2, "invalid_non_authorization_statement"))
+})
+
+// 44
+test("forbidden grant-like field fails", () => {
+  const r = validateRecorderAuditSummaryRecord(withField(baseTenantSummary(), "approved", true))
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "forbidden_grant_field_present"))
+})
+
+// 45
+test("raw event payload field fails", () => {
+  const r = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "raw_payload", { anything: 1 }),
+  )
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "raw_event_payload_field_present"))
+})
+
+// 46
+test("secret-like echo field fails", () => {
+  const r = validateRecorderAuditSummaryRecord(withField(baseTenantSummary(), "token", "abc123"))
+  assert.equal(r.ok, false)
+  assert.ok(hasCode(r, "secret_like_echo_field_present"))
+})
+
+// 47
+test("validation issue messages do not echo secret-like values", () => {
+  const secretValue = "super-secret-value-should-not-leak"
+  const r = validateRecorderAuditSummaryRecord(withField(baseTenantSummary(), "token", secretValue))
+  assert.equal(r.ok, false)
+  for (const i of r.issues) {
+    assert.ok(!i.message.includes(secretValue), i.message)
+  }
+})
+
+// 48
+test("validator does not mutate input", () => {
+  const input = baseTenantSummary()
+  const before = JSON.stringify(input)
+  validateRecorderAuditSummaryRecord(input)
+  const after = JSON.stringify(input)
+  assert.equal(after, before)
+})
+
+// 49
+test("validator uses single-read snapshot against getter-TOCTOU input", () => {
+  const input = baseTenantSummary()
+  delete (input as Record<string, unknown>).summary_scope
+  let reads = 0
+  Object.defineProperty(input, "summary_scope", {
+    enumerable: true,
+    configurable: true,
+    get() {
+      reads += 1
+      return reads === 1 ? "tenant" : "blocked_no_go_bogus_scope"
+    },
+  })
+  const r = validateRecorderAuditSummaryRecord(input)
+  assert.equal(r.ok, true, JSON.stringify(r.issues))
+  assert.equal(reads, 1)
+})
+
+// 50
+test("exported type guard functions accept allowed values", () => {
+  assert.equal(isRecorderAuditSummaryScope("tenant"), true)
+  assert.equal(isRecorderAuditSummaryScope("all_test_memory"), true)
+  assert.equal(isRecorderAuditSummaryScope("operation_subset"), true)
+  assert.equal(isRecorderAuditSummaryScope("fixture_suite"), true)
+  assert.equal(isRecorderAuditOperationName("recordAuditEvent"), true)
+  assert.equal(isRecorderAuditOperationName("clearAllAuditEvents"), true)
+  assert.equal(isRecorderAuditOperationCountKey("record"), true)
+  assert.equal(isRecorderAuditOperationCountKey("clear_all"), true)
+  assert.equal(isRecorderAuditStatusCountKey("attempted"), true)
+  assert.equal(isRecorderAuditStatusCountKey("blocked_no_go"), true)
+  assert.equal(isRecorderAuditOutcomeCountKey("pass"), true)
+  assert.equal(isRecorderAuditOutcomeCountKey("no_go"), true)
+  assert.equal(isRecorderAuditValidationResultCountKey("validator_passed"), true)
+  assert.equal(isRecorderAuditValidationResultCountKey("validator_not_run_no_go"), true)
+  assert.equal(isRecorderAuditIssueCode("invalid_input"), true)
+  assert.equal(isRecorderAuditIssueCode("blocked_no_go"), true)
+  assert.equal(isRecorderAuditNoGoFlag("p6_i5j_not_merged"), true)
+  assert.equal(isRecorderAuditNoGoFlag("validation_failed"), true)
+  assert.equal(isSha256Hex(HASH), true)
+  assert.equal(isIsoTimestamp(TS), true)
+})
+
+// 51
+test("exported type guard functions reject disallowed values", () => {
+  assert.equal(isRecorderAuditSummaryScope("bogus_scope"), false)
+  assert.equal(isRecorderAuditSummaryScope(42), false)
+  assert.equal(isRecorderAuditOperationName("bogusOp"), false)
+  assert.equal(isRecorderAuditOperationCountKey("bogus_key"), false)
+  assert.equal(isRecorderAuditStatusCountKey("bogus_key"), false)
+  assert.equal(isRecorderAuditOutcomeCountKey("bogus_key"), false)
+  assert.equal(isRecorderAuditValidationResultCountKey("bogus_key"), false)
+  assert.equal(isRecorderAuditIssueCode("bogus_code"), false)
+  assert.equal(isRecorderAuditNoGoFlag("bogus_flag"), false)
+  assert.equal(isSha256Hex("not-a-hash"), false)
+  assert.equal(isSha256Hex("A".repeat(64)), false)
+  assert.equal(isIsoTimestamp("2026/07/08"), false)
+})
+
+// 52
+test("validation pass does not add approval/execution/persistence/storage/durable-storage/ledger/graph/audit-runtime/summary-runtime/promotion fields", () => {
+  const r = validateRecorderAuditSummaryRecord(baseTenantSummary())
+  assert.deepEqual(Object.keys(r).sort(), ["issues", "ok"])
+  const forbidden = [
+    "approval",
+    "approved",
+    "authorized",
+    "execution_permission",
+    "executed",
+    "promotion_permission",
+    "promoted",
+    "persistence_permission",
+    "persisted",
+    "storage_permission",
+    "stored",
+    "durable_storage_permission",
+    "evidence_ledger_append_permission",
+    "graph_write_permission",
+    "external_action_permission",
+    "formal_workunit_promotion",
+    "approvalstore_approval",
+    "summary_runtime_permission",
+    "audit_emission_permission",
+    "starthub_execution_permission",
+  ]
+  for (const key of forbidden) {
+    assert.equal(Object.prototype.hasOwnProperty.call(r, key), false, key)
+  }
+})
+
+// 53
+test("index exports validators and type guards", () => {
+  assert.equal(typeof validateRecorderAuditSummaryRecord, "function")
+  assert.equal(typeof isRecorderAuditSummaryScope, "function")
+  assert.equal(typeof isRecorderAuditOperationName, "function")
+  assert.equal(typeof isRecorderAuditOperationCountKey, "function")
+  assert.equal(typeof isRecorderAuditStatusCountKey, "function")
+  assert.equal(typeof isRecorderAuditOutcomeCountKey, "function")
+  assert.equal(typeof isRecorderAuditValidationResultCountKey, "function")
+  assert.equal(typeof isRecorderAuditIssueCode, "function")
+  assert.equal(typeof isRecorderAuditNoGoFlag, "function")
+  assert.equal(typeof isSha256Hex, "function")
+  assert.equal(typeof isIsoTimestamp, "function")
+})
+
+// 55 (kept adjacent to 53/54 intentionally; see Phase 7 block below for 54)
+test("test does not rely on self-match traps for no-go flag literals", () => {
+  // ALL_NO_GO_FLAGS above is hardcoded independently of the source module's own
+  // RECORDER_AUDIT_NO_GO_FLAGS array — a regression there would surface as a
+  // missing_count_key / invalid_no_go_flag mismatch in the tests above, not as
+  // a trivial self-comparison here.
+  assert.equal(ALL_NO_GO_FLAGS.length, 26)
+  assert.ok(ALL_NO_GO_FLAGS.includes("validation_failed"))
+  assert.ok(!ALL_NO_GO_FLAGS.includes("not_a_real_flag"))
+  assert.equal(validateRecorderAuditSummaryRecord(baseTenantSummary()).ok, true)
+  assert.equal(validateRecorderAuditSummaryRecord({}).ok, false)
+})
+
+// ─── Phase 7: static source guards (read-only) ──────────────────
+
+const SRC_TYPES = fileURLToPath(new URL("../app/lib/phase6/recorderAuditSummary/types.ts", import.meta.url))
+const SRC_VALIDATORS = fileURLToPath(
+  new URL("../app/lib/phase6/recorderAuditSummary/validators.ts", import.meta.url),
+)
+const SRC_INDEX = fileURLToPath(new URL("../app/lib/phase6/recorderAuditSummary/index.ts", import.meta.url))
+
+const FORBIDDEN_SOURCE_SUBSTRINGS = [
+  "fetch(",
+  "child_process",
+  "process.env",
+  'from "fs"',
+  "from 'fs'",
+  "D1",
+  "SQL",
+  "ApprovalStore",
+  "externalAction",
+  "executeExternal",
+  "sendEmail",
+  "slack_post",
+  "appendEvidenceLedger",
+  "writeGraph",
+  "emitAudit",
+  "auditEmitter",
+  "summaryEmitter",
+  "recorderSummaryRuntime",
+  "StartHubRuntime",
+  "starthubExecute",
+]
+
+// 54
+test("source guard confirms new source files do not contain forbidden runtime capability substrings", () => {
+  for (const src of [SRC_TYPES, SRC_VALIDATORS, SRC_INDEX]) {
+    const text = readFileSync(src, "utf8")
+    for (const needle of FORBIDDEN_SOURCE_SUBSTRINGS) {
+      assert.ok(!text.includes(needle), `${src} must not contain: <<<${needle}>>>`)
+    }
+  }
+})
