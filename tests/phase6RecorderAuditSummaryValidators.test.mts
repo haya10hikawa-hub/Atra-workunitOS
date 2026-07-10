@@ -762,6 +762,34 @@ test("validator uses single-read snapshot against getter-TOCTOU input", () => {
   assert.equal(reads, 1)
 })
 
+// 49b (P6-FIX-001, Issue #119): the single-field getter regression above is
+// expanded to complete contract coverage. No canonical field-name list is
+// exported by the implementation (FIELD_SPECS is internal), so the field set
+// is derived from this file's own valid fixture, whose keys are exactly the
+// required top-level contract fields. Every field must be read exactly once —
+// not zero times (ignored) and not multiple times (getter-TOCTOU window).
+test("every top-level contract field getter is read exactly once", () => {
+  const fields = Object.keys(baseTenantSummary())
+  assert.ok(fields.length >= 40, `expected the full contract surface, got ${fields.length}`)
+  for (const field of fields) {
+    const input = baseTenantSummary()
+    const original = (input as Record<string, unknown>)[field]
+    delete (input as Record<string, unknown>)[field]
+    let reads = 0
+    Object.defineProperty(input, field, {
+      enumerable: true,
+      configurable: true,
+      get() {
+        reads += 1
+        return original
+      },
+    })
+    const r = validateRecorderAuditSummaryRecord(input)
+    assert.equal(reads, 1, `${field} must be read exactly once (got ${reads})`)
+    assert.equal(r.ok, true, `${field}: ${JSON.stringify(r.issues)}`)
+  }
+})
+
 // 50
 test("exported type guard functions accept allowed values", () => {
   assert.equal(isRecorderAuditSummaryScope("tenant"), true)
@@ -890,14 +918,43 @@ const FORBIDDEN_SOURCE_SUBSTRINGS = [
   "recorderSummaryRuntime",
   "StartHubRuntime",
   "starthubExecute",
+  // P6-FIX-001 (Issue #119): bypass forms the original list missed. Each maps
+  // to a concrete evasion of an already-forbidden capability:
+  'from "node:fs"', // node:-prefixed filesystem import evades the bare "fs" needle
+  "from 'node:fs'", // single-quoted variant of the same evasion
+  "import(", // dynamic import can load any forbidden capability at runtime
+  "require(", // CommonJS require can load any forbidden capability at runtime
+  "globalThis[", // computed global access can reach fetch/process via bracket lookup
 ]
+
+/** Pure helper: returns which forbidden forms appear in the given source text. */
+function findForbiddenSubstrings(sourceText: string): string[] {
+  return FORBIDDEN_SOURCE_SUBSTRINGS.filter((needle) => sourceText.includes(needle))
+}
 
 // 54
 test("source guard confirms new source files do not contain forbidden runtime capability substrings", () => {
   for (const src of [SRC_TYPES, SRC_VALIDATORS, SRC_INDEX]) {
     const text = readFileSync(src, "utf8")
-    for (const needle of FORBIDDEN_SOURCE_SUBSTRINGS) {
-      assert.ok(!text.includes(needle), `${src} must not contain: <<<${needle}>>>`)
-    }
+    assert.deepEqual(
+      findForbiddenSubstrings(text),
+      [],
+      `${src} must contain no forbidden capability form`,
+    )
   }
+})
+
+// 54b (P6-FIX-001): guard sensitivity proven synthetically — every forbidden
+// form embedded in a harmless in-memory source string is detected, and a clean
+// string is not flagged. No repository file is mutated for this proof.
+test("source guard is non-vacuous: each forbidden form is detected in synthetic source", () => {
+  for (const needle of FORBIDDEN_SOURCE_SUBSTRINGS) {
+    const synthetic = `// harmless synthetic module\nconst inert = true\n${needle}\nexport {}\n`
+    assert.ok(
+      findForbiddenSubstrings(synthetic).includes(needle),
+      `guard must detect synthetic occurrence of: <<<${needle}>>>`,
+    )
+  }
+  const clean = `// harmless synthetic module\nconst inert = true\nexport {}\n`
+  assert.deepEqual(findForbiddenSubstrings(clean), [], "clean synthetic source must not be flagged")
 })

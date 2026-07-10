@@ -20,6 +20,7 @@ import {
   validateLinkageCandidate,
   LINKAGE_VALIDATION_ISSUE_CODES,
   LINKAGE_CANDIDATE_REQUIRED_FIELDS,
+  LINKAGE_CANDIDATE_LINEAGE_VARIANT_FIELDS,
   LINKAGE_CANDIDATE_ALLOWED_FIELDS,
   LINKAGE_CANDIDATE_FORBIDDEN_GRANT_FIELDS,
   LINKAGE_CANDIDATE_FORBIDDEN_SECRET_FIELDS,
@@ -363,20 +364,34 @@ test("validator does not return the raw input", () => {
   assert.equal(Object.prototype.hasOwnProperty.call(r, "summary_id"), false)
 })
 
-// 32
-test("getter values are read at most once", () => {
-  let reads = 0
-  const c = baseCandidate()
-  Object.defineProperty(c, "summary_id", {
-    enumerable: true,
-    configurable: true,
-    get() {
-      reads += 1
-      return "ras_tenant_fixture_001"
-    },
-  })
-  validateLinkageCandidate(c)
-  assert.equal(reads, 1)
+// 32 (expanded by P6-FIX-001, Issue #119): every required field and both
+// lineage variant fields are read exactly once — not zero times (which would
+// mean the field is ignored) and not multiple times (which would reopen the
+// getter-TOCTOU window). Uses the canonical exported field constants.
+test("every required and lineage field getter is read exactly once", () => {
+  const fields = [
+    ...LINKAGE_CANDIDATE_REQUIRED_FIELDS,
+    ...LINKAGE_CANDIDATE_LINEAGE_VARIANT_FIELDS,
+  ]
+  assert.ok(fields.length >= 15, `expected the full contract surface, got ${fields.length}`)
+  for (const field of fields) {
+    // Both lineage variants present so each can carry a counting getter.
+    const c = baseCandidate({ source_harness_loop: "P6-I5O" })
+    const original = c[field]
+    delete c[field]
+    let reads = 0
+    Object.defineProperty(c, field, {
+      enumerable: true,
+      configurable: true,
+      get() {
+        reads += 1
+        return original
+      },
+    })
+    const r = validateLinkageCandidate(c)
+    assert.equal(reads, 1, `${field} must be read exactly once (got ${reads})`)
+    assert.equal(r.ok, true, `${field}: ${JSON.stringify(r.issues)}`)
+  }
 })
 
 // 33
@@ -480,6 +495,20 @@ test("no self-match trap: valid passes, corrupt fails, both observable", () => {
 
 // ─── Runtime-consumer audit (no app/ file imports the module) ───
 
+// ─── Runtime-consumer scan (P6-FIX-001, Issue #119) ─────────────
+
+const LINKAGE_MODULE_DIR_NAME = "recorderAuditSummaryEvidenceLedgerLinkage"
+
+/**
+ * Pure predicate: does this source text reference the linkage module by name?
+ * Any static import, dynamic import(), require() call, or direct module-path
+ * reference must contain the module directory name, so a name match is the
+ * common denominator of every consumption form.
+ */
+function referencesLinkageModule(text: string): boolean {
+  return text.includes(LINKAGE_MODULE_DIR_NAME)
+}
+
 // 40
 test("no app runtime file imports the new module", () => {
   // Read-only scan of app/ for imports of the new module path. The test file
@@ -488,15 +517,48 @@ test("no app runtime file imports the new module", () => {
   // Recursive read-only walk of app/ (no child_process).
   const results: string[] = []
   walk(appDir, results)
-  const needle = "recorderAuditSummaryEvidenceLedgerLinkage"
   const importers = results.filter((f) => {
     const text = readFileSync(f, "utf8")
     // The module's own files legitimately reference the directory name in paths;
     // exclude the module directory itself.
-    if (f.includes("/recorderAuditSummaryEvidenceLedgerLinkage/")) return false
-    return text.includes(needle)
+    if (f.includes(`/${LINKAGE_MODULE_DIR_NAME}/`)) return false
+    return referencesLinkageModule(text)
   })
   assert.deepEqual(importers, [], `unexpected importers: ${importers.join(", ")}`)
+})
+
+// 40b (P6-FIX-001): the consumer predicate detects every consumption form —
+// static import, dynamic import(), require(), aliased path, and bare path
+// reference — proven synthetically without touching any repository file.
+test("runtime-consumer scan detects static, dynamic, require, and path reference forms", () => {
+  const consumptionForms = [
+    `import { validateLinkageCandidate } from "../lib/phase6/${LINKAGE_MODULE_DIR_NAME}/index.ts"`,
+    `const m = await import("./phase6/${LINKAGE_MODULE_DIR_NAME}/validators.ts")`,
+    `const m = require("app/lib/phase6/${LINKAGE_MODULE_DIR_NAME}")`,
+    `export * from "@/lib/phase6/${LINKAGE_MODULE_DIR_NAME}/index.ts"`,
+    `const p = "app/lib/phase6/${LINKAGE_MODULE_DIR_NAME}/types.ts"`,
+  ]
+  for (const form of consumptionForms) {
+    assert.equal(referencesLinkageModule(form), true, `must detect: <<<${form}>>>`)
+  }
+  assert.equal(
+    referencesLinkageModule('import { other } from "./some/unrelated/module.ts"'),
+    false,
+    "must not flag unrelated sources",
+  )
+})
+
+// 40c (P6-FIX-001): the one form a name-based scan cannot see is a dedicated
+// tsconfig path alias that hides the module name at the import site. Pin that
+// tsconfig.json defines no such alias (its target mapping would have to name
+// the module directory).
+test("tsconfig defines no path alias that could hide the linkage module name", () => {
+  const tsconfig = readFileSync(fileURLToPath(new URL("../tsconfig.json", import.meta.url)), "utf8")
+  assert.equal(
+    referencesLinkageModule(tsconfig),
+    false,
+    "a dedicated tsconfig path alias for the linkage module would blind the name-based consumer scan",
+  )
 })
 
 // ─── Static source guard ────────────────────────────────────────
@@ -532,16 +594,45 @@ const FORBIDDEN_SOURCE_SUBSTRINGS = [
   "writeGraph",
   "emitAudit",
   "summaryEmitter",
+  // P6-FIX-001 (Issue #119): bypass forms the original list missed. Each maps
+  // to a concrete evasion of an already-forbidden capability:
+  'from "node:fs"', // node:-prefixed filesystem import evades the bare "fs" needle
+  "from 'node:fs'", // single-quoted variant of the same evasion
+  "import(", // dynamic import can load any forbidden capability at runtime
+  "require(", // CommonJS require can load any forbidden capability at runtime
+  "globalThis[", // computed global access can reach fetch/process via bracket lookup
 ]
+
+/** Pure helper: returns which forbidden forms appear in the given source text. */
+function findForbiddenSubstrings(sourceText: string): string[] {
+  return FORBIDDEN_SOURCE_SUBSTRINGS.filter((needle) => sourceText.includes(needle))
+}
 
 // 41
 test("source guard confirms module sources contain no forbidden runtime capability substrings", () => {
   for (const src of [SRC_TYPES, SRC_VALIDATORS, SRC_INDEX]) {
     const text = readFileSync(src, "utf8")
-    for (const needle of FORBIDDEN_SOURCE_SUBSTRINGS) {
-      assert.ok(!text.includes(needle), `${src} must not contain: <<<${needle}>>>`)
-    }
+    assert.deepEqual(
+      findForbiddenSubstrings(text),
+      [],
+      `${src} must contain no forbidden capability form`,
+    )
   }
+})
+
+// 41b (P6-FIX-001): guard sensitivity proven synthetically — every forbidden
+// form embedded in a harmless in-memory source string is detected, and a clean
+// string is not flagged. No repository file is mutated for this proof.
+test("source guard is non-vacuous: each forbidden form is detected in synthetic source", () => {
+  for (const needle of FORBIDDEN_SOURCE_SUBSTRINGS) {
+    const synthetic = `// harmless synthetic module\nconst inert = true\n${needle}\nexport {}\n`
+    assert.ok(
+      findForbiddenSubstrings(synthetic).includes(needle),
+      `guard must detect synthetic occurrence of: <<<${needle}>>>`,
+    )
+  }
+  const clean = `// harmless synthetic module\nconst inert = true\nexport {}\n`
+  assert.deepEqual(findForbiddenSubstrings(clean), [], "clean synthetic source must not be flagged")
 })
 
 // ─── local fs walk helper (read-only) ───────────────────────────
