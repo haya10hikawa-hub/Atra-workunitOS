@@ -812,6 +812,193 @@ test("test does not rely on self-match traps", () => {
   assert.equal(createBlockedRecorderAuditSummary(baseTenantInput() as AnyInput).ok, false)
 })
 
+// ─── P6-FIX-002 (Issue #117): single-read snapshot / getter-TOCTOU ──────────
+//
+// The precheck constructors must read each own enumerable top-level input
+// property exactly once, and precheck and build must consume the same
+// captured snapshot. A getter that shifts value after the first read must not
+// be able to bypass the precheck or leak into the constructed record.
+
+/** Replaces `field` with a counting getter returning values[min(read-1, last)]. */
+function withCountingGetter(
+  base: Record<string, unknown>,
+  field: string,
+  values: readonly unknown[],
+): { input: Record<string, unknown>; reads: () => number } {
+  let count = 0
+  const input = { ...base }
+  delete input[field]
+  Object.defineProperty(input, field, {
+    enumerable: true,
+    configurable: true,
+    get() {
+      count++
+      return values[Math.min(count - 1, values.length - 1)]
+    },
+  })
+  return { input, reads: () => count }
+}
+
+// 52 (Test A)
+test("all_test_memory precheck getters are read exactly once and build uses the precheck value", () => {
+  for (const [field, firstValue, shiftedValue] of [
+    [
+      "clear_scope_summary",
+      "clearAllAuditEvents cleared all_test_memory scope; test-only, non-durable.",
+      "Cleared some events.", // would fail the precheck on a second read
+    ],
+    [
+      "non_durability_summary",
+      "Recorder is in-memory only, process-lifetime-only, test-only; durability is not claimed.",
+      "Recorder keeps records forever.", // would fail the precheck on a second read
+    ],
+  ] as const) {
+    const base = withoutField(allTestMemoryInput(), "summary_scope")
+    const { input, reads } = withCountingGetter(base, field, [firstValue, shiftedValue])
+    const r = createAllTestMemoryRecorderAuditSummary(input as AnyInput)
+    assert.equal(reads(), 1, `${field} must be read exactly once`)
+    assert.equal(r.ok, true, JSON.stringify(r.issues))
+    if (r.ok) {
+      // The record carries the first captured (precheck-consistent) value.
+      assert.equal((r.record as Record<string, unknown>)[field], firstValue)
+    }
+    // The getter is still in place: the input was not mutated or overwritten.
+    const desc = Object.getOwnPropertyDescriptor(input, field)
+    assert.equal(typeof desc?.get, "function")
+  }
+})
+
+// 53 (Test B)
+test("blocked precheck getters are read exactly once and value shifting cannot bypass the precheck", () => {
+  // no_go_flags: non-empty on first read, empty on a hypothetical second read.
+  {
+    const { input, reads } = withCountingGetter(blockedInput(), "no_go_flags", [
+      ["validation_failed"],
+      [],
+    ])
+    const r = createBlockedRecorderAuditSummary(input as AnyInput)
+    assert.equal(reads(), 1, "no_go_flags must be read exactly once")
+    assert.equal(r.ok, true, JSON.stringify(r.issues))
+    if (r.ok) assert.deepEqual([...r.record.no_go_flags], ["validation_failed"])
+    for (const i of r.issues) assert.ok(!i.message.includes("validation_failed,"))
+  }
+  // status_counts: blocked evidence on first read, none on a second read.
+  {
+    const blockedEvidence = {
+      attempted: 1, accepted: 0, rejected: 1, not_found: 0, cleared: 0, blocked_no_go: 1,
+    }
+    const noEvidence = {
+      attempted: 1, accepted: 0, rejected: 1, not_found: 0, cleared: 0, blocked_no_go: 0,
+    }
+    const { input, reads } = withCountingGetter(blockedInput(), "status_counts", [
+      blockedEvidence,
+      noEvidence,
+    ])
+    const r = createBlockedRecorderAuditSummary(input as AnyInput)
+    assert.equal(reads(), 1, "status_counts must be read exactly once")
+    assert.equal(r.ok, true, JSON.stringify(r.issues))
+    if (r.ok) assert.equal(r.record.status_counts.blocked_no_go, 1)
+  }
+})
+
+// 54 (Test C)
+test("every own enumerable top-level input field is read exactly once by every constructor", () => {
+  const cases: readonly [string, (i: AnyInput) => { ok: boolean }, Record<string, unknown>][] = [
+    ["createRecorderAuditSummaryRecord", createRecorderAuditSummaryRecord, baseTenantInput()],
+    ["createTenantRecorderAuditSummary", createTenantRecorderAuditSummary, withoutField(baseTenantInput(), "summary_scope")],
+    ["createAllTestMemoryRecorderAuditSummary", createAllTestMemoryRecorderAuditSummary, withoutField(allTestMemoryInput(), "summary_scope")],
+    ["createOperationSubsetRecorderAuditSummary", createOperationSubsetRecorderAuditSummary, withoutField(operationSubsetInput(), "summary_scope")],
+    ["createFixtureSuiteRecorderAuditSummary", createFixtureSuiteRecorderAuditSummary, withoutField(fixtureSuiteInput(), "summary_scope")],
+    ["createBlockedRecorderAuditSummary", createBlockedRecorderAuditSummary, blockedInput()],
+  ]
+  for (const [name, ctor, valid] of cases) {
+    const counts: Record<string, number> = {}
+    const wrapped: Record<string, unknown> = {}
+    for (const key of Object.keys(valid)) {
+      counts[key] = 0
+      const value = valid[key]
+      Object.defineProperty(wrapped, key, {
+        enumerable: true,
+        configurable: true,
+        get() {
+          counts[key]++
+          return value
+        },
+      })
+    }
+    const r = ctor(wrapped as AnyInput)
+    assert.equal(r.ok, true, `${name}: ${JSON.stringify((r as { issues?: unknown }).issues)}`)
+    for (const key of Object.keys(counts)) {
+      assert.equal(counts[key], 1, `${name}: field ${key} read ${counts[key]} times, expected exactly 1`)
+    }
+  }
+})
+
+// 55 (Test D)
+test("a throwing top-level getter fails closed without echoing the thrown value", () => {
+  const secret = "thrown-secret-value-must-not-leak"
+  const ctors: readonly [(i: AnyInput) => ReturnType<typeof createRecorderAuditSummaryRecord>, Record<string, unknown>, string][] = [
+    [createRecorderAuditSummaryRecord, baseTenantInput(), "tenant_id"],
+    [createAllTestMemoryRecorderAuditSummary, withoutField(allTestMemoryInput(), "summary_scope"), "clear_scope_summary"],
+    [createBlockedRecorderAuditSummary, blockedInput(), "no_go_flags"],
+  ]
+  for (const [ctor, base, field] of ctors) {
+    const input = { ...base }
+    delete input[field]
+    Object.defineProperty(input, field, {
+      enumerable: true,
+      configurable: true,
+      get(): never {
+        throw new Error(secret)
+      },
+    })
+    let r: ReturnType<typeof createRecorderAuditSummaryRecord>
+    assert.doesNotThrow(() => {
+      r = ctor(input as AnyInput)
+    })
+    assert.equal(r!.ok, false)
+    assert.equal(Object.prototype.hasOwnProperty.call(r!, "record"), false)
+    assert.ok(hasCode(r!, "constructor_exception"))
+    for (const i of r!.issues) {
+      assert.ok(!i.message.includes(secret), i.message)
+      assert.ok(!i.field.includes(secret), i.field)
+    }
+  }
+})
+
+// 56 (non-vacuity): the read-count oracle above detects the original
+// double-read flow. This emulates the pre-fix shape (precheck reads its own
+// snapshot, then the raw input is handed to the builder, which reads again)
+// without mutating production source.
+test("read-count oracle is non-vacuous: it detects a double-read flow", () => {
+  // Faithful test-local emulation of the pre-fix flow: the precheck read its
+  // own snapshot of the field, then buildRecord re-snapshotted the raw input.
+  function emulateOldDoubleReadBlocked(input: Record<string, unknown>) {
+    const precheckFlags = input.no_go_flags // read 1: precheck snapshot
+    if (!Array.isArray(precheckFlags) || precheckFlags.length === 0) {
+      return { ok: false as const, no_go_flags: undefined }
+    }
+    const builtFlags = input.no_go_flags // read 2: buildRecord re-snapshot
+    return { ok: true as const, no_go_flags: builtFlags }
+  }
+  const { input, reads } = withCountingGetter(blockedInput(), "no_go_flags", [
+    ["validation_failed"],
+    [],
+  ])
+  const r = emulateOldDoubleReadBlocked(input)
+  // The exactly-once oracle fires against the old flow: reads > 1...
+  assert.notEqual(reads(), 1)
+  assert.equal(reads(), 2)
+  // ...and the value-shift oracle fires: the emulated precheck passed on a
+  // non-empty value, but the built record carries the shifted (empty) value.
+  assert.equal(r.ok, true)
+  assert.deepEqual(r.no_go_flags, [])
+  // A zero-read flow is also detected by the same oracle.
+  const untouched = withCountingGetter(blockedInput(), "no_go_flags", [["validation_failed"]])
+  assert.notEqual(untouched.reads(), 1)
+  assert.equal(untouched.reads(), 0)
+})
+
 // ─── Phase 7: static source guards (read-only) ──────────────────
 
 const SRC_CONSTRUCTION = fileURLToPath(
