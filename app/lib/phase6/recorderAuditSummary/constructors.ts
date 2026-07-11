@@ -164,17 +164,16 @@ function freeze(record: Record<string, unknown>): RecorderAuditSummaryRecord {
 
 // ─── Shared build: overlay fixed fields, validate, return ────────
 
-function buildRecord(
-  input: unknown,
+/**
+ * Builds from an already-captured top-level snapshot. Never touches the
+ * caller's original input, so precheck constructors and the plain builder
+ * both read each top-level input property exactly once (in snapshot()).
+ */
+function buildRecordFromSnapshot(
+  snap: Record<string, unknown>,
   overrides: Record<string, unknown>,
 ): RecorderAuditSummaryConstructionResult {
   try {
-    const snap = snapshot(input)
-    if (snap === null) {
-      return failRecorderAuditSummaryConstruction([
-        recorderAuditSummaryConstructorIssue("invalid_constructor_input", "(input)"),
-      ])
-    }
     // Start from a copy of the snapshot so genuinely-unknown caller keys (typos,
     // grant-like fields, raw payload, secret-like fields) flow through to the
     // validator and fail closed there. Scope overrides and the fixed target
@@ -203,6 +202,43 @@ function buildRecord(
   }
 }
 
+/**
+ * Captures the single-read snapshot of raw caller input, failing closed on
+ * non-object input and on throwing getters (never echoing thrown values).
+ * Returns either the snapshot or the ready-made failure result.
+ */
+function snapshotOrFail(
+  input: unknown,
+): { snap: Record<string, unknown> } | { fail: RecorderAuditSummaryConstructionResult } {
+  let snap: Record<string, unknown> | null
+  try {
+    snap = snapshot(input)
+  } catch {
+    return {
+      fail: failRecorderAuditSummaryConstruction([
+        recorderAuditSummaryConstructorIssue("constructor_exception", "(record)"),
+      ]),
+    }
+  }
+  if (snap === null) {
+    return {
+      fail: failRecorderAuditSummaryConstruction([
+        recorderAuditSummaryConstructorIssue("invalid_constructor_input", "(input)"),
+      ]),
+    }
+  }
+  return { snap }
+}
+
+function buildRecord(
+  input: unknown,
+  overrides: Record<string, unknown>,
+): RecorderAuditSummaryConstructionResult {
+  const captured = snapshotOrFail(input)
+  if ("fail" in captured) return captured.fail
+  return buildRecordFromSnapshot(captured.snap, overrides)
+}
+
 // ─── Generic constructor ────────────────────────────────────────
 
 export function createRecorderAuditSummaryRecord(
@@ -222,12 +258,9 @@ export function createTenantRecorderAuditSummary(
 export function createAllTestMemoryRecorderAuditSummary(
   input: CreateAllTestMemoryRecorderAuditSummaryInput,
 ): RecorderAuditSummaryConstructionResult {
-  const snap = snapshot(input)
-  if (snap === null) {
-    return failRecorderAuditSummaryConstruction([
-      recorderAuditSummaryConstructorIssue("invalid_constructor_input", "(input)"),
-    ])
-  }
+  const captured = snapshotOrFail(input)
+  if ("fail" in captured) return captured.fail
+  const snap = captured.snap
   const clearScopeSummary = snap.clear_scope_summary
   if (typeof clearScopeSummary !== "string" || !clearScopeSummary.includes("all_test_memory")) {
     return failRecorderAuditSummaryConstruction([
@@ -243,7 +276,9 @@ export function createAllTestMemoryRecorderAuditSummary(
       recorderAuditSummaryConstructorIssue("invalid_constructor_input", "non_durability_summary"),
     ])
   }
-  return buildRecord(input, { summary_scope: "all_test_memory" })
+  // Build from the exact snapshot the precheck read: the raw input is never
+  // read again, so a getter cannot return different values to precheck/build.
+  return buildRecordFromSnapshot(snap, { summary_scope: "all_test_memory" })
 }
 
 export function createOperationSubsetRecorderAuditSummary(
@@ -263,12 +298,9 @@ export function createFixtureSuiteRecorderAuditSummary(
 export function createBlockedRecorderAuditSummary(
   input: CreateBlockedRecorderAuditSummaryInput,
 ): RecorderAuditSummaryConstructionResult {
-  const snap = snapshot(input)
-  if (snap === null) {
-    return failRecorderAuditSummaryConstruction([
-      recorderAuditSummaryConstructorIssue("invalid_constructor_input", "(input)"),
-    ])
-  }
+  const captured = snapshotOrFail(input)
+  if ("fail" in captured) return captured.fail
+  const snap = captured.snap
   const flags = snap.no_go_flags
   if (!Array.isArray(flags) || flags.length === 0) {
     return failRecorderAuditSummaryConstruction([
@@ -289,5 +321,7 @@ export function createBlockedRecorderAuditSummary(
     ])
   }
   // Preserves caller-provided failure and issue counts; validation still runs.
-  return buildRecord(input, {})
+  // Build from the exact snapshot the precheck read: the raw input is never
+  // read again, so a getter cannot return different values to precheck/build.
+  return buildRecordFromSnapshot(snap, {})
 }
