@@ -49,6 +49,7 @@ import {
   type RecorderAuditIssueCode,
   type RecorderAuditNoGoFlag,
 } from "./types.ts"
+import { isIsoUtcTimestamp } from "../shared/isoUtcTimestamp.ts"
 
 // ─── Stable issue codes ─────────────────────────────────────────
 
@@ -126,7 +127,6 @@ function resultOf(
 // ─── Primitive predicates and exported type guards ──────────────
 
 const SHA256_HEX = /^[0-9a-f]{64}$/
-const ISO_8601_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/
 
 function isRecordObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -149,7 +149,7 @@ export function isSha256Hex(value: unknown): value is string {
 }
 
 export function isIsoTimestamp(value: unknown): value is string {
-  return typeof value === "string" && ISO_8601_UTC.test(value)
+  return isIsoUtcTimestamp(value)
 }
 
 export function isRecorderAuditSummaryScope(value: unknown): value is RecorderAuditSummaryScope {

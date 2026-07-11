@@ -265,6 +265,29 @@ function hasCode(result: { issues: readonly { code: string }[] }, code: string):
   return result.issues.some((i) => i.code === code)
 }
 
+// ─── P6-FIX-004 (Issue #115): semantic ISO-8601 UTC timestamp guard ─────────
+// created_at now rejects non-existent calendar values via the shared semantic
+// guard, using the module's existing invalid_timestamp code. Valid leap-day /
+// fractional timestamps still pass.
+const RAS_PINNED_INVALID = ["2026-13-01T00:00:00Z", "2026-02-30T00:00:00Z", "2026-01-01T25:00:00Z"]
+
+test("recorder summary created_at rejects pinned invalid calendar values", () => {
+  for (const bad of RAS_PINNED_INVALID) {
+    const result = validateRecorderAuditSummaryRecord(withField(baseTenantSummary(), "created_at", bad))
+    const tsIssues = result.issues.filter((i) => i.code === "invalid_timestamp")
+    assert.ok(tsIssues.length > 0, `expected invalid_timestamp for ${bad}`)
+    assert.ok(tsIssues.some((i) => i.field === "created_at"), `issue must point at created_at`)
+    for (const i of result.issues) {
+      assert.equal(i.message, `${i.code}:${i.field}`)
+      assert.ok(!i.message.includes(bad), `message must not echo timestamp`)
+    }
+  }
+  for (const good of ["2024-02-29T12:34:56Z", "2026-01-01T00:00:00.123Z"]) {
+    const result = validateRecorderAuditSummaryRecord(withField(baseTenantSummary(), "created_at", good))
+    assert.ok(!hasCode(result, "invalid_timestamp"), `valid ${good} must pass`)
+  }
+})
+
 // 1-4
 test("valid tenant summary record passes", () => {
   const r = validateRecorderAuditSummaryRecord(baseTenantSummary())

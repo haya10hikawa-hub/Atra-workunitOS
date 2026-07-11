@@ -101,6 +101,32 @@ function hasCode(
   return result.issues.some((i) => i.code === code)
 }
 
+// ─── P6-FIX-004 (Issue #115): semantic ISO-8601 UTC timestamp guard ─────────
+// created_at and reviewed_by_human_at now reject non-existent calendar values
+// via the shared semantic guard, using the module's existing invalid_timestamp
+// code. Valid leap-day / fractional timestamps still pass.
+const PTD_TIMESTAMP_FIELDS = ["created_at", "reviewed_by_human_at"] as const
+const PTD_PINNED_INVALID = ["2026-13-01T00:00:00Z", "2026-02-30T00:00:00Z", "2026-01-01T25:00:00Z"]
+
+test("target decision timestamp fields reject pinned invalid calendar values", () => {
+  for (const field of PTD_TIMESTAMP_FIELDS) {
+    for (const bad of PTD_PINNED_INVALID) {
+      const result = validateTargetDecisionRecord(withField(field, bad))
+      const tsIssues = result.issues.filter((i) => i.code === "invalid_timestamp")
+      assert.ok(tsIssues.length > 0, `${field}: expected invalid_timestamp for ${bad}`)
+      assert.ok(tsIssues.some((i) => i.field === field), `${field}: issue must point at ${field}`)
+      for (const i of result.issues) {
+        assert.equal(i.message, `${i.code}:${i.field}`)
+        assert.ok(!i.message.includes(bad), `${field}: message must not echo timestamp`)
+      }
+    }
+    for (const good of ["2024-02-29T12:34:56Z", "2026-01-01T00:00:00.123Z"]) {
+      const result = validateTargetDecisionRecord(withField(field, good))
+      assert.ok(!hasCode(result, "invalid_timestamp"), `${field}: valid ${good} must pass`)
+    }
+  }
+})
+
 // 1
 test("valid TargetDecisionRecord passes", () => {
   const result = validateTargetDecisionRecord(validRecord())

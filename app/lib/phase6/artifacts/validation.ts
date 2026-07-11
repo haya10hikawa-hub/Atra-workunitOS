@@ -11,7 +11,12 @@
  * (structured stable codes, allowlist-based unknown-field rejection,
  * missing ≠ null, pinned hex64 / ISO-8601-UTC formats) WITHOUT importing it.
  * No I/O, no network, no database, no environment reads.
+ *
+ * The ISO-8601 UTC timestamp predicate is the single shared, semantic guard
+ * (P6-FIX-004, Issue #115); this module no longer defines its own regex.
  */
+
+import { isIsoUtcTimestamp } from "../shared/isoUtcTimestamp.ts"
 
 export const VALIDATION_ISSUE_CODES = [
   "invalid_record",
@@ -60,8 +65,6 @@ export function resultOf(issues: readonly ValidationIssue[]): ValidationResult {
 
 const SHA256_HEX = /^[0-9a-f]{64}$/
 const CONTENT_INTEGRITY_REFERENCE = /^sha256:[0-9a-f]{64}$/
-// ISO-8601 UTC with trailing Z, optional milliseconds (matches the P7.1 pin).
-const ISO_8601_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/
 
 /** Plain record object: not null, not an array, typeof object. */
 export function isRecordObject(value: unknown): value is Record<string, unknown> {
@@ -73,7 +76,7 @@ export function isNonEmptyString(value: unknown): value is string {
 }
 
 export function isIsoTimestampString(value: unknown): value is string {
-  return typeof value === "string" && ISO_8601_UTC.test(value)
+  return isIsoUtcTimestamp(value)
 }
 
 export function isSha256Hex(value: unknown): value is string {
