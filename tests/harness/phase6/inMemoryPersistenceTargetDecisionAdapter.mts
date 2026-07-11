@@ -152,9 +152,21 @@ function deepEqual(a: unknown, b: unknown): boolean {
   return false
 }
 
-/** Store a frozen deep-clone snapshot; never hand the caller our live reference. */
-function snapshot(record: TargetDecisionRecord): TargetDecisionRecord {
-  return deepFreeze(deepClone(record))
+/**
+ * Capture the caller's raw input exactly once into a frozen deep clone
+ * (validate-the-clone). The raw input is read only here; validation, tenant
+ * checking, key derivation, duplicate comparison, and storage all operate on
+ * the returned clone, so a getter or caller mutation cannot make the validated
+ * object differ from the stored object. Returns null on a throwing getter so
+ * the caller fails closed via the existing adapter_exception convention;
+ * never echoes the thrown value.
+ */
+function capture(record: Record<string, unknown>): TargetDecisionRecord | null {
+  try {
+    return deepFreeze(deepClone(record)) as unknown as TargetDecisionRecord
+  } catch {
+    return null
+  }
 }
 
 // ─── Adapter factory ────────────────────────────────────────────
@@ -182,24 +194,29 @@ export function createInMemoryPersistenceTargetDecisionAdapter(): InMemoryPersis
       const record = (input as Record<string, unknown>).record
       if (!isRecordObject(record)) return fail([issue("invalid_record", "record")])
 
+      // Validate-the-clone: capture the raw record exactly once into a frozen
+      // clone, then read the clone for every subsequent check and for storage.
+      // The raw record is never read again, so a getter cannot present valid
+      // values to the checks and different values to the stored snapshot.
+      const snap = capture(record as Record<string, unknown>)
+      if (snap === null) return fail([issue("adapter_exception", "(record)")])
+
       // Fixed selected-target pre-check (fail closed before storing anything).
-      if ((record as Record<string, unknown>).selected_target_class !== SELECTED_TARGET_CLASS) {
+      if ((snap as unknown as Record<string, unknown>).selected_target_class !== SELECTED_TARGET_CLASS) {
         return fail([issue("forbidden_selected_target", "selected_target_class")])
       }
 
-      const validation = validateTargetDecisionRecord(record)
+      const validation = validateTargetDecisionRecord(snap)
       if (!validation.ok) {
         return fail(validation.issues.map((vi) => issue("validation_failed", vi.field)))
       }
 
-      const valid = record as unknown as TargetDecisionRecord
-      if (valid.tenant_id !== tenantId) {
+      if (snap.tenant_id !== tenantId) {
         return fail([issue("tenant_mismatch", "tenant_id")])
       }
 
-      const snap = snapshot(valid)
       const map = tenantMap(tenantId)
-      const existing = map.get(valid.target_decision_record_id)
+      const existing = map.get(snap.target_decision_record_id)
       if (existing !== undefined) {
         if (deepEqual(existing, snap)) {
           // Idempotent: identical content already stored.
@@ -207,7 +224,7 @@ export function createInMemoryPersistenceTargetDecisionAdapter(): InMemoryPersis
         }
         return fail([issue("duplicate_conflict", "target_decision_record_id")])
       }
-      map.set(valid.target_decision_record_id, snap)
+      map.set(snap.target_decision_record_id, snap)
       return { ok: true, issues: [], record: snap }
     } catch {
       return fail([issue("adapter_exception", "(record)")])

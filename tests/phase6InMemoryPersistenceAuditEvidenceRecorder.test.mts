@@ -336,6 +336,141 @@ test("recorder success remains non-authorizing", () => {
   assert.equal(Object.prototype.hasOwnProperty.call(res, "approval"), false)
 })
 
+// ─── P6-FIX-003 (Issue #118): validate-the-clone / getter-TOCTOU ────────────
+//
+// The write path must capture the raw event exactly once into a frozen clone
+// and then validate, tenant-check, key-derive, and store that same clone. A
+// getter that shifts value after the first read must not be able to make the
+// stored snapshot differ from the validated object, and must not be able to
+// store a record under one tenant key while the body carries another tenant.
+
+/** Wrap `field` of a spread of `base` with a counting, value-shifting getter. */
+function withShiftGetter(
+  base: Record<string, unknown>,
+  field: string,
+  first: unknown,
+  later: unknown,
+): { event: Record<string, unknown>; reads: () => number } {
+  let count = 0
+  const event = { ...base }
+  delete event[field]
+  Object.defineProperty(event, field, {
+    enumerable: true,
+    configurable: true,
+    get() {
+      count++
+      return count === 1 ? first : later
+    },
+  })
+  return { event, reads: () => count }
+}
+
+// 41 (Test A — tenant getter shift)
+test("recordAuditEvent captures tenant_id once; a later getter shift cannot store cross-tenant", () => {
+  const { event, reads } = withShiftGetter(VALID_PUT_AUDIT_EVENT_FIXTURE, "tenant_id", TENANT, "tenant_evil")
+  const r = createInMemoryPersistenceAuditEvidenceRecorder()
+  const res = r.recordAuditEvent({ tenant_id: TENANT, event })
+  assert.equal(reads(), 1, "raw tenant_id must be read only during capture")
+  assert.equal(res.ok, true, JSON.stringify(res.issues))
+  // Stored under TENANT, and the stored body tenant matches the map key.
+  const got = r.getAuditEvent({ tenant_id: TENANT, audit_event_id: PUT_ID })
+  assert.equal(got.event?.tenant_id, TENANT)
+  // No cross-tenant record was created from the shifted value.
+  assert.equal(r.getAuditEvent({ tenant_id: "tenant_evil", audit_event_id: PUT_ID }).event, undefined)
+  assert.equal(r.countAuditEvents({ tenant_id: "tenant_evil" }).count, 0)
+  // Raw input is not mutated: the getter is still installed.
+  assert.equal(typeof Object.getOwnPropertyDescriptor(event, "tenant_id")?.get, "function")
+})
+
+// 42 (Test B — validated-field shift)
+test("recordAuditEvent stores the captured validated field; the later getter value is never observed", () => {
+  const validHash = VALID_PUT_AUDIT_EVENT_FIXTURE.payload_hash
+  const { event, reads } = withShiftGetter(
+    VALID_PUT_AUDIT_EVENT_FIXTURE,
+    "payload_hash",
+    validHash,
+    "NOT_A_VALID_HASH_evil",
+  )
+  const r = createInMemoryPersistenceAuditEvidenceRecorder()
+  const res = r.recordAuditEvent({ tenant_id: TENANT, event })
+  assert.equal(reads(), 1, "raw payload_hash must be read only during capture")
+  assert.equal(res.ok, true, JSON.stringify(res.issues))
+  const got = r.getAuditEvent({ tenant_id: TENANT, audit_event_id: PUT_ID })
+  // The stored snapshot carries the captured valid value...
+  assert.equal(got.event?.payload_hash, validHash)
+  // ...and the stored object passes the canonical validator.
+  assert.equal(validatePersistenceAuditEvent(got.event).ok, true)
+})
+
+// 43 (Test C — throwing getter)
+test("recordAuditEvent fails closed on a throwing event getter without echoing the thrown value", () => {
+  const secret = "thrown-secret-must-not-leak"
+  const event = { ...VALID_PUT_AUDIT_EVENT_FIXTURE }
+  delete event.payload_hash
+  Object.defineProperty(event, "payload_hash", {
+    enumerable: true,
+    configurable: true,
+    get(): never {
+      throw new Error(secret)
+    },
+  })
+  const r = createInMemoryPersistenceAuditEvidenceRecorder()
+  let res: ReturnType<typeof r.recordAuditEvent>
+  assert.doesNotThrow(() => {
+    res = r.recordAuditEvent({ tenant_id: TENANT, event })
+  })
+  assert.equal(res!.ok, false)
+  assert.ok(res!.issues.some((i) => i.code === "recorder_exception"))
+  for (const i of res!.issues) {
+    assert.equal(i.message, `${i.code}:${i.field}`)
+    assert.ok(!i.message.includes(secret), i.message)
+  }
+  // Nothing was stored: no partial tenant bucket or corrupted record remains.
+  assert.equal(r.countAuditEvents({ tenant_id: TENANT }).count, 0)
+  assert.equal(r.getAuditEvent({ tenant_id: TENANT, audit_event_id: PUT_ID }).event, undefined)
+})
+
+// 44 (Test D — stored-object immutability against post-write caller mutation)
+test("caller mutation of a nested container after write cannot change the stored snapshot", () => {
+  // A valid put event with a mutable nested array; the harness must detach and
+  // freeze it, so mutating the caller's array afterward has no effect.
+  const mutableFlags: string[] = []
+  const event = { ...VALID_PUT_AUDIT_EVENT_FIXTURE, failure_reasons: mutableFlags }
+  const r = createInMemoryPersistenceAuditEvidenceRecorder()
+  const res = r.recordAuditEvent({ tenant_id: TENANT, event })
+  assert.equal(res.ok, true, JSON.stringify(res.issues))
+  // Mutate the caller-held array after the write.
+  mutableFlags.push("mutated_after_write")
+  const got = r.getAuditEvent({ tenant_id: TENANT, audit_event_id: PUT_ID })
+  assert.deepEqual([...(got.event?.failure_reasons ?? [])], [])
+  assert.equal(Object.isFrozen(got.event?.failure_reasons), true)
+  assert.equal(Object.isFrozen(got.event), true)
+})
+
+// 45 (non-vacuity): the getter-shift oracle catches the old validate-then-reclone
+// flow. This emulates the pre-fix shape (validate one observed state, then read
+// the raw input again to clone) without mutating tracked source.
+test("getter-shift oracle is non-vacuous: it detects a validate-then-reclone flow", () => {
+  // Faithful test-local emulation of the old flow: the field is read once when
+  // the validator snapshots it, and read again when the raw input is recloned
+  // for storage. The stored value can therefore differ from the validated one.
+  function emulateOldValidateThenReclone(ev: Record<string, unknown>) {
+    const observedByValidator = ev.tenant_id // read pass 1 (validator snapshot)
+    const stored = JSON.parse(JSON.stringify(ev)) as Record<string, unknown> // read pass 2 (reclone)
+    return { observedByValidator, storedTenant: stored.tenant_id }
+  }
+  const { event, reads } = withShiftGetter(VALID_PUT_AUDIT_EVENT_FIXTURE, "tenant_id", TENANT, "tenant_evil")
+  const out = emulateOldValidateThenReclone(event)
+  // The old flow reads the raw getter more than once...
+  assert.ok(reads() > 1)
+  // ...and the stored (recloned) tenant diverges from the validated tenant.
+  assert.equal(out.observedByValidator, TENANT)
+  assert.equal(out.storedTenant, "tenant_evil")
+  assert.notEqual(out.storedTenant, out.observedByValidator)
+  // The fixed harness, by contrast, reads the getter exactly once (see test 41)
+  // and stores the captured value, so no such divergence is possible.
+})
+
 // ─── Phase 4: static source guard (read-only, recorder source only) ──
 
 const RECORDER_SRC = fileURLToPath(

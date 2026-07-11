@@ -161,9 +161,21 @@ function deepEqual(a: unknown, b: unknown): boolean {
   return false
 }
 
-/** Store a frozen deep-clone snapshot; never hand the caller our live reference. */
-function snapshot(event: PersistenceAuditEvent): PersistenceAuditEvent {
-  return deepFreeze(deepClone(event))
+/**
+ * Capture the caller's raw input exactly once into a frozen deep clone
+ * (validate-the-clone). The raw input is read only here; validation, tenant
+ * checking, key derivation, duplicate comparison, and storage all operate on
+ * the returned clone, so a getter or caller mutation cannot make the validated
+ * object differ from the stored object. Returns null on a throwing getter so
+ * the caller fails closed via the existing recorder_exception convention;
+ * never echoes the thrown value.
+ */
+function capture(event: Record<string, unknown>): PersistenceAuditEvent | null {
+  try {
+    return deepFreeze(deepClone(event)) as unknown as PersistenceAuditEvent
+  } catch {
+    return null
+  }
 }
 
 // ─── Recorder factory ───────────────────────────────────────────
@@ -189,28 +201,32 @@ export function createInMemoryPersistenceAuditEvidenceRecorder(): InMemoryPersis
       const event = (input as Record<string, unknown>).event
       if (!isRecordObject(event)) return fail([issue("invalid_event", "event")])
 
+      // Validate-the-clone: capture the raw event exactly once into a frozen
+      // clone, then read the clone for every subsequent check and for storage.
+      // The raw event is never read again, so a getter cannot present valid
+      // values to the checks and different values to the stored snapshot.
+      const snap = capture(event as Record<string, unknown>)
+      if (snap === null) return fail([issue("recorder_exception", "(event)")])
+
       // Fixed target-class pre-check (fail closed before storing anything).
-      const eventRecord = event as Record<string, unknown>
-      if (eventRecord.adapter_target_class !== FIXED_TARGET_CLASS) {
+      if ((snap as unknown as Record<string, unknown>).adapter_target_class !== FIXED_TARGET_CLASS) {
         return fail([issue("forbidden_target_class", "adapter_target_class")])
       }
-      if (eventRecord.selected_target_class !== FIXED_TARGET_CLASS) {
+      if ((snap as unknown as Record<string, unknown>).selected_target_class !== FIXED_TARGET_CLASS) {
         return fail([issue("forbidden_target_class", "selected_target_class")])
       }
 
-      const validation = validatePersistenceAuditEvent(event)
+      const validation = validatePersistenceAuditEvent(snap)
       if (!validation.ok) {
         return fail(validation.issues.map((vi) => issue("validation_failed", vi.field)))
       }
 
-      const valid = event as unknown as PersistenceAuditEvent
-      if (valid.tenant_id !== tenantId) {
+      if (snap.tenant_id !== tenantId) {
         return fail([issue("tenant_mismatch", "tenant_id")])
       }
 
-      const snap = snapshot(valid)
       const map = tenantMap(tenantId)
-      const existing = map.get(valid.audit_event_id)
+      const existing = map.get(snap.audit_event_id)
       if (existing !== undefined) {
         if (deepEqual(existing, snap)) {
           // Idempotent: identical content already recorded.
@@ -218,7 +234,7 @@ export function createInMemoryPersistenceAuditEvidenceRecorder(): InMemoryPersis
         }
         return fail([issue("duplicate_conflict", "audit_event_id")])
       }
-      map.set(valid.audit_event_id, snap)
+      map.set(snap.audit_event_id, snap)
       return { ok: true, issues: [], event: snap }
     } catch {
       return fail([issue("recorder_exception", "(event)")])

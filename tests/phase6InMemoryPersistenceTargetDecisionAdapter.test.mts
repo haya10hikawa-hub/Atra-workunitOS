@@ -21,7 +21,10 @@ import {
   VALID_TARGET_DECISION_RECORD_FIXTURE_INPUT,
 } from "./fixtures/phase6/persistenceTargetDecisionFixture.mts"
 import { createInMemoryPersistenceTargetDecisionAdapter } from "./harness/phase6/inMemoryPersistenceTargetDecisionAdapter.mts"
-import { createTargetDecisionRecord } from "../app/lib/phase6/persistenceTargetDecision/index.ts"
+import {
+  createTargetDecisionRecord,
+  validateTargetDecisionRecord,
+} from "../app/lib/phase6/persistenceTargetDecision/index.ts"
 
 const TENANT = VALID_TARGET_DECISION_RECORD_FIXTURE.tenant_id
 const VALID_ID = VALID_TARGET_DECISION_RECORD_FIXTURE.target_decision_record_id
@@ -331,6 +334,152 @@ test("adapter stores no data outside process memory", () => {
   assert.equal(seededOne.countTargetDecisionCandidates({ tenant_id: TENANT }).count, 2)
   const fresh = createInMemoryPersistenceTargetDecisionAdapter()
   assert.equal(fresh.countTargetDecisionCandidates({ tenant_id: TENANT }).count, 0)
+})
+
+// ─── P6-FIX-003 (Issue #118): validate-the-clone / getter-TOCTOU ────────────
+//
+// The write path must capture the raw record exactly once into a frozen clone
+// and then validate, tenant-check, key-derive, and store that same clone. A
+// getter that shifts value after the first read must not be able to make the
+// stored decision differ from the validated object, and must not store a
+// record under one tenant key while the body carries another tenant.
+
+/** Wrap `field` of a spread of `base` with a counting, value-shifting getter. */
+function withShiftGetter(
+  base: Record<string, unknown>,
+  field: string,
+  first: unknown,
+  later: unknown,
+): { record: Record<string, unknown>; reads: () => number } {
+  let count = 0
+  const record = { ...base }
+  delete record[field]
+  Object.defineProperty(record, field, {
+    enumerable: true,
+    configurable: true,
+    get() {
+      count++
+      return count === 1 ? first : later
+    },
+  })
+  return { record, reads: () => count }
+}
+
+// 31 (Test A — tenant getter shift)
+test("putTargetDecisionCandidate captures tenant_id once; a later getter shift cannot store cross-tenant", () => {
+  const { record, reads } = withShiftGetter(
+    VALID_TARGET_DECISION_RECORD_FIXTURE,
+    "tenant_id",
+    TENANT,
+    "tenant_evil",
+  )
+  const a = createInMemoryPersistenceTargetDecisionAdapter()
+  const res = a.putTargetDecisionCandidate({ tenant_id: TENANT, record })
+  assert.equal(reads(), 1, "raw tenant_id must be read only during capture")
+  assert.equal(res.ok, true, JSON.stringify(res.issues))
+  // Stored under TENANT, and the stored body tenant matches the map key.
+  const got = a.getTargetDecisionCandidate({ tenant_id: TENANT, target_decision_record_id: VALID_ID })
+  assert.equal(got.record?.tenant_id, TENANT)
+  // No cross-tenant record was created from the shifted value.
+  assert.equal(a.getTargetDecisionCandidate({ tenant_id: "tenant_evil", target_decision_record_id: VALID_ID }).record, undefined)
+  assert.equal(a.countTargetDecisionCandidates({ tenant_id: "tenant_evil" }).count, 0)
+  // Raw input is not mutated: the getter is still installed.
+  assert.equal(typeof Object.getOwnPropertyDescriptor(record, "tenant_id")?.get, "function")
+})
+
+// 32 (Test B — decision/validated-field shift)
+test("putTargetDecisionCandidate stores the captured validated field; the later getter value is never observed", () => {
+  const validHash = VALID_TARGET_DECISION_RECORD_FIXTURE.payload_hash
+  const { record, reads } = withShiftGetter(
+    VALID_TARGET_DECISION_RECORD_FIXTURE,
+    "payload_hash",
+    validHash,
+    "NOT_A_VALID_HASH_evil",
+  )
+  const a = createInMemoryPersistenceTargetDecisionAdapter()
+  const res = a.putTargetDecisionCandidate({ tenant_id: TENANT, record })
+  assert.equal(reads(), 1, "raw payload_hash must be read only during capture")
+  assert.equal(res.ok, true, JSON.stringify(res.issues))
+  const got = a.getTargetDecisionCandidate({ tenant_id: TENANT, target_decision_record_id: VALID_ID })
+  // The stored decision carries the captured validated value...
+  assert.equal(got.record?.payload_hash, validHash)
+  // ...and the stored object passes the canonical validator.
+  assert.equal(validateTargetDecisionRecord(got.record).ok, true)
+})
+
+// 33 (Test C — throwing getter)
+test("putTargetDecisionCandidate fails closed on a throwing record getter without echoing the thrown value", () => {
+  const secret = "thrown-secret-must-not-leak"
+  const record = { ...VALID_TARGET_DECISION_RECORD_FIXTURE }
+  delete record.payload_hash
+  Object.defineProperty(record, "payload_hash", {
+    enumerable: true,
+    configurable: true,
+    get(): never {
+      throw new Error(secret)
+    },
+  })
+  const a = createInMemoryPersistenceTargetDecisionAdapter()
+  let res: ReturnType<typeof a.putTargetDecisionCandidate>
+  assert.doesNotThrow(() => {
+    res = a.putTargetDecisionCandidate({ tenant_id: TENANT, record })
+  })
+  assert.equal(res!.ok, false)
+  assert.ok(res!.issues.some((i) => i.code === "adapter_exception"))
+  for (const i of res!.issues) {
+    assert.equal(i.message, `${i.code}:${i.field}`)
+    assert.ok(!i.message.includes(secret), i.message)
+  }
+  // Nothing was stored: no partial tenant bucket or corrupted record remains.
+  assert.equal(a.countTargetDecisionCandidates({ tenant_id: TENANT }).count, 0)
+  assert.equal(a.getTargetDecisionCandidate({ tenant_id: TENANT, target_decision_record_id: VALID_ID }).record, undefined)
+})
+
+// 34 (Test D — clone-first preserves duplicate/conflict/tenant/retrieval semantics)
+test("clone-first preserves first-write, idempotent retry, conflict, tenant separation, and retrieval", () => {
+  const a = createInMemoryPersistenceTargetDecisionAdapter()
+  // First write succeeds.
+  const first = a.putTargetDecisionCandidate({ tenant_id: TENANT, record: VALID_TARGET_DECISION_RECORD_FIXTURE })
+  assert.equal(first.ok, true)
+  // Identical retry is idempotent (no duplicate stored).
+  const retry = a.putTargetDecisionCandidate({ tenant_id: TENANT, record: VALID_TARGET_DECISION_RECORD_FIXTURE })
+  assert.equal(retry.ok, true)
+  assert.equal(a.countTargetDecisionCandidates({ tenant_id: TENANT }).count, 1)
+  // Conflicting retry (same id, different non-key content) fails closed.
+  const conflict = { ...VALID_TARGET_DECISION_RECORD_FIXTURE, review_rationale: "changed non-key field" }
+  const conflictRes = a.putTargetDecisionCandidate({ tenant_id: TENANT, record: conflict })
+  assert.equal(conflictRes.ok, false)
+  assert.ok(conflictRes.issues.some((i) => i.code === "duplicate_conflict"))
+  // Original is not overwritten.
+  const got = a.getTargetDecisionCandidate({ tenant_id: TENANT, target_decision_record_id: VALID_ID })
+  assert.equal(got.record?.review_rationale, VALID_TARGET_DECISION_RECORD_FIXTURE.review_rationale)
+  // Tenant separation: a second tenant's write does not touch the first.
+  a.putTargetDecisionCandidate({ tenant_id: "tenant_phase6_second", record: secondTenantRecord() })
+  assert.equal(a.countTargetDecisionCandidates({ tenant_id: TENANT }).count, 1)
+  assert.equal(a.countTargetDecisionCandidates({ tenant_id: "tenant_phase6_second" }).count, 1)
+})
+
+// 35 (non-vacuity): the getter-shift oracle catches the old validate-then-reclone
+// flow, emulated test-locally without mutating tracked source.
+test("getter-shift oracle is non-vacuous: it detects a validate-then-reclone flow", () => {
+  function emulateOldValidateThenReclone(rec: Record<string, unknown>) {
+    const observedByValidator = rec.tenant_id // read pass 1 (validator snapshot)
+    const stored = JSON.parse(JSON.stringify(rec)) as Record<string, unknown> // read pass 2 (reclone)
+    return { observedByValidator, storedTenant: stored.tenant_id }
+  }
+  const { record, reads } = withShiftGetter(
+    VALID_TARGET_DECISION_RECORD_FIXTURE,
+    "tenant_id",
+    TENANT,
+    "tenant_evil",
+  )
+  const out = emulateOldValidateThenReclone(record)
+  assert.ok(reads() > 1)
+  assert.equal(out.observedByValidator, TENANT)
+  assert.equal(out.storedTenant, "tenant_evil")
+  assert.notEqual(out.storedTenant, out.observedByValidator)
+  // The fixed adapter reads the getter exactly once (see test 31) and stores the
+  // captured value, so no such validated/stored divergence is possible.
 })
 
 // ─── Phase 4: static source guard (read-only, adapter source only) ──
