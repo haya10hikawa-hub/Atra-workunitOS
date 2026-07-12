@@ -12,13 +12,15 @@
  * the contract: `human_review_required` is `true`, `append_allowed` is `false`,
  * and `graph_write_allowed` is `false`.
  *
- * This module imports only the inert Recorder Audit Summary scope type from its
- * sibling P6-I5L module. It imports nothing from app runtime, no persistence, no
- * database access, no query-language execution, no approval-store, no external
- * clients, and no model providers.
+ * This module imports only the inert Recorder Audit Summary scope type from
+ * the sibling P6-I5L module's declared public surface
+ * (../recorderAuditSummary/index.ts) — never from its internal files
+ * (P6-FIX-007a, Issue #121). It imports nothing from app runtime, no
+ * persistence, no database access, no query-language execution, no
+ * approval-store, no external clients, and no model providers.
  */
 
-import type { RecorderAuditSummaryScope } from "../recorderAuditSummary/types.ts"
+import type { RecorderAuditSummaryScope } from "../recorderAuditSummary/index.ts"
 
 // ─── Descriptive scalar aliases ─────────────────────────────────
 

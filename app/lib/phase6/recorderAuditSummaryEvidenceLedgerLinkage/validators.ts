@@ -22,17 +22,19 @@
  * frozen.
  *
  * This module imports only inert sibling helpers: the Recorder Audit Summary
- * scope guard and scalar guards from the P6-I5L validator, and the inert
- * contract types from ./types.ts. It imports nothing from app runtime, no
- * persistence, no database access, no query-language execution, no
- * approval-store, no external clients, and no model providers.
+ * scope guard and scalar guards from the P6-I5L module's declared public
+ * surface (../recorderAuditSummary/index.ts) — never from its internal files
+ * (P6-FIX-007a, Issue #121) — and the inert contract types from ./types.ts.
+ * It imports nothing from app runtime, no persistence, no database access, no
+ * query-language execution, no approval-store, no external clients, and no
+ * model providers.
  */
 
 import {
   isRecorderAuditSummaryScope,
   isSha256Hex,
   isIsoTimestamp,
-} from "../recorderAuditSummary/validators.ts"
+} from "../recorderAuditSummary/index.ts"
 import {
   LINKAGE_CANDIDATE_REQUIRED_FIELDS,
   LINKAGE_CANDIDATE_LINEAGE_VARIANT_FIELDS,

@@ -635,6 +635,83 @@ test("source guard is non-vacuous: each forbidden form is detected in synthetic 
   assert.deepEqual(findForbiddenSubstrings(clean), [], "clean synthetic source must not be flagged")
 })
 
+// ─── P6-FIX-007a (Issue #121): public-surface import boundary ───────────────
+//
+// The Recorder Audit Summary module's index.ts is the public dependency
+// surface for sibling Phase 6 modules. The linkage module must not deep-import
+// recorderAuditSummary/types.ts or recorderAuditSummary/validators.ts.
+// Routing through the public surface is dependency-boundary normalization
+// only: it adds no runtime capability and changes no validation behavior.
+
+const RAS_PUBLIC_SURFACE_FROM = 'from "../recorderAuditSummary/index.ts"'
+const RAS_DEEP_IMPORT_PATHS = [
+  "../recorderAuditSummary/types.ts",
+  "../recorderAuditSummary/validators.ts",
+] as const
+
+/** Pure helper: returns which forbidden deep-import paths appear in the text. */
+function findDeepImportPaths(sourceText: string): string[] {
+  return RAS_DEEP_IMPORT_PATHS.filter((p) => sourceText.includes(p))
+}
+
+// 42
+test("linkage types.ts imports the scope type type-only from the public surface", () => {
+  const text = readFileSync(SRC_TYPES, "utf8")
+  assert.ok(
+    text.includes(
+      'import type { RecorderAuditSummaryScope } from "../recorderAuditSummary/index.ts"',
+    ),
+    "types.ts must import RecorderAuditSummaryScope type-only from the public surface",
+  )
+})
+
+// 43
+test("linkage validators.ts imports its three helpers from the public surface", () => {
+  const text = readFileSync(SRC_VALIDATORS, "utf8")
+  const match = text.match(/import \{([^}]*)\} from "\.\.\/recorderAuditSummary\/index\.ts"/)
+  assert.ok(match, "validators.ts must import named helpers from the public surface")
+  for (const name of ["isRecorderAuditSummaryScope", "isSha256Hex", "isIsoTimestamp"]) {
+    assert.ok(
+      (match as RegExpMatchArray)[1].includes(name),
+      `${name} must be imported from the public surface`,
+    )
+  }
+})
+
+// 44
+test("linkage sources contain no deep import of recorderAuditSummary internals", () => {
+  for (const src of [SRC_TYPES, SRC_VALIDATORS, SRC_INDEX]) {
+    const text = readFileSync(src, "utf8")
+    assert.deepEqual(
+      findDeepImportPaths(text),
+      [],
+      `${src} must not reference recorderAuditSummary internal files`,
+    )
+  }
+})
+
+// 44b — non-vacuity: the detector catches both prohibited deep-import paths in
+// synthetic source and does not flag the public-surface form. No repository
+// file is mutated for this proof.
+test("deep-import detector is non-vacuous: synthetic deep imports are detected", () => {
+  for (const path of RAS_DEEP_IMPORT_PATHS) {
+    const synthetic = `// synthetic\nimport { x } from "${path}"\nexport {}\n`
+    assert.ok(findDeepImportPaths(synthetic).includes(path), `must detect: <<<${path}>>>`)
+  }
+  const clean = `// synthetic\n${RAS_PUBLIC_SURFACE_FROM}\nexport {}\n`
+  assert.deepEqual(findDeepImportPaths(clean), [], "public-surface import must not be flagged")
+})
+
+// 45 — the public-surface import must not be replaced by duplicated local
+// predicate implementations.
+test("linkage validators.ts does not duplicate the imported predicates locally", () => {
+  const text = readFileSync(SRC_VALIDATORS, "utf8")
+  for (const name of ["isRecorderAuditSummaryScope", "isSha256Hex", "isIsoTimestamp"]) {
+    assert.ok(!text.includes(`function ${name}`), `${name} must not be reimplemented locally`)
+    assert.ok(!text.includes(`const ${name}`), `${name} must not be redefined locally`)
+  }
+})
+
 // ─── local fs walk helper (read-only) ───────────────────────────
 
 function walk(dir: string, out: string[]): void {
