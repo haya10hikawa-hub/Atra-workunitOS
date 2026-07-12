@@ -19,6 +19,11 @@
  * shared Phase 6 denylist (P6-FIX-005, Issue #116) with the dedicated
  * forbidden_grant_field_present code instead of the generic unknown_field.
  * Both classifications were and remain fail-closed rejections.
+ *
+ * safety_boundary_not_confirmed (P6-FIX-006, Issue #120) reports a phase-wide
+ * required-true safety literal (e.g. four_eyes_required) that is present and
+ * boolean but false. Reporting it grants nothing: validation pass remains
+ * non-authorizing.
  */
 
 import { isIsoUtcTimestamp } from "../shared/isoUtcTimestamp.ts"
@@ -41,6 +46,7 @@ export const VALIDATION_ISSUE_CODES = [
   "invalid_tenant_id",
   "missing_lineage_id",
   "invalid_lineage_id",
+  "safety_boundary_not_confirmed",
   "no_go_flags_present",
   "cross_tenant_lineage_not_checked",
   "validation_exception",

@@ -66,6 +66,14 @@ type FieldSpec =
   | { readonly kind: "enum"; readonly values: readonly string[] }
   | { readonly kind: "nullableString" }
   | { readonly kind: "noGoFlags" }
+  /**
+   * Phase-wide required-true safety literal (P6-FIX-006, Issue #120): the
+   * field must be present, non-null, boolean, AND exactly true. false is a
+   * safety boundary violation (safety_boundary_not_confirmed), never a
+   * contextual choice. Apply only to fields an explicit human specification
+   * decision has locked for the phase.
+   */
+  | { readonly kind: "requiredTrueSafety" }
 
 type ArtifactSpec = {
   readonly fields: Readonly<Record<string, FieldSpec>>
@@ -123,6 +131,14 @@ function validateField(
     }
     case "enum":
       return validateEnumValue(record, field, spec.values)
+    case "requiredTrueSafety": {
+      const presence = checkPresence(record, field)
+      if (!presence.present) return [issue("missing_required_field", field)]
+      if (presence.value === null) return [issue("null_required_field", field)]
+      if (typeof presence.value !== "boolean") return [issue("invalid_field_type", field)]
+      if (presence.value !== true) return [issue("safety_boundary_not_confirmed", field)]
+      return []
+    }
     case "nullableString": {
       // Explicit null is documented as allowed; missing stays rejected.
       const presence = checkPresence(record, field)
@@ -354,11 +370,15 @@ const HUMAN_DECISION_RECORD_SPEC: ArtifactSpec = {
     allowed_use: { kind: "stringArray" },
     disallowed_use: { kind: "stringArray" },
     future_gate_requirements: { kind: "stringArray" },
+    // Contextual workflow descriptors: true and false are both valid, and
+    // neither value authorizes approval, promotion, or execution.
     approval_required: { kind: "boolean" },
     promotion_required: { kind: "boolean" },
     execution_required: { kind: "boolean" },
-    four_eyes_required: { kind: "boolean" },
-    self_approval_blocked: { kind: "boolean" },
+    // Phase-wide safety literals (P6-FIX-006, Issue #120): must be exactly
+    // true on every valid record; false fails safety_boundary_not_confirmed.
+    four_eyes_required: { kind: "requiredTrueSafety" },
+    self_approval_blocked: { kind: "requiredTrueSafety" },
     reviewed_by_human_at: { kind: "timestamp" },
     no_go_flags: { kind: "noGoFlags" },
   },

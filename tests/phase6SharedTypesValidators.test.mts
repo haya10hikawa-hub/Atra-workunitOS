@@ -372,6 +372,7 @@ test("validation issue codes are stable and include all required codes", () => {
     "invalid_tenant_id",
     "missing_lineage_id",
     "invalid_lineage_id",
+    "safety_boundary_not_confirmed",
     "no_go_flags_present",
     "cross_tenant_lineage_not_checked",
     "validation_exception",
@@ -943,6 +944,200 @@ test("linkage contract module is insulated from the shared grant denylist", () =
   }
   const linkageTypes = readFileSync(`${LINKAGE_DIR}types.ts`, "utf8")
   assert.ok(linkageTypes.includes("LINKAGE_CANDIDATE_FORBIDDEN_GRANT_FIELDS = ["))
+})
+
+// ─── P6-FIX-006 (Issue #120): human decision phase-wide safety literals ──────
+//
+// Explicit human specification decision: four_eyes_required and
+// self_approval_blocked must be exactly true on every valid Human Decision
+// Record in this phase; approval_required, promotion_required, and
+// execution_required deliberately remain contextual booleans. None of the five
+// fields authorizes approval, promotion, execution, persistence, external
+// action, or Formal WorkUnit promotion — validation pass stays non-authorizing.
+
+const SAFETY_LITERAL_FIELDS = ["four_eyes_required", "self_approval_blocked"] as const
+const CONTEXTUAL_GATE_FIELDS = [
+  "approval_required",
+  "promotion_required",
+  "execution_required",
+] as const
+
+test("human decision valid fixture retains contextual false values and passes", () => {
+  const fixture = validHumanDecisionRecord()
+  assert.equal(fixture.approval_required, true)
+  assert.equal(fixture.promotion_required, false)
+  assert.equal(fixture.execution_required, false)
+  assert.equal(fixture.four_eyes_required, true)
+  assert.equal(fixture.self_approval_blocked, true)
+  const result = validateHumanDecisionRecord(fixture)
+  assert.deepEqual(result.issues, [])
+  assert.equal(result.ok, true)
+})
+
+test("human decision safety literals reject false with exactly one dedicated issue", () => {
+  for (const field of SAFETY_LITERAL_FIELDS) {
+    const other = field === "four_eyes_required" ? "self_approval_blocked" : "four_eyes_required"
+    const build = () => ({ ...validHumanDecisionRecord(), [field]: false })
+    const input = build()
+    const before = JSON.stringify(input)
+    const result = validateHumanDecisionRecord(input)
+    assert.equal(result.ok, false, field)
+    const dedicated = result.issues.filter(
+      (i) => i.code === "safety_boundary_not_confirmed" && i.field === field,
+    )
+    assert.equal(dedicated.length, 1, `${field}: exactly one safety_boundary_not_confirmed`)
+    assert.equal(
+      result.issues.length,
+      1,
+      `${field}: an otherwise-valid record must carry no other issue`,
+    )
+    assert.ok(
+      !result.issues.some((i) => i.field === other),
+      `${field}: the valid ${other} must not be flagged`,
+    )
+    for (const i of result.issues) {
+      assert.equal(i.message, `${i.code}:${i.field}`, field)
+      assert.ok(!i.message.includes("false"), `${field}: message must not echo the value`)
+    }
+    // Deterministic: repeated validation yields the identical issue list.
+    const second = validateHumanDecisionRecord(build())
+    assert.deepEqual(
+      second.issues.map((i) => `${i.code}:${i.field}`),
+      result.issues.map((i) => `${i.code}:${i.field}`),
+      `${field}: repeated validation must be deterministic`,
+    )
+    // The input is never mutated.
+    assert.equal(JSON.stringify(input), before, `${field}: input must not be mutated`)
+  }
+})
+
+test("human decision safety literals preserve presence and type semantics", () => {
+  for (const field of SAFETY_LITERAL_FIELDS) {
+    const missing: Record<string, unknown> = { ...validHumanDecisionRecord() }
+    delete missing[field]
+    const missingResult = validateHumanDecisionRecord(missing)
+    assert.ok(
+      missingResult.issues.some((i) => i.code === "missing_required_field" && i.field === field),
+      `${field}: missing → missing_required_field`,
+    )
+    assert.ok(
+      !codes(missingResult).includes("safety_boundary_not_confirmed"),
+      `${field}: missing must not be conflated with the safety violation`,
+    )
+
+    const nullResult = validateHumanDecisionRecord({ ...validHumanDecisionRecord(), [field]: null })
+    assert.ok(
+      nullResult.issues.some((i) => i.code === "null_required_field" && i.field === field),
+      `${field}: null → null_required_field`,
+    )
+    assert.ok(
+      !codes(nullResult).includes("safety_boundary_not_confirmed"),
+      `${field}: null must not be conflated with the safety violation`,
+    )
+
+    for (const badType of ["true", 1]) {
+      const typeResult = validateHumanDecisionRecord({
+        ...validHumanDecisionRecord(),
+        [field]: badType,
+      })
+      assert.ok(
+        typeResult.issues.some((i) => i.code === "invalid_field_type" && i.field === field),
+        `${field}: ${JSON.stringify(badType)} → invalid_field_type`,
+      )
+      assert.ok(
+        !codes(typeResult).includes("safety_boundary_not_confirmed"),
+        `${field}: wrong type must not be conflated with the safety violation`,
+      )
+    }
+
+    const falseResult = validateHumanDecisionRecord({
+      ...validHumanDecisionRecord(),
+      [field]: false,
+    })
+    assert.ok(
+      falseResult.issues.some((i) => i.code === "safety_boundary_not_confirmed" && i.field === field),
+      `${field}: false → safety_boundary_not_confirmed`,
+    )
+    assert.ok(
+      !falseResult.issues.some((i) => i.code === "invalid_field_type" && i.field === field),
+      `${field}: false is a boolean, not a type error`,
+    )
+
+    const trueResult = validateHumanDecisionRecord({ ...validHumanDecisionRecord(), [field]: true })
+    assert.ok(
+      !trueResult.issues.some((i) => i.field === field),
+      `${field}: true passes the field-level invariant`,
+    )
+  }
+})
+
+test("contextual gate descriptors accept both true and false and stay type-checked", () => {
+  for (const field of CONTEXTUAL_GATE_FIELDS) {
+    for (const value of [true, false]) {
+      const result = validateHumanDecisionRecord({ ...validHumanDecisionRecord(), [field]: value })
+      assert.equal(result.ok, true, `${field}=${value}: ${JSON.stringify(result.issues)}`)
+    }
+    const badType = validateHumanDecisionRecord({ ...validHumanDecisionRecord(), [field]: "yes" })
+    assert.equal(badType.ok, false, field)
+    assert.ok(
+      badType.issues.some((i) => i.code === "invalid_field_type" && i.field === field),
+      `${field}: non-boolean must remain invalid_field_type`,
+    )
+    assert.ok(
+      !codes(badType).includes("safety_boundary_not_confirmed"),
+      `${field}: contextual descriptor must not be safety-locked`,
+    )
+  }
+})
+
+const ARTIFACTS_VALIDATORS_SRC = fileURLToPath(
+  new URL("../app/lib/phase6/artifacts/validators.ts", import.meta.url),
+)
+
+test("safety literal field specs are pinned in source and scoped to the two safety fields", () => {
+  const text = readFileSync(ARTIFACTS_VALIDATORS_SRC, "utf8")
+  assert.ok(text.includes('four_eyes_required: { kind: "requiredTrueSafety" }'))
+  assert.ok(text.includes('self_approval_blocked: { kind: "requiredTrueSafety" }'))
+  assert.ok(text.includes('approval_required: { kind: "boolean" }'))
+  assert.ok(text.includes('promotion_required: { kind: "boolean" }'))
+  assert.ok(text.includes('execution_required: { kind: "boolean" }'))
+  const validationText = readFileSync(ARTIFACTS_VALIDATION_SRC, "utf8")
+  assert.ok(validationText.includes('"safety_boundary_not_confirmed"'))
+  // The required-true safety kind is used by exactly one Phase 6 production
+  // file — no constructor, fixture, linkage, persistence, or shared leaf file
+  // consumes it.
+  const files = listTsFiles(P6_ROOT)
+  const users = files.filter((f) => readFileSync(f, "utf8").includes("requiredTrueSafety"))
+  assert.deepEqual(users, [ARTIFACTS_VALIDATORS_SRC])
+})
+
+// Artifacts validator sources must carry no runtime capability. The needle
+// list is split so this assertion never self-matches its own tokens.
+test("artifacts validator sources contain no forbidden runtime capability", () => {
+  const forbidden = [
+    ["fet", "ch("],
+    ["process", ".env"],
+    ["child_", "process"],
+    ["node:", "fs"],
+    ['from "', 'fs"'],
+    ["require", "("],
+    ["import", "("],
+    ["globalThis", "["],
+    ["Date", ".now"],
+    ["new ", "Date"],
+    ["Math", ".random"],
+    ["random", "UUID"],
+    ["Approval", "Store"],
+    ["append", "EvidenceLedger"],
+    ["write", "Graph"],
+    ["execute", "External"],
+  ]
+  for (const src of [ARTIFACTS_VALIDATION_SRC, ARTIFACTS_VALIDATORS_SRC]) {
+    const text = readFileSync(src, "utf8")
+    for (const [a, b] of forbidden) {
+      assert.ok(!text.includes(a + b), `${src} must not contain: <<<${a + b}>>>`)
+    }
+  }
 })
 
 // Shared-module source guard: the leaf must carry no runtime capability and no

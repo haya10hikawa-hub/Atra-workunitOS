@@ -282,6 +282,20 @@ A valid Human Decision Record must not authorize Formal WorkUnit promotion.
 
 A valid Human Decision Record must not authorize ApprovalStore approval.
 
+four_eyes_required must be true for every valid Human Decision Record in this phase.
+
+self_approval_blocked must be true for every valid Human Decision Record in this phase.
+
+approval_required, promotion_required, and execution_required are contextual descriptors and are not phase-wide literal-true invariants.
+
+approval_required does not authorize approval.
+
+promotion_required does not authorize promotion.
+
+execution_required does not authorize execution.
+
+None of these five fields authorizes approval, promotion, execution, persistence, external action, or Formal WorkUnit promotion.
+
 ## 16. Pass / Warn / Fail / No-Go Outcomes
 
 Pass:
