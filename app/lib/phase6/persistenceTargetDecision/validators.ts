@@ -21,7 +21,8 @@
  * This module imports NOTHING from app runtime, app/lib/persistence,
  * app/lib/phase6/artifacts, app/lib/security/approvalMac, D1, SQL, ApprovalStore,
  * external action clients, or LLM providers. It imports only its sibling
- * ./types.ts (inert types and value lists).
+ * ./types.ts (inert types and value lists) and the pure shared Phase 6 leaf
+ * modules (../shared/*.ts).
  */
 
 import {
@@ -41,6 +42,7 @@ import {
   type SafetyBoundaryResult,
 } from "./types.ts"
 import { isIsoUtcTimestamp } from "../shared/isoUtcTimestamp.ts"
+import { isPhase6ForbiddenGrantField } from "../shared/forbiddenGrantFields.ts"
 
 // ─── Stable issue codes ─────────────────────────────────────────
 
@@ -169,23 +171,8 @@ export function isDependencyStatus(value: unknown): value is DependencyStatus {
   )
 }
 
-// ─── Forbidden grant-like fields (never permitted on the record) ─
-
-const FORBIDDEN_GRANT_FIELDS: readonly string[] = [
-  "approval",
-  "approved",
-  "authorized",
-  "execution_permission",
-  "executed",
-  "promotion_permission",
-  "promoted",
-  "persistence_permission",
-  "persisted",
-  "storage_permission",
-  "stored",
-  "external_action_permission",
-  "formal_workunit_promotion",
-]
+// Forbidden grant-like fields: the canonical shared Phase 6 denylist
+// (P6-FIX-005, Issue #116) replaces this module's former 13-name local copy.
 
 // ─── Declarative field specs for the plain fields ───────────────
 
@@ -414,7 +401,7 @@ export function validateTargetDecisionRecord(
     // Unknown / forbidden top-level fields.
     for (const key of Object.keys(snapshot)) {
       if (ALLOWED_FIELDS.includes(key)) continue
-      if (FORBIDDEN_GRANT_FIELDS.includes(key)) {
+      if (isPhase6ForbiddenGrantField(key)) {
         issues.push(issue("forbidden_grant_field_present", key))
       } else {
         issues.push(issue("unknown_field", key))

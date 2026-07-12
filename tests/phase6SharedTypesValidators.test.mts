@@ -367,6 +367,7 @@ test("validation issue codes are stable and include all required codes", () => {
     "invalid_array",
     "invalid_object",
     "unknown_field",
+    "forbidden_grant_field_present",
     "missing_tenant_id",
     "invalid_tenant_id",
     "missing_lineage_id",
@@ -786,3 +787,190 @@ function listTsFiles(dir: string): string[] {
   }
   return out
 }
+
+// ─── P6-FIX-005 (Issue #116): canonical shared grant-like denylist ───────────
+//
+// One canonical shared leaf (app/lib/phase6/shared/forbiddenGrantFields.ts) now
+// backs every Phase 6 grant-like field classification, replacing three drifted
+// local copies (13/17/20 names) and giving the eight artifact validators a
+// dedicated forbidden_grant_field_present code instead of the generic
+// unknown_field. The 20 expected names below are hardcoded independently of
+// the production constant (rather than imported and reflected back), so a
+// production-list regression — a dropped, renamed, or misspelled name — is
+// detectable here.
+
+const CANONICAL_FORBIDDEN_GRANT_FIELDS = [
+  "approval",
+  "approved",
+  "authorized",
+  "execution_permission",
+  "executed",
+  "promotion_permission",
+  "promoted",
+  "persistence_permission",
+  "persisted",
+  "storage_permission",
+  "stored",
+  "durable_storage_permission",
+  "evidence_ledger_append_permission",
+  "graph_write_permission",
+  "external_action_permission",
+  "formal_workunit_promotion",
+  "approvalstore_approval",
+  "summary_runtime_permission",
+  "audit_emission_permission",
+  "starthub_execution_permission",
+] as const
+
+test("all eight artifact validators reject every canonical grant-like field with the dedicated code", () => {
+  assert.equal(CANONICAL_FORBIDDEN_GRANT_FIELDS.length, 20)
+  const suppliedValue = "grant-value-must-not-echo"
+  for (const c of CASES) {
+    // Valid-fixture behavior is retained.
+    assert.equal(c.validate(c.fixture()).ok, true, c.name)
+    for (const grant of CANONICAL_FORBIDDEN_GRANT_FIELDS) {
+      const build = () => ({ ...c.fixture(), [grant]: suppliedValue })
+      const result = c.validate(build())
+      assert.equal(result.ok, false, `${c.name}.${grant}`)
+      const dedicated = result.issues.filter(
+        (i) => i.code === "forbidden_grant_field_present" && i.field === grant,
+      )
+      assert.equal(dedicated.length, 1, `${c.name}.${grant}: exactly one dedicated grant issue`)
+      assert.ok(
+        !result.issues.some((i) => i.code === "unknown_field" && i.field === grant),
+        `${c.name}.${grant}: must not also be reported as unknown_field`,
+      )
+      for (const i of result.issues) {
+        assert.equal(i.message, `${i.code}:${i.field}`, `${c.name}.${grant}`)
+        assert.ok(
+          !i.message.includes(suppliedValue),
+          `${c.name}.${grant}: message must not echo the value`,
+        )
+      }
+      // Deterministic: repeated validation yields the identical issue list.
+      const second = c.validate(build())
+      assert.deepEqual(
+        second.issues.map((i) => `${i.code}:${i.field}`),
+        result.issues.map((i) => `${i.code}:${i.field}`),
+        `${c.name}.${grant}: issue list must be deterministic`,
+      )
+    }
+    // An ordinary unrelated unknown key keeps the generic classification.
+    const unknown = c.validate({ ...c.fixture(), unrelated_mystery_key: "x" })
+    assert.equal(unknown.ok, false, c.name)
+    assert.ok(codes(unknown).includes("unknown_field"), c.name)
+    assert.ok(!codes(unknown).includes("forbidden_grant_field_present"), c.name)
+  }
+})
+
+// Definition-deduplication and consumer wiring (read-only source checks).
+
+const SHARED_DENYLIST_SRC = fileURLToPath(
+  new URL("../app/lib/phase6/shared/forbiddenGrantFields.ts", import.meta.url),
+)
+const ARTIFACTS_VALIDATION_SRC = fileURLToPath(
+  new URL("../app/lib/phase6/artifacts/validation.ts", import.meta.url),
+)
+const DENYLIST_CONSUMER_SRCS: readonly string[] = [
+  "artifacts/validation.ts",
+  "persistenceTargetDecision/validators.ts",
+  "persistenceAuditEvidence/validators.ts",
+  "recorderAuditSummary/validators.ts",
+].map((rel) => fileURLToPath(new URL(`../app/lib/phase6/${rel}`, import.meta.url)))
+const LINKAGE_DIR = fileURLToPath(
+  new URL("../app/lib/phase6/recorderAuditSummaryEvidenceLedgerLinkage/", import.meta.url),
+)
+
+test("shared grant denylist pins all 20 canonical names and exports constant and predicate", () => {
+  const text = readFileSync(SHARED_DENYLIST_SRC, "utf8")
+  assert.ok(text.includes("export const PHASE6_FORBIDDEN_GRANT_FIELDS"))
+  assert.ok(text.includes("export function isPhase6ForbiddenGrantField"))
+  for (const name of CANONICAL_FORBIDDEN_GRANT_FIELDS) {
+    assert.ok(text.includes(`"${name}"`), `shared denylist must pin: ${name}`)
+  }
+})
+
+test("the canonical grant denylist is defined in exactly one Phase 6 production file", () => {
+  const files = listTsFiles(P6_ROOT)
+  // The canonical constant is defined once.
+  const constDefiners = files.filter((f) =>
+    readFileSync(f, "utf8").includes("PHASE6_FORBIDDEN_GRANT_FIELDS = ["),
+  )
+  assert.deepEqual(constDefiners, [SHARED_DENYLIST_SRC])
+  // No other production file carries the complete 20-literal union.
+  const fullListCarriers = files.filter((f) => {
+    const text = readFileSync(f, "utf8")
+    return CANONICAL_FORBIDDEN_GRANT_FIELDS.every((name) => text.includes(`"${name}"`))
+  })
+  assert.deepEqual(fullListCarriers, [SHARED_DENYLIST_SRC])
+})
+
+test("four consumers import the shared grant denylist and define no local list", () => {
+  for (const src of DENYLIST_CONSUMER_SRCS) {
+    const text = readFileSync(src, "utf8")
+    assert.ok(
+      text.includes('from "../shared/forbiddenGrantFields.ts"'),
+      `${src} must import the shared denylist`,
+    )
+    assert.ok(
+      !text.includes("const FORBIDDEN_GRANT_FIELDS"),
+      `${src} must not define a local FORBIDDEN_GRANT_FIELDS list`,
+    )
+  }
+  // The artifacts common validation path uses the dedicated classification, so
+  // all eight artifact validators inherit it.
+  const validationText = readFileSync(ARTIFACTS_VALIDATION_SRC, "utf8")
+  assert.ok(validationText.includes('"forbidden_grant_field_present"'))
+  assert.ok(validationText.includes("isPhase6ForbiddenGrantField"))
+})
+
+test("local-denylist detector is non-vacuous: a synthetic local list is detected", () => {
+  const synthetic = 'const FORBIDDEN_GRANT_FIELDS: readonly string[] = ["approval"]\n'
+  assert.ok(synthetic.includes("const FORBIDDEN_GRANT_FIELDS"))
+  const clean = "// no local grant list here\n"
+  assert.ok(!clean.includes("const FORBIDDEN_GRANT_FIELDS"))
+})
+
+test("linkage contract module is insulated from the shared grant denylist", () => {
+  // The Recorder Summary Evidence Ledger Linkage module pins its own contract
+  // field list and must not consume (or be altered by) the shared denylist.
+  const linkageFiles = listTsFiles(LINKAGE_DIR)
+  assert.ok(linkageFiles.length >= 3, "linkage module files must be present")
+  for (const src of linkageFiles) {
+    const text = readFileSync(src, "utf8")
+    assert.ok(!text.includes("forbiddenGrantFields"), `${src} must not consume the shared denylist`)
+    assert.ok(!text.includes("PHASE6_FORBIDDEN_GRANT_FIELDS"), `${src} must stay contract-pinned`)
+  }
+  const linkageTypes = readFileSync(`${LINKAGE_DIR}types.ts`, "utf8")
+  assert.ok(linkageTypes.includes("LINKAGE_CANDIDATE_FORBIDDEN_GRANT_FIELDS = ["))
+})
+
+// Shared-module source guard: the leaf must carry no runtime capability and no
+// imports at all. The needle list is split so this assertion never self-matches
+// its own tokens.
+test("shared grant denylist source contains no forbidden runtime capability", () => {
+  const text = readFileSync(SHARED_DENYLIST_SRC, "utf8")
+  const forbidden = [
+    ["import", " {"],
+    ["import", "("],
+    ["require", "("],
+    ["from", ' "'],
+    ["globalThis", "["],
+    ["Date", ".now"],
+    ["new ", "Date"],
+    ["Date", ".parse"],
+    ["Math", ".random"],
+    ["random", "UUID"],
+    ["fet", "ch("],
+    ["process", ".env"],
+    ["node:", "fs"],
+    ["child_", "process"],
+    ["Approval", "Store"],
+    ["append", "EvidenceLedger"],
+    ["write", "Graph"],
+    ["execute", "External"],
+  ]
+  for (const [a, b] of forbidden) {
+    assert.ok(!text.includes(a + b), `shared denylist must not contain: <<<${a + b}>>>`)
+  }
+})
