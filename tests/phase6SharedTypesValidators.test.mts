@@ -1,5 +1,8 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { readFileSync, readdirSync, statSync } from "node:fs"
+import { fileURLToPath } from "node:url"
+import { isIsoUtcTimestamp } from "../app/lib/phase6/shared/isoUtcTimestamp.ts"
 import {
   validateQueryIntentRecord,
   validateSafeQueryPlan,
@@ -564,3 +567,222 @@ test("all literal union values are represented", () => {
     assert.ok(!codes(validateRuleReviewRecord(record)).includes("invalid_enum_value"))
   }
 })
+
+// ─── P6-FIX-004 (Issue #115): shared semantic ISO-8601 UTC guard ─────────────
+//
+// One shared leaf guard (app/lib/phase6/shared/isoUtcTimestamp.ts) now backs
+// every Phase 6 timestamp predicate. It validates both the pinned UTC structure
+// and real Gregorian calendar/clock semantics, replacing four structural-only
+// regex copies that accepted non-existent dates such as 2026-99-99.
+
+const SHARED_ISO_VALID: readonly string[] = [
+  "2026-01-01T00:00:00Z",
+  "2026-12-31T23:59:59Z",
+  "2026-01-01T00:00:00.1Z",
+  "2026-01-01T00:00:00.12Z",
+  "2026-01-01T00:00:00.123Z",
+  "2024-02-29T12:34:56Z", // leap year (div by 4, not 100)
+  "2000-02-29T00:00:00Z", // leap year (div by 400)
+  "1900-02-28T23:59:59Z", // 1900 is NOT a leap year; Feb 28 is valid
+]
+
+const SHARED_ISO_INVALID_SEMANTIC: readonly string[] = [
+  "2026-00-01T00:00:00Z", // month 00
+  "2026-13-01T00:00:00Z", // month 13
+  "2026-01-00T00:00:00Z", // day 00
+  "2026-02-29T00:00:00Z", // 2026 not a leap year
+  "2026-02-30T00:00:00Z", // February 30 never exists
+  "2026-04-31T00:00:00Z", // April has 30 days
+  "1900-02-29T00:00:00Z", // 1900 not a leap year (div by 100, not 400)
+  "2026-01-01T24:00:00Z", // hour 24
+  "2026-01-01T25:00:00Z", // hour 25
+  "2026-01-01T00:60:00Z", // minute 60
+  "2026-01-01T00:00:60Z", // second 60 (leap second rejected)
+  "2026-99-99T99:99:99.999Z", // month/day/hour/min/sec 99
+  "2026-99-01T00:00:00Z",
+  "2026-01-99T00:00:00Z",
+  "2026-01-01T99:00:00Z",
+]
+
+const SHARED_ISO_INVALID_STRUCTURAL: readonly unknown[] = [
+  "2026-01-01T00:00:00z", // lowercase z
+  "2026-01-01T00:00:00+09:00", // timezone offset
+  "2026-01-01T00:00:00", // missing Z
+  "2026-01-01T00:00Z", // missing seconds
+  "2026-01-01T00:00:00.1234Z", // four fractional digits
+  "2026-01-01T00:00:00Z ", // trailing whitespace
+  " 2026-01-01T00:00:00Z", // leading whitespace
+  12345, // non-string number
+  null,
+  undefined,
+  ["2026-01-01T00:00:00Z"], // array
+  { created_at: "2026-01-01T00:00:00Z" }, // object
+]
+
+test("shared isIsoUtcTimestamp accepts valid UTC timestamps", () => {
+  for (const t of SHARED_ISO_VALID) {
+    assert.equal(isIsoUtcTimestamp(t), true, `expected valid: ${t}`)
+  }
+})
+
+test("shared isIsoUtcTimestamp rejects semantically invalid calendar/clock values", () => {
+  for (const t of SHARED_ISO_INVALID_SEMANTIC) {
+    assert.equal(isIsoUtcTimestamp(t), false, `expected rejected (semantic): ${t}`)
+  }
+})
+
+test("shared isIsoUtcTimestamp rejects structurally invalid values without throwing", () => {
+  for (const t of SHARED_ISO_INVALID_STRUCTURAL) {
+    assert.doesNotThrow(() => isIsoUtcTimestamp(t))
+    assert.equal(isIsoUtcTimestamp(t), false, `expected rejected (structural): ${JSON.stringify(t)}`)
+  }
+})
+
+// Non-vacuity: a test-local copy of the OLD structural-only regex accepts the
+// pinned invalid dates, while the shared semantic guard rejects them. This
+// proves the guard (and the tests exercising it) catch the original defect.
+test("non-vacuity: old structural regex accepts pinned invalid dates the shared guard rejects", () => {
+  const OLD_STRUCTURAL_ONLY = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/
+  const pinned = [
+    "2026-13-01T00:00:00Z",
+    "2026-02-30T00:00:00Z",
+    "2026-01-01T25:00:00Z",
+    "2026-99-99T99:99:99.999Z",
+  ]
+  for (const t of pinned) {
+    assert.equal(OLD_STRUCTURAL_ONLY.test(t), true, `old regex should accept: ${t}`)
+    assert.equal(isIsoUtcTimestamp(t), false, `shared guard should reject: ${t}`)
+  }
+})
+
+// Integration: every timestamp-bearing artifact field rejects the three pinned
+// invalid cases via the module's existing invalid_timestamp code, still points
+// at the right field, does not echo the value, and keeps accepting valid
+// leap-day / fractional timestamps.
+const ARTIFACT_TIMESTAMP_CASES: readonly [
+  string,
+  (r: Record<string, unknown>) => ValidationResult,
+  () => Record<string, unknown>,
+  string,
+][] = [
+  ["query_intent.created_at", validateQueryIntentRecord, validQueryIntent, "created_at"],
+  ["safe_query_plan.created_at", validateSafeQueryPlan, validSafeQueryPlan, "created_at"],
+  ["compiled_sql.created_at", validateCompiledSqlArtifact, validCompiledSqlArtifact, "created_at"],
+  ["query_result.created_at", validateQueryResultRecord, validQueryResultRecord, "created_at"],
+  ["rule_review.reviewed_at", validateRuleReviewRecord, validRuleReviewRecord, "reviewed_at"],
+  ["evidence_review.reviewed_at", validateEvidenceReviewRecord, validEvidenceReviewRecord, "reviewed_at"],
+  ["llm_judgment.judged_at", validateLlmJudgmentRecord, validLlmJudgmentRecord, "judged_at"],
+  ["human_decision.reviewed_by_human_at", validateHumanDecisionRecord, validHumanDecisionRecord, "reviewed_by_human_at"],
+]
+
+const PINNED_INVALID = ["2026-13-01T00:00:00Z", "2026-02-30T00:00:00Z", "2026-01-01T25:00:00Z"]
+
+test("artifact timestamp fields reject pinned invalid calendar values with invalid_timestamp", () => {
+  for (const [label, validate, build, field] of ARTIFACT_TIMESTAMP_CASES) {
+    for (const bad of PINNED_INVALID) {
+      const result = validate({ ...build(), [field]: bad })
+      const tsIssues = result.issues.filter((i) => i.code === "invalid_timestamp")
+      assert.ok(tsIssues.length > 0, `${label}: expected invalid_timestamp for ${bad}`)
+      assert.ok(
+        tsIssues.some((i) => i.field === field),
+        `${label}: invalid_timestamp should point at ${field}`,
+      )
+      for (const i of result.issues) {
+        assert.equal(i.message, `${i.code}:${i.field}`, `${label}: message must not echo value`)
+        assert.ok(!i.message.includes(bad), `${label}: message must not echo timestamp`)
+      }
+    }
+    // Valid leap-day and fractional timestamps still pass at this field.
+    for (const good of ["2024-02-29T12:34:56Z", "2026-01-01T00:00:00.123Z"]) {
+      const result = validate({ ...build(), [field]: good })
+      assert.ok(
+        !codes(result).includes("invalid_timestamp"),
+        `${label}: valid timestamp ${good} must pass`,
+      )
+    }
+  }
+})
+
+test("artifact timestamp error ordering stays stable when combined with another error", () => {
+  // A record with both an invalid timestamp and an invalid enum: the issue list
+  // remains deterministic across repeated validations.
+  const build = () => ({ ...validQueryResultRecord(), created_at: "2026-13-01T00:00:00Z", source_trust_marker: "trusted" })
+  const first = validateQueryResultRecord(build()).issues.map((i) => `${i.code}:${i.field}`)
+  const second = validateQueryResultRecord(build()).issues.map((i) => `${i.code}:${i.field}`)
+  assert.deepEqual(first, second)
+  assert.ok(first.includes("invalid_timestamp:created_at"))
+})
+
+// Definition-deduplication: the shared guard is the single Phase 6 timestamp
+// regex definition; the four consumers import it and no longer define their own.
+const P6_ROOT = fileURLToPath(new URL("../app/lib/phase6/", import.meta.url))
+const SHARED_GUARD_SRC = fileURLToPath(
+  new URL("../app/lib/phase6/shared/isoUtcTimestamp.ts", import.meta.url),
+)
+const CONSUMER_SRCS: readonly string[] = [
+  "artifacts/validation.ts",
+  "persistenceTargetDecision/validators.ts",
+  "persistenceAuditEvidence/validators.ts",
+  "recorderAuditSummary/validators.ts",
+].map((rel) => fileURLToPath(new URL(`../app/lib/phase6/${rel}`, import.meta.url)))
+
+test("shared timestamp guard file exists and exports the predicate", () => {
+  const text = readFileSync(SHARED_GUARD_SRC, "utf8")
+  assert.ok(text.includes("export function isIsoUtcTimestamp"))
+})
+
+test("four consumers import the shared guard and define no local ISO regex", () => {
+  for (const src of CONSUMER_SRCS) {
+    const text = readFileSync(src, "utf8")
+    assert.ok(
+      text.includes('from "../shared/isoUtcTimestamp.ts"'),
+      `${src} must import the shared guard`,
+    )
+    assert.ok(!text.includes("ISO_8601_UTC"), `${src} must not define a local ISO_8601_UTC regex`)
+  }
+})
+
+test("the pinned ISO timestamp regex is defined in exactly one Phase 6 file", () => {
+  // Scan app/lib/phase6/** application source only (not this test file's
+  // non-vacuity fixture). The literal digit-placement profile must appear in a
+  // single file: the shared guard.
+  const NEEDLE = "\\d{4})-(\\d{2})-(\\d{2})T"
+  const files = listTsFiles(P6_ROOT)
+  const defining = files.filter((f) => readFileSync(f, "utf8").includes(NEEDLE))
+  assert.deepEqual(defining, [SHARED_GUARD_SRC], `only the shared guard may define the ISO regex`)
+})
+
+// Shared-module source guard: the leaf must carry no runtime capability. The
+// needle list is split so this assertion never self-matches its own tokens.
+test("shared timestamp guard source contains no forbidden runtime capability", () => {
+  const text = readFileSync(SHARED_GUARD_SRC, "utf8")
+  const forbidden = [
+    ["Date", ".now"],
+    ["new ", "Date"],
+    ["Date", ".parse"],
+    ["Temp", "oral"],
+    ["Math", ".random"],
+    ["random", "UUID"],
+    ["fet", "ch("],
+    ["process", ".env"],
+    ["node:", "fs"],
+    ["child_", "process"],
+    ["Approval", "Store"],
+    ["append", "EvidenceLedger"],
+    ["write", "Graph"],
+    ["execute", "External"],
+  ]
+  for (const [a, b] of forbidden) {
+    assert.ok(!text.includes(a + b), `shared guard must not contain: <<<${a + b}>>>`)
+  }
+})
+
+function listTsFiles(dir: string): string[] {
+  const out: string[] = []
+  for (const entry of readdirSync(dir)) {
+    const full = `${dir}${entry}`
+    if (statSync(full).isDirectory()) out.push(...listTsFiles(`${full}/`))
+    else if (full.endsWith(".ts")) out.push(full)
+  }
+  return out
+}
