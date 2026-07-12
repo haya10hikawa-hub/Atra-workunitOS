@@ -479,6 +479,38 @@ test("HUMAN_DECISION_RECORD_CONTRACT contains validation rules", () => {
   ]);
 });
 
+// P6-FIX-006 (Issue #120): explicit human specification decision — the two
+// phase-wide safety literals are locked to true; the three gate descriptors
+// deliberately remain contextual. These assertions fail if the contract is
+// ever changed to claim that all five fields must always be true.
+test("HUMAN_DECISION_RECORD_CONTRACT locks the two phase-wide safety literals to true", () => {
+  requireAll(contract, "contract", [
+    "four_eyes_required must be true for every valid Human Decision Record in this phase.",
+    "self_approval_blocked must be true for every valid Human Decision Record in this phase.",
+  ]);
+});
+
+test("HUMAN_DECISION_RECORD_CONTRACT keeps the three gate descriptors contextual", () => {
+  requireAll(contract, "contract", [
+    "approval_required, promotion_required, and execution_required are contextual descriptors and are not phase-wide literal-true invariants.",
+    "approval_required does not authorize approval.",
+    "promotion_required does not authorize promotion.",
+    "execution_required does not authorize execution.",
+  ]);
+  // Over-locking guard: the contract must never claim a contextual descriptor
+  // is a phase-wide literal-true invariant.
+  for (const field of ["approval_required", "promotion_required", "execution_required"]) {
+    assert.ok(
+      !contract.includes(`${field} must be true for every valid Human Decision Record`),
+      `contract must not lock ${field} to literal true`,
+    );
+    assert.ok(
+      !contract.includes(`${field} must equal true`),
+      `contract must not lock ${field} to literal true`,
+    );
+  }
+});
+
 test("HUMAN_DECISION_RECORD_CONTRACT contains Pass / Warn / Fail / No-Go outcomes and non-authorization statement", () => {
   requireAll(contract, "contract", [
     "The Human Decision Record is tenant-scoped, human-authored, evidence-aware, judgment-aware, uncertainty-preserving, conflict-preserving, rationale-complete, future-gate-explicit, and non-authorizing.",
