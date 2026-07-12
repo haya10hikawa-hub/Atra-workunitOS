@@ -962,6 +962,53 @@ test("test does not rely on self-match traps for no-go flag literals", () => {
   assert.equal(validateRecorderAuditSummaryRecord({}).ok, false)
 })
 
+// ─── P6-FIX-007b (Issue #121): frozen ValidationResult runtime snapshot ──────
+// The result object and its issues array are both frozen, and a caller cannot
+// flip ok or add/remove/reorder issues. Freezing grants nothing.
+
+test("valid and invalid results are frozen with frozen issues arrays", () => {
+  const valid = validateRecorderAuditSummaryRecord(baseTenantSummary())
+  assert.equal(valid.ok, true, JSON.stringify(valid.issues))
+  assert.ok(Object.isFrozen(valid), "valid result must be frozen")
+  assert.ok(Object.isFrozen(valid.issues), "valid issues must be frozen")
+
+  const invalid = validateRecorderAuditSummaryRecord({})
+  assert.equal(invalid.ok, false)
+  assert.ok(Object.isFrozen(invalid), "invalid result must be frozen")
+  assert.ok(Object.isFrozen(invalid.issues), "invalid issues must be frozen")
+})
+
+test("result mutation attempts cannot change ok, issues length, entries, or order", () => {
+  const result = validateRecorderAuditSummaryRecord({})
+  assert.equal(result.ok, false)
+  const before = {
+    ok: result.ok,
+    entries: result.issues.map((entry) => ({ ...entry })),
+    order: result.issues.map((i) => `${i.code}:${i.field}:${i.message}`),
+  }
+  try {
+    ;(result as { ok: boolean }).ok = true
+  } catch {
+    /* expected: frozen object in strict mode */
+  }
+  const mutable = result.issues as { push: (x: unknown) => void; pop: () => void; splice: (a: number, b: number) => void }
+  for (const op of [
+    () => mutable.push({ code: "x", field: "y", message: "x:y" }),
+    () => mutable.pop(),
+    () => mutable.splice(0, 1),
+  ]) {
+    try {
+      op()
+    } catch {
+      /* expected */
+    }
+  }
+  assert.equal(result.ok, before.ok)
+  assert.equal(result.issues.length, before.entries.length)
+  assert.deepEqual(result.issues.map((entry) => ({ ...entry })), before.entries)
+  assert.deepEqual(result.issues.map((i) => `${i.code}:${i.field}:${i.message}`), before.order)
+})
+
 // ─── Phase 7: static source guards (read-only) ──────────────────
 
 const SRC_TYPES = fileURLToPath(new URL("../app/lib/phase6/recorderAuditSummary/types.ts", import.meta.url))

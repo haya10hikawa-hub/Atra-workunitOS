@@ -125,7 +125,10 @@ function issue(
 function resultOf(
   issues: readonly PersistenceAuditEventValidationIssue[],
 ): PersistenceAuditEventValidationResult {
-  return { ok: issues.length === 0, issues }
+  // P6-FIX-007b (Issue #121): completed, immutable runtime snapshot — clone and
+  // freeze the issues array, then freeze the result object. Freezing grants
+  // nothing.
+  return Object.freeze({ ok: issues.length === 0, issues: Object.freeze([...issues]) })
 }
 
 // ─── Primitive predicates and exported type guards ──────────────
