@@ -18,7 +18,8 @@
  * exactly once into a plain snapshot; every check reads the snapshot only. The
  * input itself is never mutated.
  *
- * This module imports only its sibling ./types.ts (inert types and value lists).
+ * This module imports only its sibling ./types.ts (inert types and value
+ * lists) and the pure shared Phase 6 leaf modules (../shared/*.ts).
  * It imports nothing from app runtime, app/lib/persistence,
  * app/lib/phase6/persistenceTargetDecision, app/lib/phase6/artifacts,
  * app/lib/security/approvalMac, test fixtures, test harnesses, database clients,
@@ -56,6 +57,7 @@ import {
   type PersistenceAuditNoGoFlag,
 } from "./types.ts"
 import { isIsoUtcTimestamp } from "../shared/isoUtcTimestamp.ts"
+import { isPhase6ForbiddenGrantField } from "../shared/forbiddenGrantFields.ts"
 
 // ─── Stable issue codes ─────────────────────────────────────────
 
@@ -222,25 +224,8 @@ export function isPersistenceAuditNoGoFlag(value: unknown): value is Persistence
 
 // ─── Forbidden / raw-payload / secret-like field name sets ──────
 
-const FORBIDDEN_GRANT_FIELDS: readonly string[] = [
-  "approval",
-  "approved",
-  "authorized",
-  "execution_permission",
-  "executed",
-  "promotion_permission",
-  "promoted",
-  "persistence_permission",
-  "persisted",
-  "storage_permission",
-  "stored",
-  "durable_storage_permission",
-  "evidence_ledger_append_permission",
-  "graph_write_permission",
-  "external_action_permission",
-  "formal_workunit_promotion",
-  "approvalstore_approval",
-]
+// Forbidden grant-like fields: the canonical shared Phase 6 denylist
+// (P6-FIX-005, Issue #116) replaces this module's former 17-name local copy.
 
 const RAW_PAYLOAD_FIELDS: readonly string[] = [
   "raw_payload",
@@ -551,7 +536,7 @@ export function validatePersistenceAuditEvent(
     // Unknown / forbidden / raw-payload / secret-like top-level fields.
     for (const key of Object.keys(snapshot)) {
       if (ALLOWED_FIELDS.includes(key)) continue
-      if (FORBIDDEN_GRANT_FIELDS.includes(key)) {
+      if (isPhase6ForbiddenGrantField(key)) {
         issues.push(issue("forbidden_grant_field_present", key))
       } else if (RAW_PAYLOAD_FIELDS.includes(key)) {
         issues.push(issue("raw_payload_field_present", key))

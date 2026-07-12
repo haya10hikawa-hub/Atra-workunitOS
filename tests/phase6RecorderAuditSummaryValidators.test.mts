@@ -725,11 +725,61 @@ test("non_authorization_statement is required", () => {
   assert.ok(hasCode(r2, "invalid_non_authorization_statement"))
 })
 
-// 44
-test("forbidden grant-like field fails", () => {
-  const r = validateRecorderAuditSummaryRecord(withField(baseTenantSummary(), "approved", true))
-  assert.equal(r.ok, false)
-  assert.ok(hasCode(r, "forbidden_grant_field_present"))
+// 44 (P6-FIX-005, Issue #116): the canonical 20-name grant-like denylist.
+// Expected names are hardcoded independently of the shared production constant
+// (rather than imported and reflected back), so a production-list regression —
+// a dropped, renamed, or misspelled name — is detectable here.
+const CANONICAL_FORBIDDEN_GRANT_FIELDS = [
+  "approval",
+  "approved",
+  "authorized",
+  "execution_permission",
+  "executed",
+  "promotion_permission",
+  "promoted",
+  "persistence_permission",
+  "persisted",
+  "storage_permission",
+  "stored",
+  "durable_storage_permission",
+  "evidence_ledger_append_permission",
+  "graph_write_permission",
+  "external_action_permission",
+  "formal_workunit_promotion",
+  "approvalstore_approval",
+  "summary_runtime_permission",
+  "audit_emission_permission",
+  "starthub_execution_permission",
+] as const
+
+test("all 20 canonical forbidden grant-like fields fail with the dedicated code", () => {
+  assert.equal(CANONICAL_FORBIDDEN_GRANT_FIELDS.length, 20)
+  const suppliedValue = "grant-value-must-not-echo"
+  for (const grant of CANONICAL_FORBIDDEN_GRANT_FIELDS) {
+    const result = validateRecorderAuditSummaryRecord(
+      withField(baseTenantSummary(), grant, suppliedValue),
+    )
+    assert.equal(result.ok, false, grant)
+    const dedicated = result.issues.filter(
+      (i) => i.code === "forbidden_grant_field_present" && i.field === grant,
+    )
+    assert.equal(dedicated.length, 1, `${grant}: exactly one dedicated grant issue`)
+    assert.ok(
+      !result.issues.some((i) => i.code === "unknown_field" && i.field === grant),
+      `${grant}: must not also be reported as unknown_field`,
+    )
+    for (const i of result.issues) {
+      assert.equal(i.message, `${i.code}:${i.field}`)
+      assert.ok(!i.message.includes(suppliedValue), `${grant}: message must not echo the value`)
+    }
+  }
+  // An ordinary unrelated unknown key keeps the generic classification.
+  const unknown = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "unrelated_mystery_key", "x"),
+  )
+  assert.equal(unknown.ok, false)
+  assert.ok(hasCode(unknown, "unknown_field"))
+  assert.equal(hasCode(unknown, "forbidden_grant_field_present"), false)
 })
 
 // 45

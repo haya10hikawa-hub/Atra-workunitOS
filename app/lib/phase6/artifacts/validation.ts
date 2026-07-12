@@ -14,9 +14,15 @@
  *
  * The ISO-8601 UTC timestamp predicate is the single shared, semantic guard
  * (P6-FIX-004, Issue #115); this module no longer defines its own regex.
+ *
+ * Grant-like top-level fields are classified against the single canonical
+ * shared Phase 6 denylist (P6-FIX-005, Issue #116) with the dedicated
+ * forbidden_grant_field_present code instead of the generic unknown_field.
+ * Both classifications were and remain fail-closed rejections.
  */
 
 import { isIsoUtcTimestamp } from "../shared/isoUtcTimestamp.ts"
+import { isPhase6ForbiddenGrantField } from "../shared/forbiddenGrantFields.ts"
 
 export const VALIDATION_ISSUE_CODES = [
   "invalid_record",
@@ -30,6 +36,7 @@ export const VALIDATION_ISSUE_CODES = [
   "invalid_array",
   "invalid_object",
   "unknown_field",
+  "forbidden_grant_field_present",
   "missing_tenant_id",
   "invalid_tenant_id",
   "missing_lineage_id",
@@ -96,7 +103,10 @@ export function isStringArray(value: unknown): value is readonly string[] {
 /**
  * Allowlist-based unknown-field check: every own key of `record` must be in
  * `allowedFields`. Unknown top-level fields are rejected by default for all
- * eight Phase 6 artifact records (fail closed).
+ * eight Phase 6 artifact records (fail closed). A key on the canonical shared
+ * grant-like denylist is rejected with the dedicated
+ * forbidden_grant_field_present code (exactly one issue per key — never also
+ * unknown_field); every other unknown key keeps the generic unknown_field.
  */
 export function collectUnknownFieldIssues(
   record: Record<string, unknown>,
@@ -104,7 +114,12 @@ export function collectUnknownFieldIssues(
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = []
   for (const key of Object.keys(record)) {
-    if (!allowedFields.includes(key)) issues.push(issue("unknown_field", key))
+    if (allowedFields.includes(key)) continue
+    if (isPhase6ForbiddenGrantField(key)) {
+      issues.push(issue("forbidden_grant_field_present", key))
+    } else {
+      issues.push(issue("unknown_field", key))
+    }
   }
   return issues
 }

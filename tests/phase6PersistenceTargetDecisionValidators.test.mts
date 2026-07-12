@@ -292,27 +292,57 @@ test("blocked_no_go may carry no_go_flags", () => {
   assert.equal(hasCode(result, "no_go_flags_present"), false)
 })
 
-// 24
-test("forbidden grant-like field fails", () => {
-  for (const grant of [
-    "approval",
-    "approved",
-    "authorized",
-    "execution_permission",
-    "executed",
-    "promotion_permission",
-    "promoted",
-    "persistence_permission",
-    "persisted",
-    "storage_permission",
-    "stored",
-    "external_action_permission",
-    "formal_workunit_promotion",
-  ]) {
-    const result = validateTargetDecisionRecord(withField(grant, true))
+// 24 (P6-FIX-005, Issue #116): the canonical 20-name grant-like denylist.
+// Expected names are hardcoded independently of the shared production constant
+// (rather than imported and reflected back), so a production-list regression —
+// a dropped, renamed, or misspelled name — is detectable here.
+const CANONICAL_FORBIDDEN_GRANT_FIELDS = [
+  "approval",
+  "approved",
+  "authorized",
+  "execution_permission",
+  "executed",
+  "promotion_permission",
+  "promoted",
+  "persistence_permission",
+  "persisted",
+  "storage_permission",
+  "stored",
+  "durable_storage_permission",
+  "evidence_ledger_append_permission",
+  "graph_write_permission",
+  "external_action_permission",
+  "formal_workunit_promotion",
+  "approvalstore_approval",
+  "summary_runtime_permission",
+  "audit_emission_permission",
+  "starthub_execution_permission",
+] as const
+
+test("all 20 canonical forbidden grant-like fields fail with the dedicated code", () => {
+  assert.equal(CANONICAL_FORBIDDEN_GRANT_FIELDS.length, 20)
+  const suppliedValue = "grant-value-must-not-echo"
+  for (const grant of CANONICAL_FORBIDDEN_GRANT_FIELDS) {
+    const result = validateTargetDecisionRecord(withField(grant, suppliedValue))
     assert.equal(result.ok, false, grant)
-    assert.ok(hasCode(result, "forbidden_grant_field_present"), grant)
+    const dedicated = result.issues.filter(
+      (i) => i.code === "forbidden_grant_field_present" && i.field === grant,
+    )
+    assert.equal(dedicated.length, 1, `${grant}: exactly one dedicated grant issue`)
+    assert.ok(
+      !result.issues.some((i) => i.code === "unknown_field" && i.field === grant),
+      `${grant}: must not also be reported as unknown_field`,
+    )
+    for (const i of result.issues) {
+      assert.equal(i.message, `${i.code}:${i.field}`)
+      assert.ok(!i.message.includes(suppliedValue), `${grant}: message must not echo the value`)
+    }
   }
+  // An ordinary unrelated unknown key keeps the generic classification.
+  const unknown = validateTargetDecisionRecord(withField("unrelated_mystery_key", "x"))
+  assert.equal(unknown.ok, false)
+  assert.ok(hasCode(unknown, "unknown_field"))
+  assert.equal(hasCode(unknown, "forbidden_grant_field_present"), false)
 })
 
 // 25
