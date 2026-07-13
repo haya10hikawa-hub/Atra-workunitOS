@@ -71,7 +71,10 @@ export function issue(code: ValidationIssueCode, field: string): ValidationIssue
 }
 
 export function resultOf(issues: readonly ValidationIssue[]): ValidationResult {
-  return { ok: issues.length === 0, issues }
+  // P6-FIX-007b (Issue #121): return a completed, immutable runtime snapshot —
+  // the issues array is cloned then frozen (never aliased to the caller's
+  // accumulator), and the result object is frozen. Freezing grants nothing.
+  return Object.freeze({ ok: issues.length === 0, issues: Object.freeze([...issues]) })
 }
 
 // ─── Primitive predicates ───────────────────────────────────────

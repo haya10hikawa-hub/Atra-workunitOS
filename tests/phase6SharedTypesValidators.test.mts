@@ -23,6 +23,8 @@ import {
   CONFLICT_STATES,
   UNCERTAINTY_STATES,
   DECISION_IMPACT_SCOPES,
+  resultOf,
+  issue,
   type ValidationResult,
 } from "../app/lib/phase6/artifacts/index.ts"
 
@@ -454,6 +456,91 @@ test("all exported validators are functions", () => {
   for (const c of CASES) {
     assert.equal(typeof c.validate, "function")
   }
+})
+
+// ─── P6-FIX-007b (Issue #121): frozen ValidationResult runtime snapshot ──────
+//
+// Every artifact ValidationResult is a completed immutable snapshot: the result
+// object is frozen, the issues array is a cloned + frozen snapshot (never the
+// caller's mutable accumulator), and neither can be mutated by a caller.
+// Freezing grants nothing — a frozen valid result stays valid and a frozen
+// invalid result stays invalid.
+
+test("artifact valid and invalid results are frozen with frozen issues arrays", () => {
+  for (const c of CASES) {
+    const valid = c.validate(c.fixture())
+    assert.equal(valid.ok, true, c.name)
+    assert.ok(Object.isFrozen(valid), `${c.name}: valid result must be frozen`)
+    assert.ok(Object.isFrozen(valid.issues), `${c.name}: valid issues must be frozen`)
+
+    const invalid = c.validate({})
+    assert.equal(invalid.ok, false, c.name)
+    assert.ok(Object.isFrozen(invalid), `${c.name}: invalid result must be frozen`)
+    assert.ok(Object.isFrozen(invalid.issues), `${c.name}: invalid issues must be frozen`)
+  }
+})
+
+test("artifact result cannot be mutated: ok, issues length, entries, and order hold", () => {
+  const result = validateQueryResultRecord({ source_trust_marker: "trusted" })
+  assert.equal(result.ok, false)
+  const before = {
+    ok: result.ok,
+    issues: result.issues.map((entry) => ({ ...entry })),
+  }
+
+  // Attempt to flip ok.
+  try {
+    ;(result as { ok: boolean }).ok = !result.ok
+  } catch {
+    // Expected TypeError for a frozen object in strict mode.
+  }
+  // Attempt to push / pop / splice / replace an entry.
+  try {
+    ;(result.issues as ValidationResult["issues"][number][]).push(issue("invalid_record", "(x)"))
+  } catch {
+    /* expected */
+  }
+  try {
+    ;(result.issues as ValidationResult["issues"][number][]).pop()
+  } catch {
+    /* expected */
+  }
+  try {
+    ;(result.issues as ValidationResult["issues"][number][]).splice(0, 1)
+  } catch {
+    /* expected */
+  }
+  try {
+    ;(result.issues as unknown as Record<number, unknown>)[0] = issue("invalid_object", "(y)")
+  } catch {
+    /* expected */
+  }
+
+  assert.equal(result.ok, before.ok)
+  assert.equal(result.issues.length, before.issues.length)
+  assert.deepEqual(
+    result.issues.map((entry) => ({ ...entry })),
+    before.issues,
+  )
+  assert.deepEqual(
+    result.issues.map((i) => `${i.code}:${i.field}:${i.message}`),
+    before.issues.map((i) => `${i.code}:${i.field}:${i.message}`),
+  )
+})
+
+test("artifacts resultOf detaches from the supplied source array", () => {
+  const source = [issue("invalid_record", "(root)")]
+  const result = resultOf(source)
+  const before = [...result.issues]
+
+  // Mutating the source after the fact must not change the returned snapshot.
+  source.length = 0
+
+  assert.deepEqual([...result.issues], before)
+  assert.notEqual(result.issues as unknown, source as unknown)
+  assert.equal(result.issues.length, 1)
+  assert.ok(Object.isFrozen(result))
+  assert.ok(Object.isFrozen(result.issues))
 })
 
 test("all literal union values are represented", () => {
@@ -1167,5 +1254,63 @@ test("shared grant denylist source contains no forbidden runtime capability", ()
   ]
   for (const [a, b] of forbidden) {
     assert.ok(!text.includes(a + b), `shared denylist must not contain: <<<${a + b}>>>`)
+  }
+})
+
+// ─── P6-FIX-007b (Issue #121): frozen-snapshot resultOf source guards ────────
+//
+// Each in-scope resultOf must return a frozen result whose issues array is a
+// frozen clone. The four in-scope production files are exactly the linkage
+// pattern's siblings; the linkage validator itself is out of scope and is not
+// checked here.
+
+const RESULT_OF_SRCS: readonly string[] = [
+  "artifacts/validation.ts",
+  "persistenceTargetDecision/validators.ts",
+  "persistenceAuditEvidence/validators.ts",
+  "recorderAuditSummary/validators.ts",
+].map((rel) => fileURLToPath(new URL(`../app/lib/phase6/${rel}`, import.meta.url)))
+
+/** Extract the body of the `resultOf` function's `return` statement. */
+function resultOfReturnLine(sourceText: string): string {
+  // Strip line comments so a comment can never satisfy the structural checks.
+  const codeOnly = sourceText
+    .split("\n")
+    .map((line) => {
+      const idx = line.indexOf("//")
+      return idx === -1 ? line : line.slice(0, idx)
+    })
+    .join("\n")
+  const match = codeOnly.match(/function resultOf\([\s\S]*?\{\s*return ([\s\S]*?)\n\}/)
+  assert.ok(match, "resultOf function with a return must be present")
+  return (match as RegExpMatchArray)[1]
+}
+
+test("each in-scope resultOf returns a frozen result with a cloned frozen issues array", () => {
+  for (const src of RESULT_OF_SRCS) {
+    const ret = resultOfReturnLine(readFileSync(src, "utf8"))
+    // Outer result frozen.
+    assert.ok(
+      ret.includes("Object.freeze({"),
+      `${src}: resultOf must Object.freeze the outer result`,
+    )
+    // Cloned issues array (spread clone), then frozen.
+    assert.ok(
+      ret.includes("Object.freeze([...issues])"),
+      `${src}: resultOf must freeze a [...issues] clone`,
+    )
+    // Must not return the original issues reference directly.
+    assert.ok(
+      !/issues:\s*issues\b/.test(ret),
+      `${src}: resultOf must not alias the original issues array`,
+    )
+    // Must not use JSON serialization as a clone mechanism.
+    assert.ok(!ret.includes("JSON."), `${src}: resultOf must not clone via JSON`)
+    // Must not recursively deep-freeze issue entries (only one freeze of the
+    // array itself; no per-entry map(Object.freeze) or structuredClone).
+    assert.ok(
+      !ret.includes(".map(") && !ret.includes("structuredClone"),
+      `${src}: resultOf must not deep-freeze or deep-clone issue entries`,
+    )
   }
 })
