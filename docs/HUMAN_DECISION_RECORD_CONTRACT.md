@@ -310,6 +310,8 @@ Direct object literals, parsed JSON, database rows, network data, casts, and des
 
 A TypeScript cast can always lie. The opaque type is a compile-time provenance boundary, not cryptographic proof and not authorization. Future runtime gates must still perform their own server-side evidence, identity, tenant, hash, expiry, replay, RBAC, and kill-switch checks. A trusted artifact does not mean reviewed, approved, authorized, persisted, or executable.
 
+four_eyes_required: true is a policy declaration, not evidence that two reviews occurred. Four-Eyes Review Evidence is a separate, immutable artifact defined in FOUR_EYES_REVIEW_EVIDENCE_CONTRACT.md and produced by the independent app/lib/phase6/reviewEvidence module; the Human Decision Record itself never carries second-reviewer completion fields. Review Evidence is not ApprovalStore approval, not runtime authorization, and not execution permission.
+
 ### 15.2 Decision Status / Outcome Semantic Matrix (P6-FIX-008)
 
 The allowed decision_status × decision_outcome matrix is:
