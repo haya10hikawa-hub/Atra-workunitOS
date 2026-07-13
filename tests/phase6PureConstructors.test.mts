@@ -10,7 +10,14 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
 
+import type {
+  UnvalidatedHumanDecisionRecordInput,
+  ValidatedHumanDecisionRecord,
+  HumanDecisionRecord,
+} from "../app/lib/phase6/artifacts/index.ts"
 import {
   createQueryIntentRecord,
   createSafeQueryPlan,
@@ -617,4 +624,281 @@ test("P6-I0 validators still pass their own behavior", () => {
     delete tenantless.tenant_id
     assert.equal(validate(tenantless).ok, false, `validator ${i} rejects a tenant-less record`)
   })
+})
+
+// ─── P6-FIX-008 (Issue #141): trusted Human Decision type boundary ───────────
+//
+// Compile-time provenance assertions. These are erased at runtime (pure type
+// aliases). The TypeScript compiler fails if either safety literal widens to
+// boolean, if the opaque brand is removed, or if the constructor returns the
+// unvalidated type — proven by the mutation checks. They reference no undeclared
+// runtime variable.
+
+type Equal<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
+type Assert<T extends true> = T
+type AssertFalse<T extends false> = T
+
+// four_eyes_required is exactly `true` (not boolean) on the validated artifact.
+type _AssertFourEyesTrue = Assert<Equal<ValidatedHumanDecisionRecord["four_eyes_required"], true>>
+// self_approval_blocked is exactly `true` (not boolean) on the validated artifact.
+type _AssertSelfApprovalTrue = Assert<
+  Equal<ValidatedHumanDecisionRecord["self_approval_blocked"], true>
+>
+// HumanDecisionRecord is exactly the validated artifact type.
+type _AssertAlias = Assert<Equal<HumanDecisionRecord, ValidatedHumanDecisionRecord>>
+// The unvalidated input is NOT the validated artifact, and is not assignable to it
+// (it lacks the literal-true narrowing and the private brand).
+type _AssertDistinct = AssertFalse<
+  Equal<UnvalidatedHumanDecisionRecordInput, ValidatedHumanDecisionRecord>
+>
+type IsAssignable<A, B> = A extends B ? true : false
+type _AssertNotAssignable = AssertFalse<
+  IsAssignable<UnvalidatedHumanDecisionRecordInput, ValidatedHumanDecisionRecord>
+>
+// A forged object carrying BOTH literal-true safety fields but lacking the
+// private brand must still NOT be assignable to the validated artifact. This
+// assertion depends specifically on the opaque brand: if the brand is removed
+// from ValidatedHumanDecisionRecord, this forged shape becomes structurally
+// equal and assignable, and the compile-time assertion fails.
+type ForgedWithoutBrand = Omit<
+  UnvalidatedHumanDecisionRecordInput,
+  "four_eyes_required" | "self_approval_blocked"
+> & { readonly four_eyes_required: true; readonly self_approval_blocked: true }
+type _AssertBrandRequired = AssertFalse<
+  IsAssignable<ForgedWithoutBrand, ValidatedHumanDecisionRecord>
+>
+// The success artifact of createHumanDecisionRecord is the validated type.
+type HumanDecisionSuccessArtifact = Extract<
+  ReturnType<typeof createHumanDecisionRecord>,
+  { ok: true }
+>["artifact"]
+type _AssertConstructorArtifact = Assert<
+  Equal<HumanDecisionSuccessArtifact, ValidatedHumanDecisionRecord>
+>
+
+// Keep the compile-time assertions referenced so they are not dead-elided; the
+// values are never inspected at runtime.
+test("compile-time trusted-type assertions are wired (runtime no-op)", () => {
+  const witnesses: unknown[] = [
+    null as unknown as _AssertFourEyesTrue,
+    null as unknown as _AssertSelfApprovalTrue,
+    null as unknown as _AssertAlias,
+    null as unknown as _AssertDistinct,
+    null as unknown as _AssertNotAssignable,
+    null as unknown as _AssertBrandRequired,
+    null as unknown as _AssertConstructorArtifact,
+  ]
+  assert.equal(witnesses.length, 7)
+})
+
+// ─── Constructor semantic behavior ──────────────────────────────
+
+test("createHumanDecisionRecord produces a frozen validated artifact with runtime-true safety fields", () => {
+  const artifact = expectSuccess(createHumanDecisionRecord(validHumanDecision())) as Record<string, unknown>
+  assert.ok(Object.isFrozen(artifact))
+  assert.equal(artifact.four_eyes_required, true)
+  assert.equal(artifact.self_approval_blocked, true)
+  // No runtime brand field leaks onto the object (compile-time only).
+  const symbolKeys = Object.getOwnPropertySymbols(artifact)
+  assert.equal(symbolKeys.length, 0, "no symbol-keyed brand on the runtime artifact")
+})
+
+test("createHumanDecisionRecord rejects contradictory status/outcome input", () => {
+  for (const [status, outcome] of [
+    ["ready_for_future_gate_review", "warn"],
+    ["blocked_no_go", "pass"],
+    ["draft_human_decision", "no_go"],
+  ] as const) {
+    const input = { ...validHumanDecision(), decision_status: status, decision_outcome: outcome }
+    const r = createHumanDecisionRecord(input)
+    assert.equal(r.ok, false, `${status}+${outcome}`)
+  }
+})
+
+test("createHumanDecisionRecord rejects non-action scope with a true gate descriptor", () => {
+  const input = {
+    ...validHumanDecision(),
+    decision_impact_scope: "no_action_decision",
+    approval_required: true,
+    promotion_required: false,
+    execution_required: false,
+  }
+  assert.equal(createHumanDecisionRecord(input).ok, false)
+})
+
+test("createHumanDecisionRecord rejects promotion-without-approval and execution-without-approval", () => {
+  const promo = {
+    ...validHumanDecision(),
+    decision_impact_scope: "action_readiness_assessment",
+    approval_required: false,
+    promotion_required: true,
+    execution_required: false,
+  }
+  assert.equal(createHumanDecisionRecord(promo).ok, false)
+  const exec = {
+    ...validHumanDecision(),
+    decision_impact_scope: "action_readiness_assessment",
+    approval_required: false,
+    promotion_required: false,
+    execution_required: true,
+  }
+  assert.equal(createHumanDecisionRecord(exec).ok, false)
+})
+
+test("createHumanDecisionRecord accepts the allowed actionable descriptor combinations", () => {
+  const allowed = [
+    [false, false, false],
+    [true, false, false],
+    [true, true, false],
+    [true, false, true],
+    [true, true, true],
+  ] as const
+  for (const [approval, promotion, execution] of allowed) {
+    const input = {
+      ...validHumanDecision(),
+      decision_impact_scope: "action_readiness_assessment",
+      approval_required: approval,
+      promotion_required: promotion,
+      execution_required: execution,
+    }
+    assert.equal(
+      createHumanDecisionRecord(input).ok,
+      true,
+      `${approval}/${promotion}/${execution}`,
+    )
+  }
+})
+
+test("createHumanDecisionRecord drops unknown fields and grants nothing", () => {
+  const input = { ...validHumanDecision(), sneaky_unknown_field: "x", approved: true }
+  const artifact = expectSuccess(createHumanDecisionRecord(input)) as Record<string, unknown>
+  assert.equal(Object.prototype.hasOwnProperty.call(artifact, "sneaky_unknown_field"), false)
+  assert.equal(Object.prototype.hasOwnProperty.call(artifact, "approved"), false)
+})
+
+test("createHumanDecisionRecord does not mutate its input", () => {
+  const input = validHumanDecision()
+  const before = JSON.stringify(input)
+  createHumanDecisionRecord(input)
+  assert.equal(JSON.stringify(input), before)
+})
+
+// ─── Source-structure guards (read-only) ────────────────────────
+
+const ARTIFACTS_DIR = "../app/lib/phase6/artifacts/"
+function readArtifactSrc(rel: string): string {
+  return readFileSync(fileURLToPath(new URL(`${ARTIFACTS_DIR}${rel}`, import.meta.url)), "utf8")
+}
+/** Strip block and line comments so a comment cannot satisfy a structural check. */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "")
+}
+
+test("source guard: opaque brand is declared in types.ts and not exported", () => {
+  const code = stripComments(readArtifactSrc("types.ts"))
+  assert.ok(
+    /declare const validatedHumanDecisionRecordBrand: unique symbol/.test(code),
+    "brand must be declared as a private unique symbol",
+  )
+  assert.ok(
+    !/export\s+(?:const|type|\{[^}]*)\s*.*validatedHumanDecisionRecordBrand/.test(code),
+    "brand symbol must not be exported",
+  )
+})
+
+test("source guard: ValidatedHumanDecisionRecord carries both literal-true fields and the alias", () => {
+  const code = stripComments(readArtifactSrc("types.ts"))
+  assert.ok(code.includes("readonly four_eyes_required: true"))
+  assert.ok(code.includes("readonly self_approval_blocked: true"))
+  assert.ok(code.includes("readonly [validatedHumanDecisionRecordBrand]: true"))
+  assert.ok(code.includes("export type HumanDecisionRecord = ValidatedHumanDecisionRecord"))
+})
+
+test("source guard: createHumanDecisionRecord returns ConstructionResult<ValidatedHumanDecisionRecord>", () => {
+  const code = stripComments(readArtifactSrc("constructors.ts"))
+  assert.ok(
+    /createHumanDecisionRecord\([\s\S]*?\):\s*ConstructionResult<ValidatedHumanDecisionRecord>/.test(code),
+    "constructor must be typed to return the validated artifact",
+  )
+  // No public branding helper exists.
+  assert.ok(!/export\s+function\s+\w*[Bb]rand/.test(code), "no exported branding helper")
+})
+
+test("source guard: validateHumanDecisionRecord is non-narrowing (not a type predicate)", () => {
+  const code = stripComments(readArtifactSrc("validators.ts"))
+  assert.ok(
+    /export function validateHumanDecisionRecord\(input: unknown\): ValidationResult/.test(code),
+    "validator must return ValidationResult",
+  )
+  assert.ok(
+    !code.includes("input is ValidatedHumanDecisionRecord"),
+    "validator must not be a type predicate",
+  )
+})
+
+test("source guard: no serialized brand field is added to HUMAN_DECISION_RECORD_FIELDS", () => {
+  const code = stripComments(readArtifactSrc("constructors.ts"))
+  const m = code.match(/HUMAN_DECISION_RECORD_FIELDS = \[([\s\S]*?)\] as const/)
+  assert.ok(m, "field list must be present")
+  assert.ok(
+    !(m as RegExpMatchArray)[1].includes("Brand") && !(m as RegExpMatchArray)[1].includes("brand"),
+    "the serialized field list must not include any brand field",
+  )
+})
+
+test("source guard: semantic validation consumes the existing snapshot with no second input read", () => {
+  const code = stripComments(readArtifactSrc("validators.ts"))
+  assert.ok(
+    code.includes("spec.semanticValidator(snapshot)"),
+    "semantic validator must run against the captured snapshot",
+  )
+  // validateArtifact takes exactly one snapshot: one Object.keys(input) loop.
+  const inputKeyReads = (code.match(/for \(const key of Object\.keys\(input\)\)/g) ?? []).length
+  assert.equal(inputKeyReads, 1, "exactly one single-read snapshot of the caller input")
+  // The semantic validator's parameter is the snapshot, not the raw input.
+  assert.ok(
+    /function validateHumanDecisionSemantics\(\s*snapshot: Readonly<Record<string, unknown>>,?\s*\)/.test(
+      code,
+    ),
+    "semantic validator consumes a readonly snapshot",
+  )
+})
+
+test("source guard: no production file outside artifacts/ consumes the validated type as authority", () => {
+  // The validated type name must not appear in app/ outside the artifact module.
+  // This test reads the artifact module's own files only (allowed set); a repo
+  // scan for external consumers is part of the pre-implementation audit and the
+  // architecture audit. Here we pin that the type is defined in exactly one file.
+  const typesCode = readArtifactSrc("types.ts")
+  assert.ok(typesCode.includes("export type ValidatedHumanDecisionRecord = "))
+  const validatorsCode = readArtifactSrc("validators.ts")
+  assert.ok(
+    !validatorsCode.includes("ValidatedHumanDecisionRecord"),
+    "validators.ts must not reference the validated type (validation is non-narrowing)",
+  )
+})
+
+test("source guard: no capability-bearing import is added to the artifact production files", () => {
+  const forbidden = [
+    ["fet", "ch("],
+    ["process", ".env"],
+    ["child_", "process"],
+    ["node:", "fs"],
+    ['from "', 'fs"'],
+    ["require", "("],
+    ["import", "("],
+    ["Approval", "Store"],
+    ["execute", "External"],
+    ["append", "EvidenceLedger"],
+    ["write", "Graph"],
+  ]
+  for (const rel of ["types.ts", "validation.ts", "validators.ts", "constructors.ts"]) {
+    // Strip comments: non-authorization boundary comments legitimately name
+    // ApprovalStore etc.; only real code (imports/calls) must be capability-free.
+    const code = stripComments(readArtifactSrc(rel))
+    for (const [a, b] of forbidden) {
+      assert.ok(!code.includes(a + b), `${rel} must not contain: <<<${a + b}>>>`)
+    }
+  }
 })

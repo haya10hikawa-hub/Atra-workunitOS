@@ -1314,3 +1314,226 @@ test("each in-scope resultOf returns a frozen result with a cloned frozen issues
     )
   }
 })
+
+// ─── P6-FIX-008 (Issue #141): Human Decision cross-field semantic matrices ────
+//
+// These exercise the actual validateHumanDecisionRecord output. The base
+// fixture is semantically valid, so a rejected combination yields exactly its
+// dedicated semantic issue and nothing else. No input value is echoed.
+
+const HD_STATUSES = [
+  "draft_human_decision",
+  "clarification_needed",
+  "blocked_no_go",
+  "ready_for_future_gate_review",
+] as const
+const HD_OUTCOMES = ["pass", "warn", "fail", "no_go"] as const
+
+/** Allowed status × outcome per the P6-FIX-008 matrix. */
+function statusOutcomeAllowed(status: string, outcome: string): boolean {
+  const isNoGo = outcome === "no_go"
+  const isBlocked = status === "blocked_no_go"
+  if (isNoGo !== isBlocked) return false
+  if (status === "ready_for_future_gate_review" && outcome !== "pass") return false
+  return true
+}
+
+test("Human Decision status/outcome matrix — all 16 combinations", () => {
+  for (const status of HD_STATUSES) {
+    for (const outcome of HD_OUTCOMES) {
+      const record = {
+        ...validHumanDecisionRecord(),
+        decision_status: status,
+        decision_outcome: outcome,
+        // blocked_no_go may carry no_go_flags; keep empty so only the
+        // status/outcome rule can speak.
+        no_go_flags: [],
+      }
+      const result = validateHumanDecisionRecord(record)
+      const label = `${status}+${outcome}`
+      if (statusOutcomeAllowed(status, outcome)) {
+        assert.equal(result.ok, true, `${label} should be valid: ${JSON.stringify(result.issues)}`)
+        assert.deepEqual([...result.issues], [], label)
+      } else {
+        assert.equal(result.ok, false, `${label} should be invalid`)
+        const dedicated = result.issues.filter(
+          (i) => i.code === "invalid_decision_status_outcome" && i.field === "decision_status",
+        )
+        assert.equal(dedicated.length, 1, `${label}: exactly one invalid_decision_status_outcome`)
+        assert.equal(result.issues.length, 1, `${label}: no other issue`)
+        assert.equal(dedicated[0].message, "invalid_decision_status_outcome:decision_status")
+        for (const i of result.issues) {
+          assert.ok(!i.message.includes(status) && !i.message.includes(outcome), `${label}: no echo`)
+        }
+      }
+    }
+  }
+})
+
+const NON_ACTION_SCOPES = ["no_action_decision", "clarification_request", "defer_decision"] as const
+
+test("Human Decision impact matrix — non-action scopes require all descriptors false", () => {
+  for (const scope of NON_ACTION_SCOPES) {
+    // false/false/false is valid.
+    const base = {
+      ...validHumanDecisionRecord(),
+      decision_impact_scope: scope,
+      approval_required: false,
+      promotion_required: false,
+      execution_required: false,
+    }
+    const okResult = validateHumanDecisionRecord(base)
+    assert.equal(okResult.ok, true, `${scope} FFF: ${JSON.stringify(okResult.issues)}`)
+    assert.deepEqual([...okResult.issues], [])
+
+    // Each individual true descriptor is rejected on its exact field.
+    for (const field of ["approval_required", "promotion_required", "execution_required"] as const) {
+      const record = { ...base, [field]: true }
+      const result = validateHumanDecisionRecord(record)
+      assert.equal(result.ok, false, `${scope} ${field}=true`)
+      const dedicated = result.issues.filter(
+        (i) => i.code === "invalid_gate_requirement_combination" && i.field === field,
+      )
+      assert.equal(dedicated.length, 1, `${scope} ${field}: exactly one dedicated issue`)
+      assert.equal(dedicated[0].message, `invalid_gate_requirement_combination:${field}`)
+    }
+
+    // Multiple true descriptors produce deterministic, field-specific issues.
+    const allTrue = {
+      ...base,
+      approval_required: true,
+      promotion_required: true,
+      execution_required: true,
+    }
+    const multi = validateHumanDecisionRecord(allTrue)
+    assert.equal(multi.ok, false)
+    assert.deepEqual(
+      multi.issues.map((i) => `${i.code}:${i.field}`),
+      [
+        "invalid_gate_requirement_combination:approval_required",
+        "invalid_gate_requirement_combination:promotion_required",
+        "invalid_gate_requirement_combination:execution_required",
+      ],
+      `${scope}: deterministic field-specific order`,
+    )
+  }
+})
+
+test("Human Decision impact matrix — actionable scope: all 8 boolean combinations", () => {
+  const scope = "action_readiness_assessment"
+  const expected: readonly [boolean, boolean, boolean, boolean][] = [
+    // approval, promotion, execution, valid
+    [false, false, false, true],
+    [true, false, false, true],
+    [true, true, false, true],
+    [true, false, true, true],
+    [true, true, true, true],
+    [false, true, false, false],
+    [false, false, true, false],
+    [false, true, true, false],
+  ]
+  for (const [approval, promotion, execution, valid] of expected) {
+    const record = {
+      ...validHumanDecisionRecord(),
+      decision_impact_scope: scope,
+      approval_required: approval,
+      promotion_required: promotion,
+      execution_required: execution,
+    }
+    const result = validateHumanDecisionRecord(record)
+    const label = `${approval}/${promotion}/${execution}`
+    assert.equal(result.ok, valid, `${label}: ${JSON.stringify(result.issues)}`)
+    if (!valid) {
+      // Only invalid_gate_requirement_combination issues, on the true descriptor(s)
+      // that lack approval, in deterministic promotion-then-execution order.
+      const expectedFields: string[] = []
+      if (promotion && !approval) expectedFields.push("promotion_required")
+      if (execution && !approval) expectedFields.push("execution_required")
+      assert.deepEqual(
+        result.issues.map((i) => `${i.code}:${i.field}`),
+        expectedFields.map((f) => `invalid_gate_requirement_combination:${f}`),
+        label,
+      )
+    }
+  }
+})
+
+test("Human Decision semantics: primitive-invalid fields produce no semantic cascade", () => {
+  // Missing decision_outcome: only the ordinary field error, no status/outcome
+  // semantic issue.
+  const missingOutcome: Record<string, unknown> = { ...validHumanDecisionRecord() }
+  delete missingOutcome.decision_outcome
+  const r1 = validateHumanDecisionRecord(missingOutcome)
+  assert.ok(codes(r1).includes("missing_required_field"))
+  assert.ok(!codes(r1).includes("invalid_decision_status_outcome"))
+
+  // Wrong-type approval_required in a non-action scope: only invalid_field_type,
+  // no gate-combination semantic issue.
+  const wrongType = {
+    ...validHumanDecisionRecord(),
+    decision_impact_scope: "no_action_decision",
+    approval_required: "yes",
+    promotion_required: false,
+    execution_required: false,
+  }
+  const r2 = validateHumanDecisionRecord(wrongType)
+  assert.ok(r2.issues.some((i) => i.code === "invalid_field_type" && i.field === "approval_required"))
+  assert.ok(!codes(r2).includes("invalid_gate_requirement_combination"))
+
+  // Unknown decision_impact_scope: only invalid_enum_value, no impact rule.
+  const badScope = { ...validHumanDecisionRecord(), decision_impact_scope: "auto_execute" }
+  const r3 = validateHumanDecisionRecord(badScope)
+  assert.ok(codes(r3).includes("invalid_enum_value"))
+  assert.ok(!codes(r3).includes("invalid_gate_requirement_combination"))
+})
+
+test("Human Decision semantics: deterministic, frozen, non-mutating, non-authorizing, shape { ok, issues }", () => {
+  const record = {
+    ...validHumanDecisionRecord(),
+    decision_status: "blocked_no_go",
+    decision_outcome: "pass",
+    decision_impact_scope: "no_action_decision",
+    approval_required: true,
+    promotion_required: true,
+    execution_required: false,
+  }
+  const before = JSON.stringify(record)
+  const first = validateHumanDecisionRecord(record)
+  const second = validateHumanDecisionRecord({ ...record })
+  // Deterministic issue list.
+  assert.deepEqual(
+    first.issues.map((i) => `${i.code}:${i.field}`),
+    second.issues.map((i) => `${i.code}:${i.field}`),
+  )
+  // status/outcome issue precedes gate issues.
+  assert.equal(first.issues[0].code, "invalid_decision_status_outcome")
+  // No input mutation; frozen result and issues.
+  assert.equal(JSON.stringify(record), before)
+  assert.ok(Object.isFrozen(first))
+  assert.ok(Object.isFrozen(first.issues))
+  // Result shape and non-authorization.
+  const asRecord = first as unknown as Record<string, unknown>
+  assert.deepEqual(Object.keys(asRecord).sort(), ["issues", "ok"])
+  for (const key of ["approved", "authorized", "execution_permission", "persisted", "promoted"]) {
+    assert.equal(Object.prototype.hasOwnProperty.call(asRecord, key), false, key)
+  }
+})
+
+test("Human Decision semantics: single-read snapshot under getter input", () => {
+  // A getter on decision_outcome that would flip to a contradiction on a second
+  // read must be read exactly once; the validated record stays valid.
+  const record: Record<string, unknown> = { ...validHumanDecisionRecord() }
+  delete record.decision_outcome
+  let reads = 0
+  Object.defineProperty(record, "decision_outcome", {
+    enumerable: true,
+    configurable: true,
+    get() {
+      reads += 1
+      return reads === 1 ? "pass" : "no_go"
+    },
+  })
+  const result = validateHumanDecisionRecord(record)
+  assert.equal(reads, 1, "decision_outcome read exactly once")
+  assert.equal(result.ok, true, JSON.stringify(result.issues))
+})

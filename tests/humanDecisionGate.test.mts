@@ -511,6 +511,36 @@ test("HUMAN_DECISION_RECORD_CONTRACT keeps the three gate descriptors contextual
   }
 });
 
+// P6-FIX-008 (Issue #141): pin the trusted-type boundary and the cross-field
+// semantic matrices in the contract. The test reads the contract document only;
+// it never inspects its own source.
+test("HUMAN_DECISION_RECORD_CONTRACT pins the trusted/untrusted type boundary", () => {
+  requireAll(contract, "contract", [
+    "UnvalidatedHumanDecisionRecordInput is the structural input shape",
+    "ValidatedHumanDecisionRecord is an opaque compile-time type representing a Human Decision artifact successfully produced by createHumanDecisionRecord.",
+    "HumanDecisionRecord is a compatibility alias for ValidatedHumanDecisionRecord.",
+    "createHumanDecisionRecord is the only production function permitted to return ValidatedHumanDecisionRecord.",
+    "ValidatedHumanDecisionRecord statically carries four_eyes_required: true and self_approval_blocked: true.",
+    "The opaque brand is a private compile-time symbol; it is never serialized and never exported.",
+    "Validator success does not create the trusted type.",
+    "Direct object literals, parsed JSON, database rows, network data, casts, and deserialized values must be treated as unknown or unvalidated input.",
+    "A TypeScript cast can always lie.",
+    "A trusted artifact does not mean reviewed, approved, authorized, persisted, or executable.",
+  ]);
+});
+
+test("HUMAN_DECISION_RECORD_CONTRACT pins the status/outcome and impact/gate matrices", () => {
+  requireAll(contract, "contract", [
+    "decision_outcome === no_go iff decision_status === blocked_no_go",
+    "decision_status === ready_for_future_gate_review implies decision_outcome === pass",
+    "A contradiction fails with invalid_decision_status_outcome on field decision_status.",
+    "For the non-action impact scopes no_action_decision, clarification_request, and defer_decision, all three descriptors must be false",
+    "promotion_required === true implies approval_required === true; and execution_required === true implies approval_required === true.",
+    "A contradiction fails with invalid_gate_requirement_combination on the specific descriptor field.",
+    "They grant nothing: they are not approval, not authorization, and not execution permission.",
+  ]);
+});
+
 test("HUMAN_DECISION_RECORD_CONTRACT contains Pass / Warn / Fail / No-Go outcomes and non-authorization statement", () => {
   requireAll(contract, "contract", [
     "The Human Decision Record is tenant-scoped, human-authored, evidence-aware, judgment-aware, uncertainty-preserving, conflict-preserving, rationale-complete, future-gate-explicit, and non-authorizing.",

@@ -47,6 +47,8 @@ export const VALIDATION_ISSUE_CODES = [
   "missing_lineage_id",
   "invalid_lineage_id",
   "safety_boundary_not_confirmed",
+  "invalid_decision_status_outcome",
+  "invalid_gate_requirement_combination",
   "no_go_flags_present",
   "cross_tenant_lineage_not_checked",
   "validation_exception",
