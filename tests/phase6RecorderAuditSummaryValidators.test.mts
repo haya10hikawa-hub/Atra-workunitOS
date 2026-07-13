@@ -34,6 +34,7 @@ import {
   isSha256Hex,
   isIsoTimestamp,
 } from "../app/lib/phase6/recorderAuditSummary/index.ts"
+import * as recorderAuditSummaryModule from "../app/lib/phase6/recorderAuditSummary/index.ts"
 
 const HASH = "a".repeat(64)
 const TS = "2026-07-08T12:00:00Z"
@@ -1077,4 +1078,84 @@ test("source guard is non-vacuous: each forbidden form is detected in synthetic 
   }
   const clean = `// harmless synthetic module\nconst inert = true\nexport {}\n`
   assert.deepEqual(findForbiddenSubstrings(clean), [], "clean synthetic source must not be flagged")
+})
+
+// ─── P6-FIX-007c (Issue #121): dead deferred/rejected target-class exports ────
+//
+// The unused RECORDER_AUDIT_DEFERRED/REJECTED_TARGET_CLASSES constants are
+// removed from the public module surface. The one allowed runtime target class
+// remains, and every deferred/rejected value stays fail-closed invalid for both
+// recorder_target_class and selected_target_class with the existing stable
+// codes. The deferred/rejected literals below are hardcoded independently of
+// the production module (never imported) so this test does not mirror source.
+
+const REMOVED_TARGET_CLASS_EXPORTS = [
+  "RECORDER_AUDIT_DEFERRED_TARGET_CLASSES",
+  "RECORDER_AUDIT_REJECTED_TARGET_CLASSES",
+] as const
+
+const INDEPENDENT_NON_ALLOWED_TARGET_CLASSES = [
+  "local_ephemeral_dev_store",
+  "append_only_audit_candidate_store",
+  "tenant_scoped_artifact_candidate_store",
+  "future_d1_store_after_separate_d1_gate",
+  "blocked_target",
+] as const
+
+test("public surface no longer exposes deferred/rejected target-class constants", () => {
+  const keys = Object.keys(recorderAuditSummaryModule)
+  for (const removed of REMOVED_TARGET_CLASS_EXPORTS) {
+    assert.equal(keys.includes(removed), false, `${removed} must not be exported`)
+    assert.equal(
+      (recorderAuditSummaryModule as Record<string, unknown>)[removed],
+      undefined,
+      `${removed} must be undefined on the public surface`,
+    )
+  }
+  // The one allowed runtime target class remains, exactly.
+  assert.ok(keys.includes("RECORDER_AUDIT_TARGET_CLASSES"))
+  assert.deepEqual(
+    [...(recorderAuditSummaryModule as { RECORDER_AUDIT_TARGET_CLASSES: readonly string[] }).RECORDER_AUDIT_TARGET_CLASSES],
+    ["in_memory_test_only_store"],
+  )
+})
+
+test("every non-allowed target class stays rejected for recorder and selected fields", () => {
+  for (const bad of INDEPENDENT_NON_ALLOWED_TARGET_CLASSES) {
+    const recorder = validateRecorderAuditSummaryRecord(withField(baseTenantSummary(), "recorder_target_class", bad))
+    assert.equal(recorder.ok, false, `recorder_target_class=${bad}`)
+    assert.ok(
+      recorder.issues.some((i) => i.code === "invalid_recorder_target_class" && i.field === "recorder_target_class"),
+      `recorder_target_class=${bad} must yield invalid_recorder_target_class`,
+    )
+
+    const selected = validateRecorderAuditSummaryRecord(withField(baseTenantSummary(), "selected_target_class", bad))
+    assert.equal(selected.ok, false, `selected_target_class=${bad}`)
+    assert.ok(
+      selected.issues.some((i) => i.code === "invalid_selected_target_class" && i.field === "selected_target_class"),
+      `selected_target_class=${bad} must yield invalid_selected_target_class`,
+    )
+  }
+  // The one allowed class still passes at both fields.
+  assert.equal(validateRecorderAuditSummaryRecord(baseTenantSummary()).ok, true)
+})
+
+test("types source removed the dead exports and introduced no replacement array", () => {
+  const typesText = readFileSync(SRC_TYPES, "utf8")
+  for (const removed of REMOVED_TARGET_CLASS_EXPORTS) {
+    assert.ok(!typesText.includes(removed), `${removed} must be gone from types.ts`)
+  }
+  assert.ok(
+    !typesText.includes("append_only_audit_candidate_store"),
+    "types.ts must not reintroduce the deferred list literals",
+  )
+  assert.ok(!/DEFERRED_TARGET_CLASSES/.test(typesText), "no deferred target-class array may remain")
+  assert.ok(!/REJECTED_TARGET_CLASSES/.test(typesText), "no rejected target-class array may remain")
+  assert.ok(typesText.includes('RECORDER_AUDIT_TARGET_CLASSES = ["in_memory_test_only_store"]'))
+  const indexText = readFileSync(SRC_INDEX, "utf8")
+  const validatorsText = readFileSync(SRC_VALIDATORS, "utf8")
+  for (const removed of REMOVED_TARGET_CLASS_EXPORTS) {
+    assert.ok(!indexText.includes(removed), `index.ts must not name ${removed}`)
+    assert.ok(!validatorsText.includes(removed), `validators.ts must not name ${removed}`)
+  }
 })
