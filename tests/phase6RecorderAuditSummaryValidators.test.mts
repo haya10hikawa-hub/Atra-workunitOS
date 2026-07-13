@@ -612,6 +612,107 @@ test("no_go_flags non-empty fails unless blocked/no_go evidence exists", () => {
   assert.equal(r2.ok, true, JSON.stringify(r2.issues))
 })
 
+// ─── P6-FIX-007e (Issue #121): intentional one-way No-Go relationship ────────
+//
+// no_go_flags.length > 0  =>  status_counts.blocked_no_go > 0 OR
+// outcome_counts.no_go > 0. The reverse is intentionally false: aggregate
+// blocked/no-go evidence does NOT require a non-empty no_go_flags array.
+// status_counts.blocked_no_go and outcome_counts.no_go are descriptive
+// aggregate counts over the summarized operations; no_go_flags is the explicit
+// set of No-Go reasons asserted on the summary record itself. The full
+// four-state truth table is pinned here.
+
+/** A fully count-consistent blocked/no-go summary carrying no_go_flags: []. */
+function evidenceWithoutFlags(): Record<string, unknown> {
+  return baseTenantSummary({
+    no_go_flags: [],
+    accepted_record_count: 0,
+    rejected_record_count: 1,
+    stored_event_count: 0,
+    validation_failed_count: 1,
+    status_counts: { attempted: 1, accepted: 0, rejected: 1, not_found: 0, cleared: 0, blocked_no_go: 1 },
+    outcome_counts: { pass: 0, warn: 0, fail: 0, no_go: 1 },
+    validation_result_counts: {
+      validator_passed: 0,
+      validator_failed: 1,
+      validator_not_applicable: 0,
+      validator_not_run_no_go: 0,
+    },
+    issue_code_counts: {
+      invalid_input: 0,
+      invalid_event: 0,
+      validation_failed: 1,
+      tenant_mismatch: 0,
+      duplicate_conflict: 0,
+      forbidden_target_class: 0,
+      recorder_exception: 0,
+      blocked_no_go: 1,
+    },
+  })
+}
+
+test("no_go relationship truth table — Case A: no flags, no evidence is valid", () => {
+  const base = baseTenantSummary()
+  assert.deepEqual(base.no_go_flags, [])
+  assert.deepEqual((base.status_counts as Record<string, number>).blocked_no_go, 0)
+  assert.deepEqual((base.outcome_counts as Record<string, number>).no_go, 0)
+  const r = validateRecorderAuditSummaryRecord(base)
+  assert.equal(r.ok, true, JSON.stringify(r.issues))
+  assert.deepEqual([...r.issues], [])
+})
+
+test("no_go relationship truth table — Case B: flags, no evidence is invalid", () => {
+  const r = validateRecorderAuditSummaryRecord(
+    withField(baseTenantSummary(), "no_go_flags", ["validation_failed"]),
+  )
+  assert.equal(r.ok, false)
+  const flagged = r.issues.filter(
+    (i) => i.code === "no_go_flags_present" && i.field === "no_go_flags",
+  )
+  assert.equal(flagged.length, 1, "exactly one no_go_flags_present on no_go_flags")
+})
+
+test("no_go relationship truth table — Case C: flags and evidence is valid", () => {
+  const withEvidence = evidenceWithoutFlags()
+  ;(withEvidence as Record<string, unknown>).no_go_flags = ["validation_failed"]
+  const r = validateRecorderAuditSummaryRecord(withEvidence)
+  assert.equal(r.ok, true, JSON.stringify(r.issues))
+  assert.deepEqual([...r.issues], [])
+})
+
+test("no_go relationship truth table — Case D: evidence without flags is fully valid", () => {
+  const record = evidenceWithoutFlags()
+  // Precondition: this is genuinely the evidence-without-flags shape.
+  assert.deepEqual(record.no_go_flags, [])
+  assert.ok((record.status_counts as Record<string, number>).blocked_no_go > 0)
+  assert.ok((record.outcome_counts as Record<string, number>).no_go > 0)
+  const r = validateRecorderAuditSummaryRecord(record)
+  // A completely valid result — not merely the absence of no_go_flags_present.
+  assert.equal(r.ok, true, JSON.stringify(r.issues))
+  assert.deepEqual([...r.issues], [])
+})
+
+test("evidence without flags: validation success is non-authorizing", () => {
+  const r = validateRecorderAuditSummaryRecord(evidenceWithoutFlags()) as unknown as Record<string, unknown>
+  assert.equal(r.ok, true)
+  assert.deepEqual(Object.keys(r).sort(), ["issues", "ok"])
+  for (const forbidden of [
+    "approval",
+    "approved",
+    "authorized",
+    "execution_permission",
+    "executed",
+    "persisted",
+    "stored",
+    "evidence_ledger_append_permission",
+    "graph_write_permission",
+    "formal_workunit_promotion",
+    "production_ready",
+  ]) {
+    assert.equal(Object.prototype.hasOwnProperty.call(r, forbidden), false, forbidden)
+  }
+})
+
 // 35
 test("duplicate_conflict_count must fail closed", () => {
   const r = validateRecorderAuditSummaryRecord(

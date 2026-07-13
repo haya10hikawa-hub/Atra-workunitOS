@@ -267,6 +267,28 @@ Outcome count fields:
 - raw event payload included without future gate is No-Go
 - secret-like value echoed is No-Go
 
+### 21.1 No-Go Flags versus Aggregate Blocked/No-Go Evidence (P6-FIX-007e)
+
+aggregate blocked/no-go evidence (status_counts.blocked_no_go and
+outcome_counts.no_go) is descriptive evidence over summarized recorder
+operations. record-level no_go_flags is the explicit set of No-Go reasons
+asserted on the summary record itself. These are distinct.
+
+The relationship is intentionally one-way.
+
+Non-empty no_go_flags requires blocked/no-go evidence.
+
+Blocked/no-go evidence does not require non-empty no_go_flags.
+
+Valid: blocked/no-go count > 0 and no_go_flags is empty.
+
+Invalid: no_go_flags is non-empty and both blocked/no-go counts are zero
+(no_go_flags_present).
+
+There is no reverse requirement: a summary may validly describe one or more
+blocked/no-go recorder operations without asserting a current record-level
+No-Go reason.
+
 ## 22. Non-authorization Statement
 
 This Recorder Audit Summary Contract authorizes no recorder summary runtime implementation, no summary emitter implementation, no audit runtime implementation, no audit event emitter implementation, no persistence implementation, no durable storage implementation, no repository implementation, no production storage adapter, no database schema, no D1 access, no D1 binding, no D1 migration, no SQL execution, no SQL mutation, no product runtime pipeline, no ApprovalStore integration, no P7.1 TSP wiring, no external action execution, no Formal WorkUnit promotion, no Evidence Ledger append, no Graph Model write, no deployment, no release, no production readiness, and no automated decision-making.
