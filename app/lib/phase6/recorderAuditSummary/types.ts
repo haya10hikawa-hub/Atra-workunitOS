@@ -45,17 +45,6 @@ export type Sha256Hex = string
 export const RECORDER_AUDIT_TARGET_CLASSES = ["in_memory_test_only_store"] as const
 export type RecorderAuditTargetClass = (typeof RECORDER_AUDIT_TARGET_CLASSES)[number]
 
-/** Deferred target classes — never valid as recorder/selected target. */
-export const RECORDER_AUDIT_DEFERRED_TARGET_CLASSES = [
-  "local_ephemeral_dev_store",
-  "append_only_audit_candidate_store",
-  "tenant_scoped_artifact_candidate_store",
-  "future_d1_store_after_separate_d1_gate",
-] as const
-
-/** Rejected target classes — never valid as recorder/selected target. */
-export const RECORDER_AUDIT_REJECTED_TARGET_CLASSES = ["blocked_target"] as const
-
 // ─── Enums (literal unions) with runtime value lists ────────────
 
 export const RECORDER_AUDIT_SUMMARY_SCOPES = [

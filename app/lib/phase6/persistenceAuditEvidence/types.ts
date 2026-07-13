@@ -40,17 +40,6 @@ export type PersistenceAuditNoGoFlag = (typeof PERSISTENCE_AUDIT_NO_GO_FLAGS)[nu
 export const PERSISTENCE_AUDIT_TARGET_CLASSES = ["in_memory_test_only_store"] as const
 export type PersistenceAuditTargetClass = (typeof PERSISTENCE_AUDIT_TARGET_CLASSES)[number]
 
-/** Deferred target classes — never valid as adapter/selected target. */
-export const PERSISTENCE_AUDIT_DEFERRED_TARGET_CLASSES = [
-  "local_ephemeral_dev_store",
-  "append_only_audit_candidate_store",
-  "tenant_scoped_artifact_candidate_store",
-  "future_d1_store_after_separate_d1_gate",
-] as const
-
-/** Rejected target classes — never valid as adapter/selected target. */
-export const PERSISTENCE_AUDIT_REJECTED_TARGET_CLASSES = ["blocked_target"] as const
-
 // ─── Enums (literal unions) with runtime value lists ────────────
 
 export const PERSISTENCE_AUDIT_OPERATIONS = [

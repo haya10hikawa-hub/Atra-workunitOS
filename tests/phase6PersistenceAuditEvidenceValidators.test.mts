@@ -33,6 +33,7 @@ import {
   isSha256Hex,
   isIsoTimestamp,
 } from "../app/lib/phase6/persistenceAuditEvidence/index.ts"
+import * as persistenceAuditEvidenceModule from "../app/lib/phase6/persistenceAuditEvidence/index.ts"
 
 const HASH = "a".repeat(64)
 const TS = "2026-07-07T15:00:00Z"
@@ -481,5 +482,90 @@ test("module sources contain no forbidden runtime capability substrings", () => 
     for (const needle of FORBIDDEN_SOURCE_SUBSTRINGS) {
       assert.ok(!text.includes(needle), `${src} must not contain: <<<${needle}>>>`)
     }
+  }
+})
+
+// ─── P6-FIX-007c (Issue #121): dead deferred/rejected target-class exports ────
+//
+// The unused PERSISTENCE_AUDIT_DEFERRED/REJECTED_TARGET_CLASSES constants are
+// removed from the public module surface. The one allowed runtime target class
+// remains, and every deferred/rejected value stays fail-closed invalid for both
+// adapter_target_class and selected_target_class with the existing stable codes.
+// The deferred/rejected literals below are hardcoded independently of the
+// production module (never imported) so this test does not merely mirror source.
+
+const REMOVED_TARGET_CLASS_EXPORTS = [
+  "PERSISTENCE_AUDIT_DEFERRED_TARGET_CLASSES",
+  "PERSISTENCE_AUDIT_REJECTED_TARGET_CLASSES",
+] as const
+
+const INDEPENDENT_NON_ALLOWED_TARGET_CLASSES = [
+  "local_ephemeral_dev_store",
+  "append_only_audit_candidate_store",
+  "tenant_scoped_artifact_candidate_store",
+  "future_d1_store_after_separate_d1_gate",
+  "blocked_target",
+] as const
+
+test("public surface no longer exposes deferred/rejected target-class constants", () => {
+  const keys = Object.keys(persistenceAuditEvidenceModule)
+  for (const removed of REMOVED_TARGET_CLASS_EXPORTS) {
+    assert.equal(keys.includes(removed), false, `${removed} must not be exported`)
+    assert.equal(
+      (persistenceAuditEvidenceModule as Record<string, unknown>)[removed],
+      undefined,
+      `${removed} must be undefined on the public surface`,
+    )
+  }
+  // The one allowed runtime target class remains, exactly.
+  assert.ok(keys.includes("PERSISTENCE_AUDIT_TARGET_CLASSES"))
+  assert.deepEqual(
+    [...(persistenceAuditEvidenceModule as { PERSISTENCE_AUDIT_TARGET_CLASSES: readonly string[] }).PERSISTENCE_AUDIT_TARGET_CLASSES],
+    ["in_memory_test_only_store"],
+  )
+})
+
+test("every non-allowed target class stays rejected for adapter and selected fields", () => {
+  for (const bad of INDEPENDENT_NON_ALLOWED_TARGET_CLASSES) {
+    const adapter = validatePersistenceAuditEvent(withField(validPut(), "adapter_target_class", bad))
+    assert.equal(adapter.ok, false, `adapter_target_class=${bad}`)
+    assert.ok(
+      adapter.issues.some((i) => i.code === "invalid_adapter_target_class" && i.field === "adapter_target_class"),
+      `adapter_target_class=${bad} must yield invalid_adapter_target_class`,
+    )
+
+    const selected = validatePersistenceAuditEvent(withField(validPut(), "selected_target_class", bad))
+    assert.equal(selected.ok, false, `selected_target_class=${bad}`)
+    assert.ok(
+      selected.issues.some((i) => i.code === "invalid_selected_target_class" && i.field === "selected_target_class"),
+      `selected_target_class=${bad} must yield invalid_selected_target_class`,
+    )
+  }
+  // The one allowed class still passes at both fields.
+  assert.equal(validatePersistenceAuditEvent(validPut()).ok, true)
+})
+
+test("types source removed the dead exports and introduced no replacement array", () => {
+  const typesText = readFileSync(SRC_TYPES, "utf8")
+  for (const removed of REMOVED_TARGET_CLASS_EXPORTS) {
+    assert.ok(!typesText.includes(removed), `${removed} must be gone from types.ts`)
+  }
+  // No replacement deferred/rejected runtime array under any name: the removed
+  // multi-value deferred list's members must not reappear as a runtime array.
+  assert.ok(
+    !typesText.includes("append_only_audit_candidate_store"),
+    "types.ts must not reintroduce the deferred list literals",
+  )
+  assert.ok(!/DEFERRED_TARGET_CLASSES/.test(typesText), "no deferred target-class array may remain")
+  assert.ok(!/REJECTED_TARGET_CLASSES/.test(typesText), "no rejected target-class array may remain")
+  // The one allowed list remains.
+  assert.ok(typesText.includes('PERSISTENCE_AUDIT_TARGET_CLASSES = ["in_memory_test_only_store"]'))
+  // The index and validators are unchanged in this patch: they never named the
+  // removed constants, so they must not name them now either.
+  const indexText = readFileSync(SRC_INDEX, "utf8")
+  const validatorsText = readFileSync(SRC_VALIDATORS, "utf8")
+  for (const removed of REMOVED_TARGET_CLASS_EXPORTS) {
+    assert.ok(!indexText.includes(removed), `index.ts must not name ${removed}`)
+    assert.ok(!validatorsText.includes(removed), `validators.ts must not name ${removed}`)
   }
 })
