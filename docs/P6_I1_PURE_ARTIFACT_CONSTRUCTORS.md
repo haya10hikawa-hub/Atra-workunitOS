@@ -135,6 +135,19 @@ fails closed with the stable code `mismatched_llm_judgment_id`. Absence of eithe
 treated as consistent — both are required by the record, so the matching validator reports the
 precise missing/invalid lineage issue and the standalone helper also fails closed.
 
+## 10.1 Human Decision Trusted Production Path (P6-FIX-008)
+
+`createHumanDecisionRecord` is the only production constructor that returns the opaque
+`ValidatedHumanDecisionRecord` type — declared as
+`ConstructionResult<ValidatedHumanDecisionRecord>`. Before that trusted type is returned it
+validates the output (including the P6-FIX-008 cross-field status/outcome and impact/gate
+semantic rules) and enforces the LLM judgment ID consistency invariant, then freezes the
+artifact. The opaque brand is compile-time provenance only: no runtime brand field is added,
+the brand symbol is private to `types.ts`, and no branding helper is exported. A TypeScript
+cast can always lie, so this boundary is not authorization — deserialized input (parsed JSON,
+database rows, network data) must be reconstructed through this constructor rather than cast.
+Constructor success is not approval and not authorization.
+
 ## 11. Non-authorization Boundary
 
 A `ConstructionResult` carries exactly `{ ok, artifact?, issues }` and nothing else — no

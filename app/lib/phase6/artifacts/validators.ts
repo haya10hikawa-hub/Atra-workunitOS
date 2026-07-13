@@ -75,10 +75,22 @@ type FieldSpec =
    */
   | { readonly kind: "requiredTrueSafety" }
 
+/**
+ * Optional cross-field semantic validator (P6-FIX-008, Issue #141). It consumes
+ * the already-captured single-read snapshot (never re-reading the caller input),
+ * never mutates it, and returns deterministically ordered, de-duplicated issues.
+ * It runs after ordinary field validation and the generic no_go_flags policy.
+ */
+type ArtifactSemanticValidator = (
+  snapshot: Readonly<Record<string, unknown>>,
+) => readonly ValidationIssue[]
+
 type ArtifactSpec = {
   readonly fields: Readonly<Record<string, FieldSpec>>
   /** Status field consulted by the no_go_flags policy; null = no blocked state. */
   readonly statusField: string | null
+  /** Optional cross-field semantic rules (attached only where specified). */
+  readonly semanticValidator?: ArtifactSemanticValidator
 }
 
 function validateField(
@@ -179,6 +191,11 @@ function validateArtifact(input: unknown, spec: ArtifactSpec): ValidationResult 
       if (status !== "blocked_no_go") {
         issues.push(issue("no_go_flags_present", "no_go_flags"))
       }
+    }
+    // Cross-field semantic rules run last, against the same snapshot — never a
+    // second read of the caller input, never a mutation.
+    if (spec.semanticValidator) {
+      issues.push(...spec.semanticValidator(snapshot))
     }
     return resultOf(issues)
   } catch {
@@ -341,8 +358,105 @@ const LLM_JUDGMENT_RECORD_SPEC: ArtifactSpec = {
   },
 }
 
+// ─── Human Decision cross-field semantics (P6-FIX-008, Issue #141) ──────────
+
+/** Impact scopes that forbid any actionable gate descriptor being true. */
+const NON_ACTION_IMPACT_SCOPES: readonly string[] = [
+  "no_action_decision",
+  "clarification_request",
+  "defer_decision",
+]
+
+/**
+ * Cross-field Human Decision semantics. Consumes the single-read snapshot only.
+ *
+ * Cascade prevention: each rule runs only when its prerequisite fields already
+ * hold valid primitive/enum values, so a missing/wrong-type/unknown-enum field
+ * yields only its ordinary field error, never secondary semantic noise.
+ *
+ * Deterministic order (then de-duplicated by code+field):
+ *   1. status/outcome         → invalid_decision_status_outcome:decision_status
+ *   2. approval impact        → invalid_gate_requirement_combination:approval_required
+ *   3. promotion impact       → invalid_gate_requirement_combination:promotion_required
+ *   4. execution impact       → invalid_gate_requirement_combination:execution_required
+ *   5. promotion→approval dep → invalid_gate_requirement_combination:promotion_required
+ *   6. execution→approval dep → invalid_gate_requirement_combination:execution_required
+ */
+function validateHumanDecisionSemantics(
+  snapshot: Readonly<Record<string, unknown>>,
+): readonly ValidationIssue[] {
+  const ordered: ValidationIssue[] = []
+
+  const status = snapshot.decision_status
+  const outcome = snapshot.decision_outcome
+  const scope = snapshot.decision_impact_scope
+  const approval = snapshot.approval_required
+  const promotion = snapshot.promotion_required
+  const execution = snapshot.execution_required
+
+  const statusValid =
+    typeof status === "string" && (HUMAN_DECISION_STATUSES as readonly string[]).includes(status)
+  const outcomeValid =
+    typeof outcome === "string" && (OUTCOMES as readonly string[]).includes(outcome)
+
+  // 1. Status/outcome matrix, expressed as its two equivalent invariants:
+  //    (a) decision_outcome === no_go  iff  decision_status === blocked_no_go
+  //    (b) decision_status === ready_for_future_gate_review  implies  outcome === pass
+  if (statusValid && outcomeValid) {
+    const isNoGo = outcome === "no_go"
+    const isBlocked = status === "blocked_no_go"
+    const isReady = status === "ready_for_future_gate_review"
+    if (isNoGo !== isBlocked || (isReady && outcome !== "pass")) {
+      ordered.push(issue("invalid_decision_status_outcome", "decision_status"))
+    }
+  }
+
+  const scopeValid =
+    typeof scope === "string" && (DECISION_IMPACT_SCOPES as readonly string[]).includes(scope)
+  const isNonAction = scopeValid && NON_ACTION_IMPACT_SCOPES.includes(scope as string)
+  const approvalBool = typeof approval === "boolean"
+  const promotionBool = typeof promotion === "boolean"
+  const executionBool = typeof execution === "boolean"
+
+  // 2-4. Non-action scopes require every actionable descriptor to be false.
+  if (isNonAction) {
+    if (approvalBool && approval === true) {
+      ordered.push(issue("invalid_gate_requirement_combination", "approval_required"))
+    }
+    if (promotionBool && promotion === true) {
+      ordered.push(issue("invalid_gate_requirement_combination", "promotion_required"))
+    }
+    if (executionBool && execution === true) {
+      ordered.push(issue("invalid_gate_requirement_combination", "execution_required"))
+    }
+  }
+
+  // 5. promotion_required === true implies approval_required === true.
+  if (scopeValid && promotionBool && approvalBool && promotion === true && approval !== true) {
+    ordered.push(issue("invalid_gate_requirement_combination", "promotion_required"))
+  }
+  // 6. execution_required === true implies approval_required === true.
+  if (scopeValid && executionBool && approvalBool && execution === true && approval !== true) {
+    ordered.push(issue("invalid_gate_requirement_combination", "execution_required"))
+  }
+
+  // De-duplicate by code+field, preserving the first (deterministic) occurrence,
+  // so a descriptor violating both an impact rule and a dependency rule produces
+  // exactly one dedicated issue for that field.
+  const seen = new Set<string>()
+  const deduped: ValidationIssue[] = []
+  for (const entry of ordered) {
+    const key = `${entry.code}:${entry.field}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    deduped.push(entry)
+  }
+  return deduped
+}
+
 const HUMAN_DECISION_RECORD_SPEC: ArtifactSpec = {
   statusField: "decision_status",
+  semanticValidator: validateHumanDecisionSemantics,
   fields: {
     human_decision_id: { kind: "string" },
     tenant_id: { kind: "tenant" },

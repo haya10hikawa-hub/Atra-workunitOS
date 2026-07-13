@@ -31,7 +31,7 @@ import type {
   QueryResultRecord,
   EvidenceReviewRecord,
   LlmJudgmentRecord,
-  HumanDecisionRecord,
+  ValidatedHumanDecisionRecord,
 } from "./types.ts"
 import type { ValidationResult } from "./validation.ts"
 import {
@@ -324,9 +324,17 @@ export function createLlmJudgmentRecord(
   return constructArtifact(input, LLM_JUDGMENT_RECORD_FIELDS, validateLlmJudgmentRecord)
 }
 
+/**
+ * The only repository production function that returns a
+ * ValidatedHumanDecisionRecord (P6-FIX-008, Issue #141). It validates, runs the
+ * cross-field semantic rules (via validateHumanDecisionRecord), enforces the LLM
+ * judgment id-consistency invariant, and freezes the artifact before the trusted
+ * type is returned. The opaque brand is compile-time only — no runtime field is
+ * added — and success is not approval, authorization, or execution permission.
+ */
 export function createHumanDecisionRecord(
   input: unknown,
-): ConstructionResult<HumanDecisionRecord> {
+): ConstructionResult<ValidatedHumanDecisionRecord> {
   return constructArtifact(
     input,
     HUMAN_DECISION_RECORD_FIELDS,

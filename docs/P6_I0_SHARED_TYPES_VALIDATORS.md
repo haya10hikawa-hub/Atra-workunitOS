@@ -58,6 +58,33 @@ arrays: `RuleReviewStatus` (grounded in P6.10), `EvidenceReviewStatus` (P6.12),
 `LlmJudgmentStatus` (P6.13), `HumanDecisionStatus` (P6.14), `Outcome`, `RedactionState`,
 `SourceTrustMarker`, `ConflictState`, `UncertaintyState`, `DecisionImpactScope`.
 
+### 4.1 Human Decision Trusted Type Boundary (P6-FIX-008)
+
+The Human Decision artifact is split into two exported types.
+`UnvalidatedHumanDecisionRecordInput` is the structural input shape (safety fields are
+ordinary booleans); `ValidatedHumanDecisionRecord` is the opaque, constructor-produced
+artifact. `HumanDecisionRecord` is a compatibility alias for `ValidatedHumanDecisionRecord`.
+
+`ValidatedHumanDecisionRecord` statically carries the literal-true safety properties
+`four_eyes_required: true` and `self_approval_blocked: true`, plus a module-private opaque
+brand (a `unique symbol` phantom property that is never serialized and never exported).
+Only `createHumanDecisionRecord` returns this type.
+
+`validateHumanDecisionRecord` is non-narrowing: it returns only `ValidationResult` and never
+asserts `input is ValidatedHumanDecisionRecord`. Validator success alone does not create the
+trusted type.
+
+Beyond field/enum checks, `HUMAN_DECISION_RECORD_SPEC` runs a cross-field semantic validator
+against the already-captured single-read snapshot (no second input read, no mutation),
+after ordinary field validation and the generic `no_go_flags` policy. It enforces the
+decision_status/decision_outcome matrix (`invalid_decision_status_outcome:decision_status`)
+and the impact/gate matrix (`invalid_gate_requirement_combination:<descriptor field>`):
+non-action scopes (`no_action_decision`, `clarification_request`, `defer_decision`) require
+all three descriptors false; otherwise `promotion_required` and `execution_required` each
+imply `approval_required`. Semantic issues are deterministically ordered, de-duplicated by
+code+field, and suppressed (cascade prevention) when a prerequisite field is
+missing/null/wrong-type/unknown-enum.
+
 ## 5. Validator Functions
 
 `validateQueryIntentRecord`, `validateSafeQueryPlan`, `validateCompiledSqlArtifact`,

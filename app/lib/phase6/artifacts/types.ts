@@ -254,7 +254,18 @@ export type LlmJudgmentRecord = {
   readonly no_go_flags: readonly NoGoFlag[]
 }
 
-export type HumanDecisionRecord = {
+/**
+ * P6-FIX-008 (Issue #141): the structural INPUT shape for a Human Decision
+ * Record. This is the untrusted shape — the same fields any caller can produce
+ * by object literal, parsed JSON, a database row, network data, a cast, or a
+ * deserialized value. Safety fields are ordinary booleans here: this type does
+ * not, and must not, assert that the record was validated or constructed.
+ *
+ * Downstream authorization code must never accept this type as trusted input.
+ * Use `ValidatedHumanDecisionRecord`, obtained ONLY from
+ * `createHumanDecisionRecord`, when a validated provenance boundary is required.
+ */
+export type UnvalidatedHumanDecisionRecordInput = {
   readonly human_decision_id: ArtifactId
   readonly tenant_id: TenantId
   readonly decision_status: HumanDecisionStatus
@@ -289,3 +300,40 @@ export type HumanDecisionRecord = {
   readonly reviewed_by_human_at: IsoTimestamp
   readonly no_go_flags: readonly NoGoFlag[]
 }
+
+/**
+ * Module-private opaque brand (P6-FIX-008). It is a compile-time-only phantom
+ * property: it is never assigned on the runtime object, is never serialized,
+ * and is deliberately NOT exported, so no code outside this module can forge a
+ * `ValidatedHumanDecisionRecord` by writing an object literal or adding a field.
+ *
+ * A TypeScript cast can always lie, so this brand is a compile-time provenance
+ * boundary only — not cryptographic proof and not authorization. Future runtime
+ * gates must still perform their own server-side evidence, identity, tenant,
+ * hash, expiry, replay, RBAC, and kill-switch checks.
+ */
+declare const validatedHumanDecisionRecordBrand: unique symbol
+
+/**
+ * A Human Decision artifact successfully produced by `createHumanDecisionRecord`
+ * (validated, semantic-checked, id-consistent, and frozen). The two phase-wide
+ * safety literals are statically `true`, and the private brand marks the
+ * validated provenance. Only `createHumanDecisionRecord` can produce a value of
+ * this type. Trusted here means "constructor-produced and validated" — it does
+ * NOT mean reviewed, approved, authorized, persisted, or executable.
+ */
+export type ValidatedHumanDecisionRecord = Omit<
+  UnvalidatedHumanDecisionRecordInput,
+  "four_eyes_required" | "self_approval_blocked"
+> & {
+  readonly four_eyes_required: true
+  readonly self_approval_blocked: true
+  readonly [validatedHumanDecisionRecordBrand]: true
+}
+
+/**
+ * Established public name, preserved as a compatibility alias for the validated
+ * artifact type (P6-FIX-008). Existing consumers that obtain a record through
+ * `createHumanDecisionRecord` continue to work unchanged.
+ */
+export type HumanDecisionRecord = ValidatedHumanDecisionRecord

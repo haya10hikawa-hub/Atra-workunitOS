@@ -296,6 +296,43 @@ execution_required does not authorize execution.
 
 None of these five fields authorizes approval, promotion, execution, persistence, external action, or Formal WorkUnit promotion.
 
+### 15.1 Trusted Type Boundary (P6-FIX-008)
+
+There are two distinct types. UnvalidatedHumanDecisionRecordInput is the structural input shape — the fields any caller can produce. ValidatedHumanDecisionRecord is an opaque compile-time type representing a Human Decision artifact successfully produced by createHumanDecisionRecord. HumanDecisionRecord is a compatibility alias for ValidatedHumanDecisionRecord.
+
+createHumanDecisionRecord is the only production function permitted to return ValidatedHumanDecisionRecord.
+
+ValidatedHumanDecisionRecord statically carries four_eyes_required: true and self_approval_blocked: true. The opaque brand is a private compile-time symbol; it is never serialized and never exported.
+
+Validator success does not create the trusted type. validateHumanDecisionRecord returns only a ValidationResult and never narrows its input to ValidatedHumanDecisionRecord.
+
+Direct object literals, parsed JSON, database rows, network data, casts, and deserialized values must be treated as unknown or unvalidated input. They must not be accepted as trusted authorization input. Deserialized input must be reconstructed through createHumanDecisionRecord.
+
+A TypeScript cast can always lie. The opaque type is a compile-time provenance boundary, not cryptographic proof and not authorization. Future runtime gates must still perform their own server-side evidence, identity, tenant, hash, expiry, replay, RBAC, and kill-switch checks. A trusted artifact does not mean reviewed, approved, authorized, persisted, or executable.
+
+### 15.2 Decision Status / Outcome Semantic Matrix (P6-FIX-008)
+
+The allowed decision_status × decision_outcome matrix is:
+
+| decision_status | pass | warn | fail | no_go |
+| --- | --- | --- | --- | --- |
+| draft_human_decision | allow | allow | allow | reject |
+| clarification_needed | allow | allow | allow | reject |
+| blocked_no_go | reject | reject | reject | allow |
+| ready_for_future_gate_review | allow | reject | reject | reject |
+
+Equivalently: decision_outcome === no_go iff decision_status === blocked_no_go; and decision_status === ready_for_future_gate_review implies decision_outcome === pass. A pass outcome is not required to be ready; it may remain draft or clarification-needed. A contradiction fails with invalid_decision_status_outcome on field decision_status.
+
+### 15.3 Impact / Gate Requirement Matrix (P6-FIX-008)
+
+For the non-action impact scopes no_action_decision, clarification_request, and defer_decision, all three descriptors must be false: approval_required === false, promotion_required === false, execution_required === false.
+
+For every other impact scope the descriptors remain contextual, subject only to these dependency rules: promotion_required === true implies approval_required === true; and execution_required === true implies approval_required === true. No direct implication is introduced between promotion_required and execution_required.
+
+For an actionable assessment scope the following approval/promotion/execution combinations are valid: false/false/false, true/false/false, true/true/false, true/false/true, and true/true/true. The following are invalid: false/true/false, false/false/true, and false/true/true. A contradiction fails with invalid_gate_requirement_combination on the specific descriptor field.
+
+These descriptor fields remain descriptive requirements for future gates. They grant nothing: they are not approval, not authorization, and not execution permission.
+
 ## 16. Pass / Warn / Fail / No-Go Outcomes
 
 Pass:
