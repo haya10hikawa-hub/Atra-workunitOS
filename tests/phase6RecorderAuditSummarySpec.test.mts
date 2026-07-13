@@ -1,14 +1,16 @@
 /**
  * P6-I5K: static, read-only tests pinning the Phase 6 Recorder Audit Summary Spec
- * and the Recorder Audit Summary Contract.
+ * and the Recorder Audit Summary Contract, plus — for the P6-FIX-007e one-way
+ * No-Go relationship — the P6-I5L Recorder Audit Summary Types and Validators
+ * document.
  *
- * These tests ONLY read the three P6-I5K documents and assert string contents.
- * They import no app code, no harness, no fixture, no P6-I5J recorder; they call
- * no network, no GitHub API, no child_process, no ApprovalStore, no D1, no SQL,
- * no LLM; they append no Evidence Ledger and write no Graph Model; they mutate no
- * files and require no secrets. They inspect documentation, not runtime behavior.
- * To avoid self-match traps, the tests never scan their own source — every
- * assertion targets a document's contents with exact required phrases and
+ * These tests ONLY read those Recorder Audit Summary documents and assert string
+ * contents. They import no app code, no harness, no fixture, no P6-I5J recorder;
+ * they call no network, no GitHub API, no child_process, no ApprovalStore, no D1,
+ * no SQL, no LLM; they append no Evidence Ledger and write no Graph Model; they
+ * mutate no files and require no secrets. They inspect documentation, not runtime
+ * behavior. To avoid self-match traps, the tests never scan their own source —
+ * every assertion targets a document's contents with exact required phrases and
  * anchored section headings.
  */
 
@@ -30,6 +32,7 @@ function requireAll(doc: string, label: string, needles: readonly string[]): voi
 const GO = "../docs/P6_I5K_EXPLICIT_HUMAN_GO.md"
 const SPEC = "../docs/P6_I5K_RECORDER_AUDIT_SUMMARY_SPEC.md"
 const CONTRACT = "../docs/P6_I5K_RECORDER_AUDIT_SUMMARY_CONTRACT.md"
+const TYPES_VALIDATORS = "../docs/P6_I5L_RECORDER_AUDIT_SUMMARY_TYPES_VALIDATORS.md"
 
 // ─── Files exist ────────────────────────────────────────────────
 
@@ -741,5 +744,64 @@ test("Recorder Audit Summary Contract contains validation rules", () => {
 test("Recorder Audit Summary Contract contains the non-authorization statement", () => {
   requireAll(read(CONTRACT), "CONTRACT non-auth", [
     "This Recorder Audit Summary Contract authorizes no recorder summary runtime implementation, no summary emitter implementation, no audit runtime implementation, no audit event emitter implementation, no persistence implementation, no durable storage implementation, no repository implementation, no production storage adapter, no database schema, no D1 access, no D1 binding, no D1 migration, no SQL execution, no SQL mutation, no product runtime pipeline, no ApprovalStore integration, no P7.1 TSP wiring, no external action execution, no Formal WorkUnit promotion, no Evidence Ledger append, no Graph Model write, no deployment, no release, no production readiness, and no automated decision-making.",
+  ])
+})
+
+// ─── P6-FIX-007e (Issue #121): intentional one-way No-Go relationship ────────
+//
+// All three Recorder Audit Summary documents must document that the
+// no_go_flags → blocked/no-go-evidence relationship is intentionally one-way,
+// pinning each implication direction independently. The P6-I5L document is now
+// read here in addition to the spec and contract.
+
+test("P6-I5L types/validators document exists", () => {
+  assert.ok(
+    existsSync(fileURLToPath(new URL(TYPES_VALIDATORS, import.meta.url))),
+    `${TYPES_VALIDATORS} must exist`,
+  )
+})
+
+test("all three documents state the relationship is intentionally one-way", () => {
+  for (const [rel, label] of [
+    [SPEC, "SPEC"],
+    [CONTRACT, "CONTRACT"],
+    [TYPES_VALIDATORS, "TYPES_VALIDATORS"],
+  ] as const) {
+    requireAll(read(rel), label, ["The relationship is intentionally one-way."])
+  }
+})
+
+test("all three documents pin the forward implication (flags require evidence)", () => {
+  for (const [rel, label] of [
+    [SPEC, "SPEC"],
+    [CONTRACT, "CONTRACT"],
+    [TYPES_VALIDATORS, "TYPES_VALIDATORS"],
+  ] as const) {
+    requireAll(read(rel), label, ["Non-empty no_go_flags requires blocked/no-go evidence"])
+  }
+})
+
+test("all three documents pin the intentionally-false reverse implication", () => {
+  for (const [rel, label] of [
+    [SPEC, "SPEC"],
+    [CONTRACT, "CONTRACT"],
+    [TYPES_VALIDATORS, "TYPES_VALIDATORS"],
+  ] as const) {
+    requireAll(read(rel), label, ["Blocked/no-go evidence does not require non-empty no_go_flags"])
+  }
+})
+
+test("spec and contract pin evidence-without-flags as valid; types doc marks it a deliberate decision", () => {
+  requireAll(read(SPEC), "SPEC", [
+    "Aggregate blocked/no-go evidence with no_go_flags: [] is valid",
+    "Aggregate evidence must not be promoted into a current summary-level No-Go",
+  ])
+  requireAll(read(CONTRACT), "CONTRACT", [
+    "Valid: blocked/no-go count > 0 and no_go_flags is empty.",
+    "Invalid: no_go_flags is non-empty and both blocked/no-go counts are zero",
+  ])
+  requireAll(read(TYPES_VALIDATORS), "TYPES_VALIDATORS", [
+    "deliberate design decision, not an omitted",
+    "must not infer or synthesize `no_go_flags` from aggregate counts",
   ])
 })

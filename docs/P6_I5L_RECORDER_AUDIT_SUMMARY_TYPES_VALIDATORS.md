@@ -167,6 +167,25 @@ field (`raw_payload`, `payload`, `record`, `raw_event_payload`, etc.) or secret-
 otherwise). A non-empty `no_go_flags` array is only valid when `status_counts.blocked_no_go > 0` or
 `outcome_counts.no_go > 0`; otherwise the record fails with `no_go_flags_present`.
 
+The relationship is intentionally one-way. The implemented validator deliberately
+enforces only the forward implication:
+
+- Non-empty no_go_flags requires blocked/no-go evidence (`no_go_flags_present`
+  otherwise).
+- Blocked/no-go evidence does not require non-empty no_go_flags.
+
+The absence of a reverse rule is a deliberate design decision, not an omitted
+validator check. Aggregate blocked/no-go evidence (`status_counts.blocked_no_go`
+and `outcome_counts.no_go`) is descriptive evidence about the summarized recorder
+operations; `no_go_flags` is the explicit set of No-Go reasons asserted on the
+summary record itself. A summary with `no_go_flags: []`, `blocked_no_go > 0`, and
+`no_go > 0` is valid when every other rule passes.
+
+The validator must not infer or synthesize `no_go_flags` from aggregate counts,
+and it must not promote aggregate evidence into a current record-level No-Go
+assertion. Validation success remains non-authorizing: it is not approval, not
+authorization, and not execution permission.
+
 ## 20. Non-authorization Boundary
 
 `non_authorization_statement` is a required string that must include the phrases "not approval", "not

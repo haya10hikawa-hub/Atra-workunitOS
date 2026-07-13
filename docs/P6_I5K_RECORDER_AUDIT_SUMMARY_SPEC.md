@@ -208,6 +208,25 @@ validator_not_run_no_go.
 - no_go count
 - status/outcome summary is not approval
 
+### 12.1 No-Go Aggregate Evidence versus Record-Level Flags (P6-FIX-007e)
+
+status_counts.blocked_no_go and outcome_counts.no_go are descriptive aggregate
+counts over summarized recorder operations.
+
+no_go_flags contains explicit No-Go reasons asserted on the summary record.
+
+The relationship is intentionally one-way.
+
+Non-empty no_go_flags requires blocked/no-go evidence.
+
+Blocked/no-go evidence does not require non-empty no_go_flags.
+
+Aggregate blocked/no-go evidence with no_go_flags: [] is valid when every other
+contract rule passes.
+
+Aggregate evidence must not be promoted into a current summary-level No-Go
+assertion without an explicit flag.
+
 ## 13. Validation Result Summary
 
 - validation pass count
@@ -393,6 +412,13 @@ validator_not_run_no_go.
 - clear_all_treated_as_production_capability
 - ruleset_weakened
 - validation_failed
+
+no_go_flags is the explicit set of these No-Go reasons asserted on the summary
+record itself. Per §12.1 the relationship is intentionally one-way: non-empty
+no_go_flags requires blocked/no-go evidence, but blocked/no-go evidence does not
+require non-empty no_go_flags. Aggregate blocked/no-go evidence with
+no_go_flags: [] is valid, and aggregate evidence must not be promoted into a
+current summary-level No-Go assertion without an explicit flag.
 
 ## 28. Non-authorization Statement
 
