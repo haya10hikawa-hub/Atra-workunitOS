@@ -208,11 +208,15 @@ export function createRecorderAuditSummaryTestHarness(): RecorderAuditSummaryTes
           if (!validation.ok) {
             issues.push(issue("validation_failed", "summary_id"))
           }
-          if (
-            record.recorder_target_class !== FIXED_TARGET_CLASS ||
-            record.selected_target_class !== FIXED_TARGET_CLASS
-          ) {
+          // P6-FIX-007d (Issue #121): report each target-class violation on the
+          // field that actually mismatched. Two independent, deterministically
+          // ordered checks (recorder before selected) — never a combined OR that
+          // mislabels a selected mismatch as a recorder mismatch.
+          if (record.recorder_target_class !== FIXED_TARGET_CLASS) {
             issues.push(issue("forbidden_target_class", "recorder_target_class"))
+          }
+          if (record.selected_target_class !== FIXED_TARGET_CLASS) {
+            issues.push(issue("forbidden_target_class", "selected_target_class"))
           }
         }
         if (issues.length > 0) return failResult(issues)

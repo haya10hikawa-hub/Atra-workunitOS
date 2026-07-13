@@ -195,6 +195,8 @@ test("validateAllSummaries passes through P6-I5L validators", () => {
   const r = h.validateAllSummaries()
   assert.equal(r.ok, true, JSON.stringify(r.issues))
   assert.equal(r.count, 5)
+  // The valid fixture set yields an explicitly empty issue collection.
+  assert.deepEqual([...(r.issues ?? ["sentinel"])], [])
   // Cross-check against the validator directly.
   for (const s of h.listSummaries().summaries ?? []) {
     assert.equal(validateRecorderAuditSummaryRecord(s).ok, true, s.summary_id)
@@ -373,4 +375,109 @@ test("harness source guard confirms no forbidden runtime capability substrings",
   for (const needle of FORBIDDEN_SOURCE_SUBSTRINGS) {
     assert.ok(!text.includes(needle), `harness source must not contain: <<<${needle}>>>`)
   }
+})
+
+// ─── P6-FIX-007d (Issue #121): field-specific target-class diagnostics ───────
+//
+// The harness loads only fixed, pre-validated fixtures whose target-class
+// fields are always in_memory_test_only_store, and it exposes no invalid-record
+// injection seam (broadening the API just to inject invalid values would add a
+// fixture-mutation path this patch forbids). The field-attribution correction
+// therefore lives in validateAllSummaries(), so it is proven by extracting only
+// that method's source region and pinning the two independent, correctly
+// labelled, deterministically ordered checks. Comments are stripped first so
+// they cannot satisfy the structural assertions. The load-time fixture check in
+// loadFixtureSnapshot() legitimately keeps a combined boolean (it throws a
+// generic label-free error) and is outside this region and this patch.
+
+/** Strip block and line comments so comments cannot satisfy structural checks. */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "")
+}
+
+/**
+ * Isolate the validateAllSummaries() implementation body: from its marker up to
+ * the next reset() marker. The method name also appears once in the harness
+ * type declaration earlier in the file, so lastIndexOf selects the actual
+ * implementation (which follows the type block); indexOf from there finds the
+ * matching reset() implementation marker.
+ */
+function validateAllSummariesRegion(): string {
+  const full = stripComments(readFileSync(SRC_HARNESS, "utf8"))
+  const start = full.lastIndexOf("validateAllSummaries():")
+  assert.ok(start !== -1, "validateAllSummaries() marker must be present")
+  const end = full.indexOf("reset():", start)
+  assert.ok(end !== -1, "reset() marker must follow validateAllSummaries()")
+  return full.slice(start, end)
+}
+
+// 23
+test("validateAllSummaries maps recorder mismatch to recorder_target_class", () => {
+  const region = validateAllSummariesRegion()
+  const compare = "record.recorder_target_class !== FIXED_TARGET_CLASS"
+  const emit = 'issue("forbidden_target_class", "recorder_target_class")'
+  assert.ok(region.includes(compare), "recorder comparison must be present")
+  assert.ok(region.includes(emit), "recorder issue emission must be present")
+  assert.ok(
+    region.indexOf(compare) < region.indexOf(emit),
+    "recorder comparison must precede its issue emission",
+  )
+})
+
+// 24
+test("validateAllSummaries maps selected mismatch to selected_target_class", () => {
+  const region = validateAllSummariesRegion()
+  const compare = "record.selected_target_class !== FIXED_TARGET_CLASS"
+  const emit = 'issue("forbidden_target_class", "selected_target_class")'
+  assert.ok(region.includes(compare), "selected comparison must be present")
+  assert.ok(region.includes(emit), "selected issue emission must be present")
+  assert.ok(
+    region.indexOf(compare) < region.indexOf(emit),
+    "selected comparison must precede its issue emission",
+  )
+})
+
+// 25
+test("validateAllSummaries uses two independent, deterministically ordered checks", () => {
+  const region = validateAllSummariesRegion()
+  const recorderCompare = "record.recorder_target_class !== FIXED_TARGET_CLASS"
+  const selectedCompare = "record.selected_target_class !== FIXED_TARGET_CLASS"
+  const recorderEmit = 'issue("forbidden_target_class", "recorder_target_class")'
+  const selectedEmit = 'issue("forbidden_target_class", "selected_target_class")'
+
+  // The two comparisons are separate checks, not combined via ||. We scope the
+  // || prohibition to the region between the two comparisons so the load-time
+  // fixture check elsewhere is unaffected.
+  const between = region.slice(
+    region.indexOf(recorderCompare),
+    region.indexOf(selectedCompare) + selectedCompare.length,
+  )
+  assert.ok(!between.includes("||"), "recorder and selected checks must not be combined with ||")
+
+  // Deterministic order: recorder-specific emission precedes selected-specific.
+  assert.ok(
+    region.indexOf(recorderEmit) < region.indexOf(selectedEmit),
+    "recorder issue must be emitted before selected issue",
+  )
+
+  // Exactly one emission per field.
+  assert.equal(region.split(recorderEmit).length - 1, 1, "exactly one recorder-field emission")
+  assert.equal(region.split(selectedEmit).length - 1, 1, "exactly one selected-field emission")
+
+  // Structural cross-mapping guard: within the block guarded by the selected
+  // comparison, no recorder-field emission may appear, and within the block
+  // guarded by the recorder comparison, no selected-field emission may appear.
+  const selectedBlock = region.slice(region.indexOf(selectedCompare))
+  assert.ok(
+    !selectedBlock.includes(recorderEmit),
+    "selected mismatch must not emit recorder_target_class",
+  )
+  const recorderBlock = region.slice(
+    region.indexOf(recorderCompare),
+    region.indexOf(selectedCompare),
+  )
+  assert.ok(
+    !recorderBlock.includes(selectedEmit),
+    "recorder mismatch must not emit selected_target_class",
+  )
 })
