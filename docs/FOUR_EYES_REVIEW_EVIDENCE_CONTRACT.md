@@ -146,18 +146,37 @@ never include supplied values, payloads, or secrets.
 
 ## 12. Redacted Audit Projection
 
-The pure audit factory projects one verification decision into a frozen event carrying
-only: the event kind (`four_eyes_review_evidence_verified` or
+The pure audit factory accepts the evidence and the server-side verification context and
+produces the verification decision internally by calling
+`verifyFourEyesReviewEvidence(evidence, context)`. An external caller can never supply
+the verification result: a fabricated `ok: true` object cannot produce a verified audit
+event. `event_kind`, `ok`, and `issue_codes` are derived exclusively from the internally
+produced decision, and `evaluated_at` is obtained defensively from the supplied context.
+
+The frozen event carries only: the event kind (`four_eyes_review_evidence_verified` or
 `four_eyes_review_evidence_rejected`), the review evidence id, the source Human Decision
-id, the source WorkUnit id, the boolean outcome, the stable issue codes, and the
-evaluation timestamp.
+id, the source WorkUnit id, the boolean outcome, the allowlisted stable issue codes, and
+the evaluation timestamp.
+
+Stable-code allowlist (defense-in-depth): every issue code is checked against the
+canonical `REVIEW_EVIDENCE_ISSUE_CODES` before it may enter `issue_codes` — an arbitrary
+non-empty string is never copied merely because it appears in a property named `code`. A
+non-canonical or malformed issue entry is never echoed (not its code, field, message, or
+value); it forces the event to the rejected state and is represented once by the stable
+fallback code `review_evidence_validation_exception`. Codes are de-duplicated in
+deterministic first-occurrence order.
+
+Evidence identifiers are projected only after the evidence passes defensive structural
+validation; a structurally invalid evidence object projects every identifier as the
+literal `(invalid)` placeholder, and supplied malformed identifier values are not echoed.
 
 It never exposes the raw reviewed payload, any payload body or content, the payload hash
 (excluded: it is payload-derived material with no audit-side consumer in this patch),
 reviewer identities (reviewer-level attribution belongs to the Issue #143 identity
 boundary), secrets, credentials, session tokens, raw authorization material, or approval
 records. It is I/O-free, never calls the runtime audit logger, and producing an audit
-event authorizes nothing.
+event authorizes nothing — no approval, no persistence, no runtime authorization, no
+execution.
 
 ## 13. Non-authorization Statement
 
