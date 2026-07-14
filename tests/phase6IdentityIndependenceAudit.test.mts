@@ -383,6 +383,106 @@ test("the factory never mutates its input", () => {
   assert.equal(JSON.stringify(input), before)
 })
 
+// ─── Snapshot consistency (getter/Proxy TOCTOU) ─────────────────
+
+/**
+ * Wrap the audit input so a top-level scalar returns `first` on its first read
+ * and `later` afterwards, counting reads. If the factory snapshots the input
+ * once, `later` can never reach either the verifier decision or the projected
+ * event, and the field is read exactly once.
+ */
+function inputWithMutatingField(
+  field: string,
+  first: unknown,
+  later: unknown,
+): { forged: unknown; reads: () => number } {
+  const base: Record<string, unknown> = { ...independentInput() }
+  let count = 0
+  const forged = new Proxy(base, {
+    get(target, prop) {
+      if (prop === field) {
+        count += 1
+        return count === 1 ? first : later
+      }
+      return target[prop as string]
+    },
+  })
+  return { forged, reads: () => count }
+}
+
+test("a verified event's projected ids come from the same snapshot the verifier evaluated", () => {
+  // expected_human_decision_id validates as hdr-1, then would leak secret-value
+  // on a second read. The single top-level snapshot reads it once, so the
+  // verifier sees hdr-1 and the event projects hdr-1 — never secret-value.
+  const { forged, reads } = inputWithMutatingField(
+    "expected_human_decision_id",
+    "hdr-1",
+    "secret-value",
+  )
+  const event = createIdentityIndependenceAuditEvent(forged)
+  assert.equal(reads(), 1, "expected_human_decision_id read exactly once")
+  assert.equal(event.ok, true, "the validated input verifies")
+  assert.equal(event.human_decision_id, "hdr-1", "projected id is the validated value")
+  assert.ok(!JSON.stringify(event).includes("secret-value"), "the later getter value never leaks")
+})
+
+test("WorkUnit id, ActionPreview id, and evaluated_at are each read once and never leak", () => {
+  for (const [field, valid, leak] of [
+    ["expected_workunit_id", "wu-1", "secret-wu"],
+    ["expected_action_preview_id", "preview-1", "secret-preview"],
+    ["evaluated_at", EVALUATED_AT, "2000-01-01T00:00:00Z"],
+  ] as const) {
+    const { forged, reads } = inputWithMutatingField(field, valid, leak)
+    const event = createIdentityIndependenceAuditEvent(forged)
+    assert.equal(reads(), 1, `${field} read exactly once`)
+    assert.equal(event.ok, true, `${field}: validated input verifies`)
+    assert.ok(
+      !JSON.stringify(event).includes(leak),
+      `${field}: the later getter value never leaks`,
+    )
+  }
+})
+
+test("a throwing top-level getter produces the fully redacted rejected event without throwing", () => {
+  const hostileGetter = new Proxy(
+    // A real own key so the throwing getter actually fires during the snapshot.
+    { expected_human_decision_id: "hdr-1" },
+    {
+      get() {
+        throw new Error("hostile top-level getter")
+      },
+    },
+  )
+  const hostileKeys = new Proxy(
+    {},
+    {
+      ownKeys() {
+        throw new Error("hostile ownKeys")
+      },
+      getOwnPropertyDescriptor() {
+        throw new Error("hostile descriptor")
+      },
+    },
+  )
+  for (const hostile of [hostileGetter, hostileKeys]) {
+    let event: IdentityIndependenceAuditEvent | undefined
+    assert.doesNotThrow(() => {
+      event = createIdentityIndependenceAuditEvent(hostile)
+    })
+    assert.ok(event)
+    if (!event) return
+    assert.equal(event.ok, false)
+    assert.equal(event.event_kind, "identity_independence_rejected")
+    assert.equal(event.human_decision_id, "(invalid)")
+    assert.equal(event.workunit_id, "(invalid)")
+    assert.equal(event.action_preview_id, "(invalid)")
+    assert.equal(event.evaluated_at, "(invalid)")
+    assert.deepEqual([...event.issue_codes], ["identity_validation_exception"])
+    assert.ok(Object.isFrozen(event))
+    assert.ok(Object.isFrozen(event.issue_codes))
+  }
+})
+
 // ─── Source guard (read-only) ───────────────────────────────────
 
 test("source guard: the audit factory never calls the runtime audit logger", () => {

@@ -172,6 +172,28 @@ function copyAllowlisted(
 }
 
 /**
+ * Pure shallow single-read snapshot of an unknown value (P6-FIX-010
+ * snapshot-consistency hardening). Returns a plain object that copies every
+ * own-enumerable property exactly once, or `null` when the value is not a
+ * record or when reading it throws — a hostile getter or `ownKeys` trap fails
+ * closed here rather than escaping. After a snapshot is taken the original
+ * object is never read again, so validation and use always observe the same
+ * bytes: a getter cannot validate as one identity and be stored as another.
+ */
+function snapshotRecordOrNull(value: unknown): Record<string, unknown> | null {
+  try {
+    if (!isRecordObject(value)) return null
+    const snapshot: Record<string, unknown> = {}
+    for (const key of Object.keys(value)) {
+      snapshot[key] = value[key]
+    }
+    return snapshot
+  } catch {
+    return null
+  }
+}
+
+/**
  * Canonical reviewer identity boundary (P6-FIX-010, Issue #143). The reviewer
  * argument must be a constructor-produced CanonicalIdentity; because a cast
  * can lie, it is defensively re-validated through the canonical identity
@@ -182,12 +204,19 @@ function copyAllowlisted(
  * reviewer strings can no longer become attestation identity. Underlying
  * canonical-identity issue details are not echoed; the stable code
  * `invalid_reviewer_identity` reports the failing aspect by field only.
+ *
+ * Snapshot consistency: the identity is snapshotted ONCE up front; validation,
+ * every position check, and the derived tenant/reviewer IDs all read that same
+ * snapshot. The original object is never re-read, so a getter/Proxy cannot
+ * pass validation as one reviewer and be stored as another. This is snapshot
+ * consistency only — it does not turn the compile-time opaque brand into
+ * cryptographic proof.
  */
 function collectReviewerIdentityIssues(
   reviewerIdentity: unknown,
 ): { readonly issues: readonly ReviewEvidenceValidationIssue[]; readonly tenantId: string; readonly reviewerId: string } {
-  const validation = validateCanonicalIdentity(reviewerIdentity)
-  if (!validation.ok || !isRecordObject(reviewerIdentity)) {
+  const snapshot = snapshotRecordOrNull(reviewerIdentity)
+  if (snapshot === null || !validateCanonicalIdentity(snapshot).ok) {
     return {
       issues: [reviewEvidenceIssue("invalid_reviewer_identity", "(reviewer_identity)")],
       tenantId: "",
@@ -195,21 +224,21 @@ function collectReviewerIdentityIssues(
     }
   }
   const issues: ReviewEvidenceValidationIssue[] = []
-  if (reviewerIdentity.actor_kind !== "reviewer") {
+  if (snapshot.actor_kind !== "reviewer") {
     issues.push(reviewEvidenceIssue("invalid_reviewer_identity", "(reviewer_identity).actor_kind"))
   }
-  if (reviewerIdentity.identity_source !== "authenticated_session") {
+  if (snapshot.identity_source !== "authenticated_session") {
     issues.push(
       reviewEvidenceIssue("invalid_reviewer_identity", "(reviewer_identity).identity_source"),
     )
   }
-  if (reviewerIdentity.subject_type !== "human_user") {
+  if (snapshot.subject_type !== "human_user") {
     issues.push(
       reviewEvidenceIssue("invalid_reviewer_identity", "(reviewer_identity).subject_type"),
     )
   }
-  const tenantId = reviewerIdentity.tenant_id
-  const reviewerId = reviewerIdentity.user_id
+  const tenantId = snapshot.tenant_id
+  const reviewerId = snapshot.user_id
   return {
     issues,
     tenantId: issues.length === 0 && isNonEmptyString(tenantId) ? tenantId : "",
@@ -221,20 +250,24 @@ function collectReviewerIdentityIssues(
  * Defensive Human Decision re-validation: the static type promises a
  * constructor-produced artifact, but a cast can lie, so the runtime shape is
  * always re-checked through the artifacts module's own validator.
+ *
+ * Snapshot consistency: the decision is snapshotted ONCE; validation and the
+ * derived decision/tenant IDs read that same snapshot, never the original
+ * object.
  */
 function collectHumanDecisionIssues(
   decision: unknown,
 ): { readonly issues: readonly ReviewEvidenceValidationIssue[]; readonly decisionId: string; readonly tenantId: string } {
-  const validation = validateHumanDecisionRecord(decision)
-  if (!validation.ok || !isRecordObject(decision)) {
+  const snapshot = snapshotRecordOrNull(decision)
+  if (snapshot === null || !validateHumanDecisionRecord(snapshot).ok) {
     return {
       issues: [reviewEvidenceIssue("invalid_source_human_decision", "(source_human_decision)")],
       decisionId: "",
       tenantId: "",
     }
   }
-  const decisionId = decision.human_decision_id
-  const tenantId = decision.tenant_id
+  const decisionId = snapshot.human_decision_id
+  const tenantId = snapshot.tenant_id
   if (!isNonEmptyString(decisionId) || !isNonEmptyString(tenantId)) {
     return {
       issues: [reviewEvidenceIssue("invalid_source_human_decision", "(source_human_decision)")],

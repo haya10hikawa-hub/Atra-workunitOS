@@ -320,6 +320,102 @@ test("a structurally perfect literal passes shape checks but stays position-boun
   assert.equal(result.ok, true, "structural validity is the documented cast limit")
 })
 
+// ─── Snapshot consistency (getter/Proxy TOCTOU) ─────────────────
+
+/**
+ * Build a plain seven-field reviewer-identity object equal to a genuine
+ * canonical reviewer identity, then wrap a chosen scalar field in a getter
+ * that returns `first` on its first read and `later` on every subsequent read,
+ * counting reads. Proves the constructor reads each field at most once and
+ * uses the validated value.
+ */
+function reviewerWithMutatingField(
+  field: string,
+  first: string,
+  later: string,
+): { forged: CanonicalIdentity; reads: () => number } {
+  const base: Record<string, unknown> = {
+    tenant_id: "tenant-1",
+    user_id: "reviewer-good",
+    actor_kind: "reviewer",
+    identity_source: "authenticated_session",
+    source_record_id: "sess-good",
+    observed_at: OBSERVED_AT,
+    subject_type: "human_user",
+  }
+  let count = 0
+  const forged = new Proxy(base, {
+    get(target, prop) {
+      if (prop === field) {
+        count += 1
+        return count === 1 ? first : later
+      }
+      return target[prop as string]
+    },
+  }) as unknown as CanonicalIdentity
+  return { forged, reads: () => count }
+}
+
+test("a getter-backed reviewer identity can never store a value different from the one validated", () => {
+  // user_id validates as "reviewer-good" but later reads yield "reviewer-EVIL".
+  const { forged, reads } = reviewerWithMutatingField("user_id", "reviewer-good", "reviewer-EVIL")
+  const result = createReviewAttestation(attestationInput(), forged, humanDecision())
+  assert.equal(result.ok, true, "the validated identity constructs")
+  if (!result.ok) return
+  assert.equal(reads(), 1, "user_id is read at most once by the constructor boundary")
+  assert.equal(
+    (result.artifact as unknown as Record<string, unknown>).reviewer_id,
+    "reviewer-good",
+    "the stored reviewer id is the validated snapshot value, never the later getter value",
+  )
+})
+
+test("a getter-backed reviewer tenant is read once and binds to the validated value", () => {
+  // tenant_id validates as "tenant-1" (matches the decision) but later reads
+  // yield a foreign tenant. The single-read snapshot binds tenant-1.
+  const { forged, reads } = reviewerWithMutatingField("tenant_id", "tenant-1", "tenant-EVIL")
+  const result = createReviewAttestation(attestationInput(), forged, humanDecision())
+  assert.equal(result.ok, true, JSON.stringify(result.ok ? [] : result.issues))
+  if (!result.ok) return
+  assert.equal(reads(), 1, "tenant_id is read at most once")
+  assert.equal(
+    (result.artifact as unknown as Record<string, unknown>).tenant_id,
+    "tenant-1",
+    "the stored tenant is the validated snapshot value",
+  )
+})
+
+test("a getter-backed actor_kind cannot validate as reviewer then flip position", () => {
+  // actor_kind validates as "reviewer" then flips to "approver". The single
+  // snapshot means the flip is never observed; construction stays consistent.
+  const { forged, reads } = reviewerWithMutatingField("actor_kind", "reviewer", "approver")
+  const result = createReviewAttestation(attestationInput(), forged, humanDecision())
+  assert.equal(result.ok, true)
+  assert.equal(reads(), 1, "actor_kind is read at most once")
+})
+
+test("a throwing reviewer-identity getter fails closed without throwing", () => {
+  const hostile = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error("hostile identity getter")
+      },
+      ownKeys() {
+        throw new Error("hostile ownKeys")
+      },
+    },
+  ) as unknown as CanonicalIdentity
+  let result: ReturnType<typeof createReviewAttestation> | undefined
+  assert.doesNotThrow(() => {
+    result = createReviewAttestation(attestationInput(), hostile, humanDecision())
+  })
+  assert.ok(result && result.ok === false)
+  if (result && !result.ok) {
+    assert.ok(result.issues.some((i) => i.code === "invalid_reviewer_identity"))
+  }
+})
+
 // ─── Old structural API is gone ─────────────────────────────────
 
 test("the old structural reviewer-context API is absent from the public namespace", () => {

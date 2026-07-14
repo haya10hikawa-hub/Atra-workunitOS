@@ -108,19 +108,41 @@ const EVALUATION_INPUT_FIELDS: readonly string[] = [
   "evaluated_at",
 ]
 
+/**
+ * Pure shallow single-read snapshot of an unknown value (P6-FIX-010
+ * snapshot-consistency hardening). Returns a plain object copying every
+ * own-enumerable property exactly once, or `null` when the value is not a
+ * record or when reading it throws — a hostile getter or `ownKeys` trap fails
+ * closed here rather than escaping the verifier. Every nested artifact and
+ * identity is snapshotted through this helper exactly once, and only the
+ * snapshot is validated, stored, and compared thereafter; the original nested
+ * reference is never read again, so a getter/Proxy cannot validate as one
+ * value and be compared as another.
+ */
+function snapshotRecordOrNull(value: unknown): Record<string, unknown> | null {
+  try {
+    if (!isCanonicalIdentityRecord(value)) return null
+    const snapshot: Record<string, unknown> = {}
+    for (const key of Object.keys(value)) {
+      snapshot[key] = value[key]
+    }
+    return snapshot
+  } catch {
+    return null
+  }
+}
+
 // ─── Public verifier ────────────────────────────────────────────
 
 export function verifyIdentityIndependence(input: unknown): IdentityIndependenceResult {
   try {
-    if (!isCanonicalIdentityRecord(input)) {
+    // Single top-level snapshot (getter-TOCTOU hardening). A throwing getter
+    // or ownKeys trap fails closed here without escaping the verifier.
+    const snapshot = snapshotRecordOrNull(input)
+    if (snapshot === null) {
       return identityIndependenceResultOf([
         identityIndependenceIssue("invalid_identity_input", "(input)"),
       ])
-    }
-    // Single-read snapshot (getter-TOCTOU hardening).
-    const snapshot: Record<string, unknown> = {}
-    for (const key of Object.keys(input)) {
-      snapshot[key] = input[key]
     }
 
     // Stage A — evaluation context. Without a valid expected tenant, record
@@ -146,20 +168,21 @@ export function verifyIdentityIndependence(input: unknown): IdentityIndependence
     const expectedWorkunitId = snapshot.expected_workunit_id as string
     const expectedActionPreviewId = snapshot.expected_action_preview_id as string
 
-    // Stage B — structural validity of artifacts and identities, through the
-    // real production validators (a cast can lie; a fabricated result cannot
-    // enter). Structural failure stops evaluation: no comparison may run over
-    // untrusted fields.
+    // Stage B — nested single-read snapshots + structural validity, through
+    // the real production validators (a cast can lie; a fabricated result
+    // cannot enter). Each nested artifact and identity is snapshotted ONCE and
+    // only the snapshot is validated and later consumed. Structural failure
+    // stops evaluation: no comparison may run over untrusted fields.
     const structuralIssues: IdentityIndependenceIssue[] = []
 
-    const decisionValidation = validateHumanDecisionRecord(snapshot.human_decision)
-    if (!decisionValidation.ok || !isCanonicalIdentityRecord(snapshot.human_decision)) {
+    const decisionSnapshot = snapshotRecordOrNull(snapshot.human_decision)
+    if (decisionSnapshot === null || !validateHumanDecisionRecord(decisionSnapshot).ok) {
       structuralIssues.push(
         identityIndependenceIssue("invalid_identity_input", "(human_decision)"),
       )
     }
-    const evidenceValidation = validateFourEyesReviewEvidence(snapshot.review_evidence)
-    if (!evidenceValidation.ok || !isCanonicalIdentityRecord(snapshot.review_evidence)) {
+    const evidenceSnapshot = snapshotRecordOrNull(snapshot.review_evidence)
+    if (evidenceSnapshot === null || !validateFourEyesReviewEvidence(evidenceSnapshot).ok) {
       structuralIssues.push(
         identityIndependenceIssue("invalid_identity_input", "(review_evidence)"),
       )
@@ -177,8 +200,15 @@ export function verifyIdentityIndependence(input: unknown): IdentityIndependence
         }
         continue
       }
-      const validation = validateCanonicalIdentity(value)
-      if (!validation.ok || !isCanonicalIdentityRecord(value)) {
+      const identitySnapshot = snapshotRecordOrNull(value)
+      if (identitySnapshot === null) {
+        structuralIssues.push(
+          identityIndependenceIssue("invalid_identity_input", `(${position.key})`),
+        )
+        continue
+      }
+      const validation = validateCanonicalIdentity(identitySnapshot)
+      if (!validation.ok) {
         if (validation.issues.length > 0) {
           for (const issue of validation.issues) {
             structuralIssues.push(rescopeIssueField(issue, `(${position.key})`))
@@ -190,12 +220,20 @@ export function verifyIdentityIndependence(input: unknown): IdentityIndependence
         }
         continue
       }
-      identities[position.key] = value
+      // Store ONLY the validated snapshot; the original reference is dropped.
+      identities[position.key] = identitySnapshot
     }
     if (structuralIssues.length > 0) return identityIndependenceResultOf(structuralIssues)
 
-    const decision = snapshot.human_decision as Record<string, unknown>
-    const evidence = snapshot.review_evidence as Record<string, unknown>
+    // Past the early return both artifact snapshots are non-null; the guard is
+    // defensive and keeps the fail-closed contract explicit for the compiler.
+    if (decisionSnapshot === null || evidenceSnapshot === null) {
+      return identityIndependenceResultOf([
+        identityIndependenceIssue("invalid_identity_input", "(input)"),
+      ])
+    }
+    const decision = decisionSnapshot
+    const evidence = evidenceSnapshot
 
     // Stage C — provenance and cross-record binding, in fixed order.
     const issues: IdentityIndependenceIssue[] = []

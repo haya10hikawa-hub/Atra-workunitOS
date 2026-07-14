@@ -79,6 +79,43 @@ function safeIdentifier(value: unknown): string {
 }
 
 /**
+ * Pure shallow single-read snapshot of the audit input (P6-FIX-010
+ * snapshot-consistency hardening). Returns a plain object copying every
+ * own-enumerable property exactly once, or `null` when the value is not a
+ * record or when reading it throws — a hostile getter or `ownKeys` trap fails
+ * closed rather than escaping. The verifier decision AND the projected
+ * identifiers/timestamp are derived from this same snapshot, so a getter can
+ * never make the verifier see one value and the audit event emit another
+ * (including a sensitive string).
+ */
+function snapshotRecordOrNull(value: unknown): Record<string, unknown> | null {
+  try {
+    if (!isCanonicalIdentityRecord(value)) return null
+    const snapshot: Record<string, unknown> = {}
+    for (const key of Object.keys(value)) {
+      snapshot[key] = value[key]
+    }
+    return snapshot
+  } catch {
+    return null
+  }
+}
+
+function rejectedRedactedEvent(): IdentityIndependenceAuditEvent {
+  // Absolute totality: a snapshot failure (or any unexpected failure) projects
+  // a rejected, fully redacted event and never throws.
+  return Object.freeze({
+    event_kind: IDENTITY_INDEPENDENCE_AUDIT_EVENT_KINDS[2],
+    human_decision_id: INVALID_PLACEHOLDER,
+    workunit_id: INVALID_PLACEHOLDER,
+    action_preview_id: INVALID_PLACEHOLDER,
+    ok: false,
+    issue_codes: Object.freeze([FALLBACK_ISSUE_CODE]),
+    evaluated_at: INVALID_PLACEHOLDER,
+  })
+}
+
+/**
  * Defense-in-depth issue-code sanitizer for the audit boundary. Only exact
  * members of the canonical `CANONICAL_IDENTITY_ISSUE_CODES` may pass; an
  * arbitrary non-empty string is never copied merely because it appears in a
@@ -125,8 +162,15 @@ export function createIdentityIndependenceAuditEvent(
   input: unknown,
 ): IdentityIndependenceAuditEvent {
   try {
+    // One top-level snapshot: the verifier decision AND the projected
+    // identifiers/timestamp are both derived from this exact snapshot, so a
+    // getter cannot make the verifier see one value and the event emit
+    // another. Snapshot failure fails closed with a fully redacted event.
+    const snapshot = snapshotRecordOrNull(input)
+    if (snapshot === null) return rejectedRedactedEvent()
+
     // The verification decision is internal and cannot be fabricated.
-    const verification = verifyIdentityIndependence(input)
+    const verification = verifyIdentityIndependence(snapshot)
     const sanitized = sanitizeIdentityIndependenceAuditIssueCodes(verification.issues)
     const ok = verification.ok === true && sanitized.all_canonical
     const eventKind = ok
@@ -135,32 +179,21 @@ export function createIdentityIndependenceAuditEvent(
         ? IDENTITY_INDEPENDENCE_AUDIT_EVENT_KINDS[1]
         : IDENTITY_INDEPENDENCE_AUDIT_EVENT_KINDS[2]
 
-    // Only the expected record identifiers are projected — never an identity
-    // object, user ID, session ID, or any other actor material.
-    const record = isCanonicalIdentityRecord(input) ? input : {}
-
+    // Only the expected record identifiers are projected — from the SAME
+    // snapshot the verifier evaluated — never an identity object, user ID,
+    // session ID, or any other actor material.
     return Object.freeze({
       event_kind: eventKind,
-      human_decision_id: safeIdentifier(record.expected_human_decision_id),
-      workunit_id: safeIdentifier(record.expected_workunit_id),
-      action_preview_id: safeIdentifier(record.expected_action_preview_id),
+      human_decision_id: safeIdentifier(snapshot.expected_human_decision_id),
+      workunit_id: safeIdentifier(snapshot.expected_workunit_id),
+      action_preview_id: safeIdentifier(snapshot.expected_action_preview_id),
       ok,
       issue_codes: sanitized.issue_codes,
-      evaluated_at: isIsoUtcTimestamp(record.evaluated_at)
-        ? record.evaluated_at
+      evaluated_at: isIsoUtcTimestamp(snapshot.evaluated_at)
+        ? snapshot.evaluated_at
         : INVALID_PLACEHOLDER,
     })
   } catch {
-    // Absolute totality: even an unexpected failure projects a rejected,
-    // fully redacted event and never throws.
-    return Object.freeze({
-      event_kind: IDENTITY_INDEPENDENCE_AUDIT_EVENT_KINDS[2],
-      human_decision_id: INVALID_PLACEHOLDER,
-      workunit_id: INVALID_PLACEHOLDER,
-      action_preview_id: INVALID_PLACEHOLDER,
-      ok: false,
-      issue_codes: Object.freeze([FALLBACK_ISSUE_CODE]),
-      evaluated_at: INVALID_PLACEHOLDER,
-    })
+    return rejectedRedactedEvent()
   }
 }

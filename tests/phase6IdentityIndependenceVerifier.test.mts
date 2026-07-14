@@ -567,3 +567,208 @@ test("the verifier never mutates its input", () => {
   verifyIdentityIndependence(input)
   assert.equal(JSON.stringify(input), before)
 })
+
+// ─── Snapshot consistency (getter/Proxy TOCTOU) ─────────────────
+
+/**
+ * Wrap a genuine identity/artifact so one scalar field returns `first` on its
+ * first read and `later` afterwards, counting reads of that field. If the
+ * verifier snapshots once, `later` is never observed and reads === 1.
+ */
+function withMutatingField(
+  genuine: unknown,
+  field: string,
+  first: unknown,
+  later: unknown,
+): { forged: unknown; reads: () => number } {
+  const base: Record<string, unknown> = { ...(genuine as Record<string, unknown>) }
+  let count = 0
+  const forged = new Proxy(base, {
+    get(target, prop) {
+      if (prop === field) {
+        count += 1
+        return count === 1 ? first : later
+      }
+      return target[prop as string]
+    },
+  })
+  return { forged, reads: () => count }
+}
+
+/** Count every own-property `get` on a genuine object across the whole verify. */
+function countingProxy(genuine: unknown): { proxy: unknown; counts: Record<string, number> } {
+  const base: Record<string, unknown> = { ...(genuine as Record<string, unknown>) }
+  const counts: Record<string, number> = {}
+  const proxy = new Proxy(base, {
+    get(target, prop) {
+      if (typeof prop === "string") counts[prop] = (counts[prop] ?? 0) + 1
+      return Reflect.get(target, prop)
+    },
+  })
+  return { proxy, counts }
+}
+
+test("requester-vs-approver self-approval cannot be bypassed by a post-validation user_id flip", () => {
+  // The approver is truly the requester ("requester-1"); the getter tries to
+  // present an independent "approver-1" on later reads. Single-read snapshot
+  // captures the self-approving value, so the conflict is still caught.
+  const { forged, reads } = withMutatingField(
+    sessionIdentityOf("approver-1", "approver"),
+    "user_id",
+    "requester-1",
+    "approver-1",
+  )
+  const result = verifyIdentityIndependence(independentInput({ approver_identity: forged }))
+  expectCode(result, "self_approval_forbidden", "(requester_identity)", "requester=approver flip")
+  assert.equal(reads(), 1, "approver user_id read once")
+})
+
+test("creator-vs-approver self-approval cannot be bypassed by a post-validation flip", () => {
+  const { forged, reads } = withMutatingField(
+    sessionIdentityOf("approver-1", "approver"),
+    "user_id",
+    "creator-1",
+    "approver-1",
+  )
+  const result = verifyIdentityIndependence(independentInput({ approver_identity: forged }))
+  expectCode(result, "self_approval_forbidden", "(creator_identity)", "creator=approver flip")
+  assert.equal(reads(), 1)
+})
+
+test("reviewer-vs-approver self-approval cannot be bypassed by a post-validation flip", () => {
+  const { forged, reads } = withMutatingField(
+    sessionIdentityOf("approver-1", "approver"),
+    "user_id",
+    "reviewer-one",
+    "approver-1",
+  )
+  const result = verifyIdentityIndependence(independentInput({ approver_identity: forged }))
+  expectCode(result, "self_approval_forbidden", "(first_reviewer_identity)", "reviewer=approver flip")
+  assert.equal(reads(), 1)
+})
+
+test("first-vs-second reviewer duplication cannot be bypassed by a post-validation flip", () => {
+  // Second reviewer is truly reviewer-one; the getter presents reviewer-two
+  // later. The snapshot binds reviewer-one, so duplication is still caught and
+  // the evidence-binding check (second reviewer id) also fails.
+  const { forged, reads } = withMutatingField(
+    sessionIdentityOf("reviewer-two", "reviewer"),
+    "user_id",
+    "reviewer-one",
+    "reviewer-two",
+  )
+  const result = verifyIdentityIndependence(
+    independentInput({ second_reviewer_identity: forged }),
+  )
+  expectCode(
+    result,
+    "duplicate_reviewer_identity",
+    "(second_reviewer_identity)",
+    "reviewer duplication flip",
+  )
+  assert.equal(reads(), 1)
+})
+
+test("tenant matching uses the same value that was validated", () => {
+  // tenant validates as tenant-1 then flips to a foreign tenant; the snapshot
+  // binds tenant-1, so no tenant mismatch is (spuriously) introduced and the
+  // later value is never used.
+  const { forged, reads } = withMutatingField(
+    sessionIdentityOf("approver-1", "approver"),
+    "tenant_id",
+    "tenant-1",
+    "tenant-EVIL",
+  )
+  const result = verifyIdentityIndependence(independentInput({ approver_identity: forged }))
+  assert.equal(result.ok, true, JSON.stringify(result.issues))
+  assert.equal(reads(), 1, "approver tenant_id read once")
+})
+
+test("evidence reviewer binding uses the same evidence snapshot that was validated", () => {
+  // The evidence's first_reviewer_id validates as reviewer-one (matching the
+  // canonical first-reviewer identity) then flips; the snapshot keeps the
+  // validated binding so no spurious mismatch appears and the flip is unused.
+  const { forged, reads } = withMutatingField(
+    EVIDENCE,
+    "first_reviewer_id",
+    "reviewer-one",
+    "reviewer-EVIL",
+  )
+  const result = verifyIdentityIndependence(independentInput({ review_evidence: forged }))
+  assert.equal(result.ok, true, JSON.stringify(result.issues))
+  assert.equal(reads(), 1, "evidence first_reviewer_id read once")
+})
+
+test("Human Decision id cannot change after validation", () => {
+  const { forged, reads } = withMutatingField(DECISION, "human_decision_id", "hdr-1", "hdr-EVIL")
+  const result = verifyIdentityIndependence(independentInput({ human_decision: forged }))
+  assert.equal(result.ok, true, JSON.stringify(result.issues))
+  assert.equal(reads(), 1, "human_decision_id read once")
+})
+
+test("Review Evidence source ids cannot change after validation", () => {
+  const { forged, reads } = withMutatingField(
+    EVIDENCE,
+    "source_workunit_id",
+    "wu-1",
+    "wu-EVIL",
+  )
+  const result = verifyIdentityIndependence(independentInput({ review_evidence: forged }))
+  assert.equal(result.ok, true, JSON.stringify(result.issues))
+  assert.equal(reads(), 1, "evidence source_workunit_id read once")
+})
+
+test("every nested scalar field used by the verifier is read at most once", () => {
+  const approver = countingProxy(sessionIdentityOf("approver-1", "approver"))
+  const decision = countingProxy(DECISION)
+  const evidence = countingProxy(EVIDENCE)
+  const result = verifyIdentityIndependence(
+    independentInput({
+      approver_identity: approver.proxy,
+      human_decision: decision.proxy,
+      review_evidence: evidence.proxy,
+    }),
+  )
+  assert.equal(result.ok, true, JSON.stringify(result.issues))
+  for (const counts of [approver.counts, decision.counts, evidence.counts]) {
+    for (const [key, n] of Object.entries(counts)) {
+      assert.ok(n <= 1, `${key} read ${n} times (expected at most once)`)
+    }
+  }
+})
+
+test("throwing getter or ownKeys traps on nested objects fail closed without throwing", () => {
+  const hostileGetter = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error("hostile nested getter")
+      },
+    },
+  )
+  const hostileKeys = new Proxy(
+    {},
+    {
+      ownKeys() {
+        throw new Error("hostile ownKeys")
+      },
+      getOwnPropertyDescriptor() {
+        throw new Error("hostile descriptor")
+      },
+    },
+  )
+  for (const key of [
+    "human_decision",
+    "review_evidence",
+    "requester_identity",
+    "approver_identity",
+  ]) {
+    for (const hostile of [hostileGetter, hostileKeys]) {
+      let result: ReturnType<typeof verifyIdentityIndependence> | undefined
+      assert.doesNotThrow(() => {
+        result = verifyIdentityIndependence(independentInput({ [key]: hostile }))
+      }, `${key} hostile trap must not throw`)
+      assert.ok(result && result.ok === false, `${key} hostile trap must fail closed`)
+    }
+  }
+})

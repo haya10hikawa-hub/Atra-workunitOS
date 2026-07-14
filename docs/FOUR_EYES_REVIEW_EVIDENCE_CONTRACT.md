@@ -65,6 +65,14 @@ removed with no alternate constructor preserved, so arbitrary caller-supplied re
 strings can no longer become attestation identity (`invalid_reviewer_identity`).
 `source_human_decision_id` comes only from the validated Human Decision artifact.
 
+Snapshot consistency (P6-FIX-010): the reviewer identity and the source Human Decision
+are each reduced to a single-read snapshot before validation, and the same snapshot is
+validated, checked, and used to derive the stored `reviewer_id`/`tenant_id`. The original
+objects are never re-read, so a getter/Proxy cannot validate as one reviewer and be
+stored as another; a throwing getter/`ownKeys` trap fails closed. See
+[`CANONICAL_IDENTITY_INDEPENDENCE_CONTRACT.md`](./CANONICAL_IDENTITY_INDEPENDENCE_CONTRACT.md)
+§6.
+
 The fail-closed policy is REJECT: untrusted input that carries any server-owned field
 fails with `client_owned_identity_field`, so attempted mass assignment stays observable.
 

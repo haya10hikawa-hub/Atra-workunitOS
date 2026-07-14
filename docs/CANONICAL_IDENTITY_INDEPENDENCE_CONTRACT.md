@@ -97,7 +97,40 @@ attestation output schema is unchanged: it stores the derived canonical reviewer
 tenant ID and never stores session tokens, session IDs, email addresses, roles, or raw
 session data.
 
-## 6. Identity Independence Verifier
+## 6. Snapshot Consistency (Validation/Use TOCTOU)
+
+Every unknown object that crosses an identity boundary is reduced to a single-read
+snapshot before it is used, and validation and use always operate on that **same**
+snapshot:
+
+```text
+single-read snapshot → validate that exact snapshot → construct / compare / project
+                       using that exact snapshot (the original is never re-read)
+```
+
+This applies at all three boundaries:
+
+- **`createReviewAttestation`** snapshots the reviewer identity (and the source Human
+  Decision) once; validation, the actor-kind/source/subject/tenant checks, and the
+  derived stored `reviewer_id`/`tenant_id` all read that snapshot.
+- **`verifyIdentityIndependence`** takes one top-level snapshot and then one nested
+  snapshot per artifact and per identity position; every provenance, tenant, binding,
+  and canonical-user comparison reads only those snapshots.
+- **`createIdentityIndependenceAuditEvent`** takes one snapshot of the input, evaluates
+  the verifier on it, and projects the record identifiers and `evaluated_at` from that
+  same snapshot — so the decision and its audit projection describe the same evaluated
+  input.
+
+A hostile getter or `Proxy`/`ownKeys` trap can therefore never return one value at
+validation time and a different value at use time: an identity that validates as one
+reviewer cannot be stored or compared as another, and the audit event cannot emit a
+value the verifier never saw (including a sensitive string). A throwing getter or
+`ownKeys` trap fails closed with the existing stable issue vocabulary and never escapes.
+This is snapshot **consistency** only; it does not convert the compile-time opaque
+brand into cryptographic proof, and future runtime gates (Issue #145) must still
+re-check identity server-side immediately before use.
+
+## 7. Identity Independence Verifier
 
 `verifyIdentityIndependence(input)` is pure, deterministic, clock-free, and I/O-free. It
 consumes the validated Human Decision Record, the Four-Eyes Review Evidence artifact,
@@ -134,12 +167,12 @@ Equality rules (canonical `tenant_id + user_id`, never role):
 | creator vs approver               | fail — `self_approval_forbidden`                    |
 | first reviewer vs approver        | fail — `self_approval_forbidden`                    |
 | second reviewer vs approver       | fail — `self_approval_forbidden`                    |
-| executor vs approver              | NOT evaluated here — deferred to Issue #145 (see §7) |
+| executor vs approver              | NOT evaluated here — deferred to Issue #145 (see §8) |
 
 The issue `field` names the conflicting actor position; the actual user ID never
 appears in any issue.
 
-## 7. Executor Rule Deferral
+## 8. Executor Rule Deferral
 
 The executor identity is represented in the model and, when present, validated for
 shape, actor kind, trusted source, and tenant — but this patch deliberately does NOT
@@ -147,7 +180,7 @@ decide whether the executor must differ from the approver. That rule belongs to 
 Issue #145 runtime authorization gate. A present, valid executor identity is never
 interpreted as execution permission and grants nothing.
 
-## 8. Stable Result and Issue Codes
+## 9. Stable Result and Issue Codes
 
 The verifier returns a frozen `{ ok, issues }` with a defensively copied, frozen issue
 array. Messages are stable `code:field` strings that never contain supplied identity
@@ -161,7 +194,7 @@ maintains no duplicate list:
 `duplicate_reviewer_identity`, `self_approval_forbidden`, `delegation_not_supported`,
 `identity_validation_exception`.
 
-## 9. Redacted Audit Projection
+## 10. Redacted Audit Projection
 
 `createIdentityIndependenceAuditEvent(input)` runs the verifier internally (a fabricated
 `ok: true` object can never produce a verified event) and projects a frozen, redacted
@@ -178,7 +211,7 @@ IDs, email addresses, roles, raw session objects, payloads, payload hashes, secr
 tokens, ApprovalStore records, or authorization material. The factory never calls the
 runtime audit logger.
 
-## 10. Existing Route Responsibility
+## 11. Existing Route Responsibility
 
 The ActionPreview approval route (`app/api/workunit/[id]/approval/route.ts`) keeps its
 immediate LOCAL defense, behaviorally unchanged in this patch: the creator comes from
@@ -188,14 +221,14 @@ identity gate is broader (requester / creator / reviewers / approver provenance 
 cross-role equality) and must never replace or weaken that local defense. The gate is
 NOT wired into the route in this patch.
 
-## 11. Issue #144 / #145 Responsibility
+## 12. Issue #144 / #145 Responsibility
 
 - **Issue #144:** binding Human Decision, Review Evidence, ActionPreview, and
   ApprovalStore records (canonical payload construction, record linkage).
 - **Issue #145:** the final runtime authorization gate with immediately-before-use
-  identity re-checks, and the executor-separation decision (§7).
+  identity re-checks, and the executor-separation decision (§8).
 
-## 12. Non-authorization Statement
+## 13. Non-authorization Statement
 
 Identity verification is not approval, not authorization, and not execution permission.
 This contract authorizes no ApprovalStore approval, no approval creation, no runtime
