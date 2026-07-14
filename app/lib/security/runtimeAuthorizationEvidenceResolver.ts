@@ -1,0 +1,170 @@
+/**
+ * P6-FIX-012 (Issue #145): the server-authoritative Runtime Authorization
+ * evidence resolver.
+ *
+ * The final runtime authorization gate must NEVER accept the Phase 6 evidence
+ * bundle from the client. The client names only inert identifiers
+ * (tenant + WorkUnit + ActionPreview + Approval); this resolver is the ONLY way
+ * the gate obtains the server-owned CURRENT sources required to re-run
+ * `verifyApprovalLinkage`: the Approval Linkage Record, Human Decision, Four-Eyes
+ * Review Evidence, Identity Independence input, the current stored ActionPreview,
+ * the current stored Approval Record, and the current revoke/consume snapshots.
+ *
+ * FRESH-TIME BOUNDARY (P6-FIX-012 repair). The resolver returns the RAW
+ * server-owned sources — it does NOT bake a security evaluation timestamp into a
+ * pre-built verification context. The gate stamps the authoritative evaluation
+ * instant with its trusted clock AFTER this asynchronous read and builds the
+ * verification context from these raw sources, so a slow resolver can never let
+ * a stale timestamp survive across the async boundary.
+ *
+ * DEFAULT-DENY. The default production resolver resolves NOTHING — missing
+ * evidence fails closed. No Phase 6 evidence persistence (and no D1 migration or
+ * evidence table) is added in this Issue. An in-memory resolver exists only for
+ * tests / explicitly enabled development, and a test-only override seam lets
+ * route tests inject a seeded resolver. Lookup is tenant-scoped and bound to
+ * tenant + WorkUnit + ActionPreview + Approval; any unmatched lookup returns null.
+ */
+
+import type { TenantId } from "../tenant/types.ts"
+
+// ─── Raw server-owned sources (no evaluation timestamp) ─────────
+
+/**
+ * The raw current sources for the linkage chain, EXACTLY as
+ * `ApprovalLinkageContext` minus `evaluated_at` (which the gate stamps with its
+ * post-resolution trusted clock). The identity_input likewise carries no
+ * evaluation timestamp; the gate injects the fresh instant into both.
+ */
+export type RuntimeAuthorizationEvidenceSources = {
+  readonly tenant_id: string
+  readonly human_decision: unknown
+  readonly review_evidence: unknown
+  readonly identity_input: unknown
+  readonly action_preview: unknown
+  readonly approval_record: unknown
+  readonly revoked_review_evidence_ids: readonly string[]
+  readonly consumed_review_evidence_ids: readonly string[]
+  readonly revoked_approval_ids: readonly string[]
+  readonly consumed_approval_ids: readonly string[]
+  readonly revoked_approval_linkage_ids: readonly string[]
+  readonly consumed_approval_linkage_ids: readonly string[]
+}
+
+/**
+ * The server-owned evidence bundle. `linkage` is the stored Approval Linkage
+ * Record; `sources` are the raw current sources (no evaluation time);
+ * `intendedAction` is the server-derived envelope (`targetHash`/`payloadHash`
+ * from stored ActionPreview content, never the client).
+ */
+export type RuntimeAuthorizationEvidenceBundle = {
+  readonly linkage: unknown
+  readonly sources: RuntimeAuthorizationEvidenceSources
+  readonly intendedAction: {
+    readonly tenantId: string
+    readonly workUnitId: string
+    readonly actionPreviewId: string
+    readonly approvalId: string
+    readonly actionType: string
+    readonly targetHash: string
+    readonly payloadHash: string
+  }
+}
+
+export type RuntimeAuthorizationEvidenceQuery = {
+  readonly tenantId: string
+  readonly workUnitId: string
+  readonly actionPreviewId: string
+  readonly approvalId: string
+}
+
+export interface RuntimeAuthorizationEvidenceResolver {
+  resolveEvidenceBundle(
+    input: RuntimeAuthorizationEvidenceQuery,
+  ): Promise<RuntimeAuthorizationEvidenceBundle | null>
+}
+
+// ─── Default-deny production resolver ────────────────────────────
+
+/**
+ * The safe default: resolves nothing. Production runtime authorization stays
+ * closed until a real server-authoritative evidence persistence layer exists.
+ */
+export const defaultDenyRuntimeAuthorizationEvidenceResolver: RuntimeAuthorizationEvidenceResolver = {
+  async resolveEvidenceBundle() {
+    return null
+  },
+}
+
+// ─── In-memory resolver (tests / opt-in dev only) ───────────────
+
+function bundleKey(tenantId: string, workUnitId: string, actionPreviewId: string, approvalId: string): string {
+  return [tenantId, workUnitId, actionPreviewId, approvalId].join(" ")
+}
+
+export type SeededRuntimeAuthorizationEvidence = {
+  readonly tenantId: string
+  readonly workUnitId: string
+  readonly actionPreviewId: string
+  readonly approvalId: string
+  readonly bundle: RuntimeAuthorizationEvidenceBundle
+}
+
+/**
+ * Create an in-memory evidence resolver for tests or explicitly enabled
+ * development. Lookups are tenant-scoped and bound to the exact tuple. Never
+ * wired into a production path.
+ */
+export function createInMemoryRuntimeAuthorizationEvidenceResolver(
+  seed: readonly SeededRuntimeAuthorizationEvidence[] = [],
+): RuntimeAuthorizationEvidenceResolver & {
+  seedEvidence(entry: SeededRuntimeAuthorizationEvidence): void
+} {
+  const store = new Map<string, RuntimeAuthorizationEvidenceBundle>()
+  for (const entry of seed) {
+    store.set(bundleKey(entry.tenantId, entry.workUnitId, entry.actionPreviewId, entry.approvalId), entry.bundle)
+  }
+  return {
+    async resolveEvidenceBundle(input) {
+      return store.get(bundleKey(input.tenantId, input.workUnitId, input.actionPreviewId, input.approvalId)) ?? null
+    },
+    seedEvidence(entry) {
+      store.set(bundleKey(entry.tenantId, entry.workUnitId, entry.actionPreviewId, entry.approvalId), entry.bundle)
+    },
+  }
+}
+
+// ─── Test-only override seam ─────────────────────────────────────
+
+let testResolverOverride: RuntimeAuthorizationEvidenceResolver | null = null
+
+/**
+ * Test-only: install an evidence resolver the route resolver will return. Used
+ * by route-level dry-run / gate parity tests to exercise the real route with
+ * seeded server-authoritative evidence. Never set in production.
+ */
+export function setRuntimeAuthorizationEvidenceResolverForTests(
+  resolver: RuntimeAuthorizationEvidenceResolver | null,
+): void {
+  testResolverOverride = resolver
+}
+
+/** Reset the test-only override. */
+export function resetRuntimeAuthorizationEvidenceResolverForTests(): void {
+  testResolverOverride = null
+}
+
+/**
+ * Resolve the runtime authorization evidence resolver. Returns the test-only
+ * override when one is installed; otherwise default-deny. No production evidence
+ * persistence exists in this Issue — the signature is stable so gate/route code
+ * does not change when a real server-authoritative resolver lands.
+ */
+export function resolveRuntimeAuthorizationEvidenceResolver(
+  tenantId: TenantId,
+  env?: NodeJS.ProcessEnv,
+): RuntimeAuthorizationEvidenceResolver {
+  void tenantId
+  void env
+  if (testResolverOverride !== null) return testResolverOverride
+  return defaultDenyRuntimeAuthorizationEvidenceResolver
+}

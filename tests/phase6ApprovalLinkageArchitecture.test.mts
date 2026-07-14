@@ -121,19 +121,24 @@ test("no live route, ApprovalStore, or binding imports the linkage module", () =
   }
 })
 
-test("the live Approval / ActionPreview routes and ApprovalStore are byte-identical to the P6-FIX-011 baseline", () => {
-  // CI-safe: compare content SHA-256 digests against digests pinned at the
-  // baseline commit 354fe0c5d0aabc43460c8065ff0c1bd67c548582. This uses no
+test("the live Approval / ActionPreview routes are byte-identical to the P6-FIX-011 baseline; ApprovalStore is pinned at the sanctioned P6-FIX-012 content", () => {
+  // CI-safe: compare content SHA-256 digests against pinned digests. This uses no
   // remote refs, no `origin/main`, no `git fetch`, and no network — so it
-  // passes identically in a normal checkout AND in the shallow
-  // `pull/162/merge` merge-ref checkout GitHub Actions uses.
+  // passes identically in a normal checkout AND in the shallow merge-ref
+  // checkout GitHub Actions uses.
+  //
+  // The two live routes remain byte-identical to the P6-FIX-011 baseline
+  // (354fe0c). `approvalStore.ts` is intentionally advanced by Issue #145
+  // (P6-FIX-012): it adds the exact-binding `claimApprovalForRuntime` method and
+  // harmonizes `verifyApproval` expiry to inclusive-fail. Its pin is therefore
+  // updated to the P6-FIX-012 content; a further accidental edit still fails.
   const PINNED_BASELINE_DIGESTS: Readonly<Record<string, string>> = {
     "app/api/workunit/[id]/approval/route.ts":
       "7b893beba7c2e9cdcdb6c712d13aea6e5b9548e4b8bb571c28b14bf5fcedc61c",
     "app/api/workunit/[id]/action-preview/route.ts":
       "41ddc957aaa99d77ecc6257969a4475328239e0a20673f475831333231e6daab",
     "app/lib/security/approvalStore.ts":
-      "05e0b159ef3a2d320caf11620a43c78e4cbd394fea2c86b598ae83d338ae4a29",
+      "fe95e65db109e10f60236a9ebe2870c29b7dcdd8ed837e3b9397aa9937d0c04c",
   }
   for (const [rel, pinned] of Object.entries(PINNED_BASELINE_DIGESTS)) {
     const bytes = readFileSync(`${REPO_ROOT}${rel}`)

@@ -79,9 +79,23 @@ test("route does not trust client-provided role in body", () => {
 // ─── Safe error verification ─────────────────────────────────
 
 test("safe errors in route do not include Authorization", () => {
-  for (const p of ["Authorization", "Bearer", "API_KEY", "SECRET", "TOKEN", "sk-"]) {
-    const lines = SRC_ROUTE.split("\n").filter((l) => l.includes(p) && !l.includes("//") && !l.includes("*"))
-    assert.equal(lines.length, 0, `should not contain ${p} in route logic`)
+  // Guard against leaking the HTTP Authorization header or secret material into
+  // route logic. Domain identifiers such as `runtimeAuthorization*` (Issue #145)
+  // legitimately contain the word "Authorization" as part of a camelCase name and
+  // are NOT secrets, so the Authorization check matches the header key at an
+  // identifier boundary (e.g. a quoted "Authorization" header) rather than any
+  // occurrence embedded in a longer identifier.
+  const checks: Array<{ label: string; test: (l: string) => boolean }> = [
+    { label: "Authorization", test: (l) => /(?<![A-Za-z])Authorization/.test(l) },
+    { label: "Bearer", test: (l) => l.includes("Bearer") },
+    { label: "API_KEY", test: (l) => l.includes("API_KEY") },
+    { label: "SECRET", test: (l) => l.includes("SECRET") },
+    { label: "TOKEN", test: (l) => l.includes("TOKEN") },
+    { label: "sk-", test: (l) => l.includes("sk-") },
+  ]
+  for (const check of checks) {
+    const lines = SRC_ROUTE.split("\n").filter((l) => check.test(l) && !l.includes("//") && !l.includes("*"))
+    assert.equal(lines.length, 0, `should not contain ${check.label} in route logic`)
   }
 })
 

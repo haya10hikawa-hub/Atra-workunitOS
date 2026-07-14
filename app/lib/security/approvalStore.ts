@@ -17,6 +17,7 @@
 
 import type { ActionApprovalRecord, ApprovalActionType, ApprovalStatus } from "../domain/types.ts"
 import type { TenantId } from "../tenant/types.ts"
+import { isIsoUtcTimestamp } from "../phase6/shared/isoUtcTimestamp.ts"
 
 // ─── Lookup Input ───────────────────────────────────────────────
 
@@ -29,6 +30,26 @@ export type ApprovalLookupInput = {
   targetHash: string
   payloadHash: string
   now: string
+}
+
+// ─── Runtime Claim Input (Issue #145) ───────────────────────────
+
+/**
+ * The exact-binding envelope for the final runtime authorization claim
+ * (`claimApprovalForRuntime`). Unlike the legacy unbound `markApprovalUsed(id)`,
+ * every binding field must match the stored approval row atomically, so a claim
+ * for a substituted target, payload, action type, WorkUnit, ActionPreview,
+ * Approval id, or tenant matches zero rows and returns false.
+ */
+export type RuntimeApprovalClaimInput = {
+  readonly tenantId: TenantId
+  readonly workUnitId: string
+  readonly actionPreviewId: string
+  readonly approvalId: string
+  readonly actionType: ApprovalActionType
+  readonly targetHash: string
+  readonly payloadHash: string
+  readonly claimedAt: string
 }
 
 // ─── Verification Result ────────────────────────────────────────
@@ -59,8 +80,24 @@ export interface ApprovalStore {
    * unused, and unexpired at the moment of the compare-and-set). Returns false
    * when the claim was lost — already used, expired, or a concurrent winner —
    * in which case the caller must fail closed and must NOT proceed.
+   *
+   * LEGACY / UNBOUND. Retained for backward compatibility with existing
+   * consumers; the Issue #145 runtime gate must use `claimApprovalForRuntime`,
+   * which binds every action field, and must never use this unbound method.
    */
   markApprovalUsed(approvalId: string, usedAt: string): Promise<boolean>
+
+  /**
+   * Exact-binding atomic one-time-use claim for the final runtime authorization
+   * gate (Issue #145). Returns true only when THIS call won the claim AND every
+   * binding field (tenant, Approval id, WorkUnit, ActionPreview, action type,
+   * target hash, payload hash) matched the stored `approved`, unused, unexpired
+   * row at the moment of the compare-and-set. Any mismatch, or a lost race,
+   * updates zero rows and returns false; the caller must fail closed.
+   *
+   * Inclusive-fail expiry: a claim exactly at `expiresAt` fails.
+   */
+  claimApprovalForRuntime(input: RuntimeApprovalClaimInput): Promise<boolean>
 }
 
 // ─── Verification ───────────────────────────────────────────────
@@ -115,8 +152,10 @@ export async function verifyApproval(
   if (record.status === "expired") return { ok: false, error: "approval_expired" }
   if (record.status === "used") return { ok: false, error: "approval_used" }
 
-  // Expiry check (belt-and-suspenders: also check timestamp)
-  if (new Date(input.now) > new Date(record.expiresAt)) return { ok: false, error: "approval_expired" }
+  // Expiry check (belt-and-suspenders: also check timestamp). Inclusive-fail
+  // (Issue #145 harmonization): exactly at `expiresAt` is already expired, so
+  // `verifyApproval` agrees with the D1 claim predicate `expires_at > claimedAt`.
+  if (new Date(input.now) >= new Date(record.expiresAt)) return { ok: false, error: "approval_expired" }
 
   if (record.status !== "approved") return { ok: false, error: "approval_required" }
 
@@ -132,6 +171,7 @@ export async function verifyApproval(
 export const defaultDenyApprovalStore: ApprovalStore = {
   async findApprovalById() { return null },
   async markApprovalUsed() { return false },
+  async claimApprovalForRuntime() { return false },
 }
 
 // ─── In-Memory Store (Tests / Dev) ──────────────────────────────
@@ -167,6 +207,27 @@ export function createInMemoryApprovalStore(): ApprovalStore & {
       if (record.usedAt) return false
       if (new Date(usedAt) > new Date(record.expiresAt)) return false
       records.set(approvalId, { ...record, status: "used" as ApprovalStatus, usedAt })
+      return true
+    },
+
+    async claimApprovalForRuntime(input) {
+      // Issue #145: exact-binding compare-and-set. Predicate parity with the D1
+      // CLAIM_FOR_RUNTIME_SQL. Any binding-field mismatch, wrong status, prior
+      // use, malformed/non-ISO claimedAt, or inclusive-fail expiry
+      // (claimedAt >= expiresAt) claims nothing.
+      if (!isIsoUtcTimestamp(input.claimedAt)) return false
+      const record = records.get(input.approvalId)
+      if (!record) return false
+      if (record.tenantId !== input.tenantId) return false
+      if (record.workUnitId !== input.workUnitId) return false
+      if (record.actionPreviewId !== input.actionPreviewId) return false
+      if (record.actionType !== input.actionType) return false
+      if (record.targetHash !== input.targetHash) return false
+      if (record.payloadHash !== input.payloadHash) return false
+      if (record.status !== "approved") return false
+      if (record.usedAt) return false
+      if (new Date(input.claimedAt) >= new Date(record.expiresAt)) return false
+      records.set(input.approvalId, { ...record, status: "used" as ApprovalStatus, usedAt: input.claimedAt })
       return true
     },
 

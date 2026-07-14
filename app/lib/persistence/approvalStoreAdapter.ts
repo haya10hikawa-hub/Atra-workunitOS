@@ -15,6 +15,7 @@ import type { ActionApprovalRecord } from "../domain/types.ts"
 import type { TenantDbContext } from "./types.ts"
 import type { ApprovalRecordRepository } from "./repositories.ts"
 import { approvalRecordRowToDomain } from "./mappers.ts"
+import { isIsoUtcTimestamp } from "../phase6/shared/isoUtcTimestamp.ts"
 
 /**
  * Create an ApprovalStore backed by an ApprovalRecordRepository.
@@ -51,6 +52,32 @@ export function createRepositoryBackedApprovalStore(
         // returns the row only when this call claimed the one-time use, and
         // null otherwise. Surface that as the claim result.
         const claimed = await repo.markUsed(ctx, approvalId, usedAt)
+        return claimed !== null
+      } catch {
+        // Fail closed: treat a repository error as "claim not won".
+        return false
+      }
+    },
+
+    async claimApprovalForRuntime(input): Promise<boolean> {
+      try {
+        // Issue #145: the repository claimForRuntime is an exact-binding atomic
+        // compare-and-set. It returns the row only when this call won the claim
+        // with every binding field matching; null otherwise. The tenant is the
+        // adapter's fixed ctx.tenantId — the caller-supplied input.tenantId is
+        // additionally cross-checked so a mismatched tenant claims nothing.
+        // A malformed/non-ISO claimedAt is rejected before touching the repo.
+        if (!isIsoUtcTimestamp(input.claimedAt)) return false
+        if (input.tenantId !== ctx.tenantId) return false
+        const claimed = await repo.claimForRuntime(ctx, {
+          id: input.approvalId,
+          workUnitId: input.workUnitId,
+          actionPreviewId: input.actionPreviewId,
+          actionType: input.actionType,
+          targetHash: input.targetHash,
+          payloadHash: input.payloadHash,
+          claimedAt: input.claimedAt,
+        })
         return claimed !== null
       } catch {
         // Fail closed: treat a repository error as "claim not won".

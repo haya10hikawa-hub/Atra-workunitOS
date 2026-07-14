@@ -3,7 +3,7 @@ import { listToolBackendAdapters, runToolBackendRequest } from "../../../lib/too
 import { validateToolBackendRequest } from "../../../lib/toolBackendValidation.ts"
 import { areExternalActionsEnabled, isExternalOperation } from "../../../lib/security/externalActions.ts"
 import { getSafeErrorStatus, safeError, toSafeErrorCode } from "../../../lib/security/safeErrors.ts"
-import { getSessionErrorStatus, requireSession } from "../../../lib/security/session.ts"
+import { getSessionErrorStatus, requireSession, type Session } from "../../../lib/security/session.ts"
 import { validateCsrfOrigin } from "../../../lib/security/csrfProtection.ts"
 import { resolveRequestId } from "../../../lib/security/routeGuards.ts"
 import { checkRateLimit, getTrustedClientIp } from "../../../lib/security/rateLimitGate.ts"
@@ -11,7 +11,7 @@ import { hasPermission } from "../../../lib/security/rbac.ts"
 import { writeAuditLog, type AuditEventKind, type AuditEvent } from "../../../lib/security/auditLog.ts"
 import { recordAuditEvent } from "../../../lib/security/auditPersistence.ts"
 import type { WorkUnitPermission } from "../../../lib/security/policy.ts"
-import type { ToolBackendOperation } from "../../../types/toolBackend.ts"
+import type { ToolBackendOperation, ToolBackendRequest } from "../../../types/toolBackend.ts"
 import { readBoundedJsonObject } from "../../../lib/security/requestBody.ts"
 
 // LLM pipeline imports
@@ -25,6 +25,12 @@ import { resolveApprovalStore, resolveRepositoryBackedApprovalStore } from "../.
 
 // Repository resolver (for preview hash context resolution)
 import { resolveRouteRepositories } from "../../../lib/persistence/routeRepositories.ts"
+
+// Runtime authorization gate (Issue #145) — the final gate for external ops.
+import { authorizeRuntimeCommand } from "../../../lib/security/runtimeAuthorizationGate.ts"
+import { resolveRuntimeAuthorizationEvidenceResolver } from "../../../lib/security/runtimeAuthorizationEvidenceResolver.ts"
+import type { RuntimeAuthorizationAuditSink } from "../../../lib/phase6/runtimeAuthorization/index.ts"
+import type { ApprovalActionType } from "../../../lib/domain/types.ts"
 
 // TODO: tenant boundary — validate that the requested source belongs to the caller's tenant
 // Phase 5A: CSRF, rate limit, and role fail-closed hardening applied above
@@ -249,6 +255,22 @@ export async function POST(request: Request): Promise<NextResponse> {
   // NOTE: validated request has already stripped approvedByPm and externalConfig.
   // The client cannot authorize external execution or choose arbitrary targets.
 
+  // ── 7b. Final runtime authorization gate (Issue #145) ─────────
+  // External operations no longer reach the legacy verifyApproval →
+  // markApprovalUsed backend path. They are routed through the server-side
+  // runtime authorization gate, which loads all Phase 6 evidence from the
+  // server-authoritative resolver (never the client body), re-runs
+  // verifyApprovalLinkage internally, evaluates the Human Decision runtime
+  // matrix, enforces executor-vs-approver separation, rechecks RBAC + the kill
+  // switch, and performs the exact-binding atomic claim. On success it returns
+  // an `authorized_not_executed` receipt — NO provider is called, no
+  // ExecutionResult is created, and no externalRef is returned. The evidence
+  // resolver is default-deny in this patch, so production external operations
+  // fail closed until server-authoritative evidence persistence lands.
+  if (isExternalOperation(validated.operation)) {
+    return await authorizeExternalOperation(validated, session, requestId)
+  }
+
   // ── 8. Execute (legacy backend) ───────────────────────────────
   try {
     let approvalStore = resolveApprovalStore(session.tenantId as TenantId)
@@ -297,6 +319,141 @@ export async function POST(request: Request): Promise<NextResponse> {
     audit("internal_error", requestId, { operation: validated.operation })
     return errorResponse(requestId, "internal_error", 500)
   }
+}
+
+// ─── Runtime Authorization (Issue #145) ─────────────────────────
+
+/** Map an external operation + source to its ApprovalActionType. */
+function runtimeActionTypeFor(
+  operation: ToolBackendOperation,
+  source: ToolBackendRequest["source"],
+): ApprovalActionType | null {
+  if (operation === "create_issue") return "github_issue"
+  if (operation === "schedule") return "calendar_event"
+  if (operation === "reply") return source === "gmail" ? "gmail_reply" : "slack_reply"
+  return null
+}
+
+/** Map a runtime authorization failure state to a safe error + audit kind. */
+function mapRuntimeAuthorizationFailure(
+  state: string,
+): { code: ReturnType<typeof safeError>["error"]; status: number; auditKind: AuditEventKind } {
+  switch (state) {
+    case "invalid":
+      return { code: "invalid_request", status: 400, auditKind: "runtime_authorization_rejected" }
+    case "not_ready":
+    case "revoked":
+      return { code: "approval_required", status: 403, auditKind: "runtime_authorization_rejected" }
+    case "forbidden":
+      return { code: "forbidden", status: 403, auditKind: "runtime_authorization_rejected" }
+    case "stale":
+      return { code: "conflict", status: 409, auditKind: "runtime_authorization_rejected" }
+    case "expired":
+      return { code: "approval_expired", status: 403, auditKind: "runtime_authorization_rejected" }
+    case "used":
+    case "replayed":
+      return { code: "approval_used", status: 409, auditKind: "runtime_authorization_replayed" }
+    case "blocked":
+      return { code: "external_actions_disabled", status: 403, auditKind: "runtime_authorization_blocked" }
+    default:
+      return { code: "internal_error", status: 500, auditKind: "runtime_authorization_rejected" }
+  }
+}
+
+/**
+ * Drive the final runtime authorization gate for an external operation. Returns
+ * only a redacted `authorized_not_executed` summary on success (no hashes, no
+ * executor id, no target/payload, no externalRef), or a mapped safe error. No
+ * provider is ever called and no ExecutionResult is created.
+ */
+async function authorizeExternalOperation(
+  validated: ToolBackendRequest,
+  session: Session,
+  requestId: string,
+): Promise<NextResponse> {
+  const actionType = runtimeActionTypeFor(validated.operation, validated.source)
+  const workUnitId = validated.draft?.id
+  if (!actionType || !workUnitId) {
+    audit("runtime_authorization_rejected", requestId, { operation: validated.operation, reason: "invalid_request" })
+    return errorResponse(requestId, "invalid_request", 400)
+  }
+  if (!validated.approvalId || !validated.actionPreviewId) {
+    audit("runtime_authorization_rejected", requestId, { operation: validated.operation, reason: "approval_required" })
+    return errorResponse(requestId, "approval_required", 403)
+  }
+
+  // The ApprovalStore is resolved for the atomic claim; the evidence resolver is
+  // default-deny in this patch, so the gate fails closed before any claim in
+  // production. Neither carries client-supplied evidence.
+  const approvalStore = resolveApprovalStore(session.tenantId as TenantId)
+  const evidenceResolver = resolveRuntimeAuthorizationEvidenceResolver(session.tenantId as TenantId)
+
+  // Redacted, DURABLE audit sink: the gate buffers the requested → eligible →
+  // claimed → created lifecycle (or rejected/replayed/blocked) as already-redacted
+  // events and flushes them here ONCE, after the terminal decision — never inside
+  // the security-critical window. Persistence is AWAITED (internally fail-open) so
+  // its completion is attached to the request lifecycle; a persistence failure
+  // never changes the authorization result. Issue codes are the gate's canonical
+  // allowlisted reasons.
+  const auditSink: RuntimeAuthorizationAuditSink = {
+    async flush(events) {
+      for (const event of events) {
+        const reason = event.issue_codes[0] ?? event.state
+        audit(event.event_kind as AuditEventKind, requestId, {
+          operation: validated.operation,
+          metadata: {
+            actionType: event.action_type,
+            actionPreviewId: event.action_preview_id,
+            approvalId: event.approval_id,
+            reason,
+          },
+        })
+        await persistAuditEvent(session.tenantId, {
+          kind: event.event_kind as AuditEventKind,
+          timestamp: event.evaluated_at,
+          requestId,
+          actorId: session.userId,
+          workUnitId: event.workunit_id === "redacted" ? undefined : event.workunit_id,
+          reason,
+          metadata: { operation: validated.operation, actionType: event.action_type },
+        })
+      }
+    },
+  }
+
+  const result = await authorizeRuntimeCommand({
+    session,
+    request: {
+      tenantId: session.tenantId,
+      workUnitId,
+      actionPreviewId: validated.actionPreviewId,
+      approvalId: validated.approvalId,
+      actionType,
+    },
+    approvalStore,
+    evidenceResolver,
+    auditSink,
+  })
+
+  if (!result.ok) {
+    const mapped = mapRuntimeAuthorizationFailure(result.state)
+    return errorResponse(requestId, mapped.code, mapped.status)
+  }
+
+  // Success: authorized, NOT executed. Return only redacted, safe identifiers.
+  return json({
+    ok: true,
+    requestId,
+    mode: "runtime_authorization",
+    status: "authorized_not_executed",
+    authorizationId: result.receipt.authorization_id,
+    workUnitId,
+    actionPreviewId: validated.actionPreviewId,
+    approvalId: validated.approvalId,
+    actionType: result.receipt.action_type,
+    expiresAt: result.receipt.expires_at,
+    errors: [],
+  }, 200)
 }
 
 // ─── LLM Error Mapping ──────────────────────────────────────────
