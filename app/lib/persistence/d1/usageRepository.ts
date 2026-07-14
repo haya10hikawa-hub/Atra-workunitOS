@@ -26,7 +26,10 @@ export class D1UsageRepository implements UsageRepository {
     return { ...row, tenantId: _ctx.tenantId }
   }
 
-  async getDailySummary(_ctx: TenantDbContext, _tenantId: string, date: string): Promise<UsageDailySummaryRow[]> {
+  async getDailySummary(_ctx: TenantDbContext, tenantId: string, date: string): Promise<UsageDailySummaryRow[]> {
+    // The redundant tenant argument must equal ctx.tenantId, else fail closed
+    // (parity with the in-memory repo; a caller cannot read another tenant's usage).
+    if (tenantId !== _ctx.tenantId) return []
     const rows = await this.db.prepare(
       "SELECT * FROM usage_daily_summary WHERE tenant_id = ? AND date = ?",
     ).bind(_ctx.tenantId, date).all<Record<string, unknown>>()
@@ -34,6 +37,7 @@ export class D1UsageRepository implements UsageRepository {
   }
 
   async getCurrentUsage(_ctx: TenantDbContext, tenantId: string, eventType: string): Promise<number> {
+    if (tenantId !== _ctx.tenantId) return 0
     const rows = await this.db.prepare(
       "SELECT * FROM usage_events WHERE tenant_id = ? AND event_type = ?",
     ).bind(_ctx.tenantId, eventType).all<Record<string, unknown>>()

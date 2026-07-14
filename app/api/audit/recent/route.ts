@@ -26,7 +26,9 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   const repoResult = await resolveRouteRepositories(sessionResult.session.tenantId as TenantId, runtime)
   if (!repoResult.ok) {
-    if (process.env.NODE_ENV === "production") return NextResponse.json(safeError(requestId, repoResult.error), { status: repoResult.status })
+    // Cloudflare production NEVER returns an empty successful audit response on a
+    // persistence failure — surface the safe error. Local dev fallback only.
+    if (runtime.source === "cloudflare") return NextResponse.json(safeError(requestId, repoResult.error), { status: repoResult.status })
     return NextResponse.json({ auditLogs: [] })
   }
 

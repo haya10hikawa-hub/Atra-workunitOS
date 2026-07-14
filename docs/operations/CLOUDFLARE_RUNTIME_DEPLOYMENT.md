@@ -231,11 +231,15 @@ P7.1 MAC wiring is introduced.
 
 ## 12. Remaining dependencies
 
-- **Issue #130** still owns the tenant DB resolver and per-tenant repository
-  isolation (control-DB tenant registry lookup, per-tenant DB resolution,
-  shared-vs-per-tenant architecture, in-memory/D1 tenant-isolation parity). This
-  patch preserves the current `TENANT_DB_DEFAULT` behavior and only ensures the
-  request-scoped binding is genuine and validated.
+- **Issue #130** (tenant DB resolver + tenant-isolated repository parity) is
+  addressed by **P0-PERSIST-014**: the control registry is validated before
+  repositories are returned, `TENANT_DB_DEFAULT` is returned via the resolver
+  (never the control DB), and in-memory / D1 repositories enforce the same
+  row-level tenant scoping. See
+  [CLOUDFLARE_D1_SETUP.md §9a](CLOUDFLARE_D1_SETUP.md). The chosen architecture is
+  a single **shared** tenant D1 (row-level isolation); physical per-tenant D1
+  routing is deferred.
 - **Issue #155** still owns the broader reproducible production
-  persistence/migration proof. This patch does not claim production readiness
-  from a passing dry-run.
+  persistence/migration proof (migration ordering, idempotence, seeding,
+  operational setup). This patch does not claim production readiness from passing
+  FakeD1 tests or a dry-run.

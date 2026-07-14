@@ -54,9 +54,66 @@ export type TenantRepositoryBundle = {
   ctx: TenantDbContext
 }
 
+export type RepositoryResolutionError =
+  | "persistence_disabled"
+  | "tenant_resolution_failed"
+  | "tenant_forbidden"
+  | "d1_not_configured"
+
 export type RepositoryResolutionResult =
   | { ok: true; bundle: TenantRepositoryBundle }
-  | { ok: false; error: "persistence_disabled" | "tenant_resolution_failed" | "d1_not_configured" }
+  | { ok: false; error: RepositoryResolutionError }
+
+// ─── Tenant resolver consumption ─────────────────────────────────
+
+function isD1Like(value: unknown): value is D1DatabaseLike {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "prepare" in value &&
+    typeof (value as { prepare?: unknown }).prepare === "function"
+  )
+}
+
+/**
+ * Run the tenant DB resolver and validate its context.
+ *
+ * - `tenant_not_found` / `tenant_inactive` → `tenant_forbidden` (do not disclose
+ *   whether another tenant exists; both map to the same safe outcome).
+ * - any other reason / thrown error / mismatched context → `tenant_resolution_failed`.
+ * - `strict` (production): `ctx.db` is authoritative — it must be a valid D1-like
+ *   object and NEVER the control DB, and `options.d1Binding` cannot override it.
+ * - non-strict (local/test): a supplied `d1Binding` may stand in for a null `ctx.db`.
+ */
+async function resolveViaTenantResolver(
+  resolver: TenantDbResolver,
+  tenantId: TenantId,
+  opts: { strict: boolean; controlDb?: D1DatabaseLike; d1Binding?: D1DatabaseLike },
+): Promise<{ ok: true; store: D1DatabaseLike; ctx: TenantDbContext } | { ok: false; error: RepositoryResolutionError }> {
+  let resolution
+  try {
+    resolution = await resolver.resolveTenantDb(tenantId)
+  } catch {
+    return { ok: false, error: "tenant_resolution_failed" }
+  }
+  if (!resolution.ok) {
+    const forbidden = resolution.reason === "tenant_not_found" || resolution.reason === "tenant_inactive"
+    return { ok: false, error: forbidden ? "tenant_forbidden" : "tenant_resolution_failed" }
+  }
+  const ctx = resolution.ctx
+  // The resolved context must be for exactly the requested authenticated tenant.
+  if (ctx.tenantId !== tenantId) return { ok: false, error: "tenant_resolution_failed" }
+
+  if (opts.strict) {
+    const store = ctx.db
+    if (!isD1Like(store)) return { ok: false, error: "tenant_resolution_failed" }
+    if (opts.controlDb && store === opts.controlDb) return { ok: false, error: "tenant_resolution_failed" }
+    return { ok: true, store, ctx }
+  }
+  const store = (opts.d1Binding ?? ctx.db) as D1DatabaseLike | null
+  if (!isD1Like(store)) return { ok: false, error: "tenant_resolution_failed" }
+  return { ok: true, store, ctx }
+}
 
 // ─── Helpers ────────────────────────────────────────────────────
 
@@ -108,17 +165,16 @@ export async function resolveRepositories(
     if (p.mode === "d1") {
       if (!p.CONTROL_DB || !p.TENANT_DB_DEFAULT) return { ok: false, error: "d1_not_configured" }
       if (options.resolver) {
-        try {
-          const ctx = await options.resolver.resolveTenantDb(tenantId)
-          const d1Store = (options.d1Binding ?? ctx.db) as D1DatabaseLike | null
-          if (!d1Store) return { ok: false, error: "d1_not_configured" }
-          return { ok: true, bundle: d1Bundle(tenantId, d1Store, ctx) }
-        } catch {
-          return { ok: false, error: "tenant_resolution_failed" }
-        }
+        // PRODUCTION path (P0-PERSIST-014): registry validation is MANDATORY.
+        // ctx.db is authoritative — a supplied d1Binding cannot override it, the
+        // control DB is never accepted as tenant storage, and the context tenant
+        // must equal the requested tenant.
+        const r = await resolveViaTenantResolver(options.resolver, tenantId, { strict: true, controlDb: p.CONTROL_DB })
+        if (!r.ok) return { ok: false, error: r.error }
+        return { ok: true, bundle: d1Bundle(tenantId, r.store, r.ctx) }
       }
-      // Preserve current TENANT_DB_DEFAULT behavior — Issue #130 still owns real
-      // per-tenant DB resolution — but the binding is genuine and validated.
+      // No resolver supplied → local/test direct path only. The production route
+      // path always supplies a resolver, so production never reaches here.
       return { ok: true, bundle: d1Bundle(tenantId, options.d1Binding ?? p.TENANT_DB_DEFAULT) }
     }
     if (p.mode === "in_memory") return { ok: true, bundle: inMemoryBundle(tenantId) }
@@ -140,18 +196,12 @@ export async function resolveRepositories(
 
     // Mode is authoritatively "d1" from the validated snapshot.
     if (options.resolver) {
-      try {
-        const ctx = await options.resolver.resolveTenantDb(tenantId)
-        const d1Store = (options.d1Binding ?? ctx.db) as D1DatabaseLike | null
-        if (!d1Store) return { ok: false, error: "d1_not_configured" }
-        return { ok: true, bundle: d1Bundle(tenantId, d1Store, ctx) }
-      } catch {
-        return { ok: false, error: "tenant_resolution_failed" }
-      }
+      const r = await resolveViaTenantResolver(options.resolver, tenantId, { strict: false, d1Binding: options.d1Binding })
+      if (!r.ok) return { ok: false, error: r.error }
+      return { ok: true, bundle: d1Bundle(tenantId, r.store, r.ctx) }
     }
 
-    // Preserve current TENANT_DB_DEFAULT behavior — Issue #130 still owns real
-    // per-tenant DB resolution — but the binding is now genuine and validated.
+    // Legacy/test path without a resolver — validated binding, no registry check.
     const d1Store = options.d1Binding ?? validated.env.TENANT_DB_DEFAULT
     return { ok: true, bundle: d1Bundle(tenantId, d1Store) }
   }
@@ -167,14 +217,9 @@ export async function resolveRepositories(
 
     case "d1": {
       if (options.resolver) {
-        try {
-          const ctx = await options.resolver.resolveTenantDb(tenantId)
-          const d1Store = (options.d1Binding ?? ctx.db) as D1DatabaseLike | null
-          if (!d1Store) return { ok: false, error: "d1_not_configured" }
-          return { ok: true, bundle: d1Bundle(tenantId, d1Store, ctx) }
-        } catch {
-          return { ok: false, error: "tenant_resolution_failed" }
-        }
+        const r = await resolveViaTenantResolver(options.resolver, tenantId, { strict: false, d1Binding: options.d1Binding })
+        if (!r.ok) return { ok: false, error: r.error }
+        return { ok: true, bundle: d1Bundle(tenantId, r.store, r.ctx) }
       }
       const d1Store = options.d1Binding ?? resolveRuntimeBinding(options)
       if (!d1Store) return { ok: false, error: "d1_not_configured" }

@@ -14,6 +14,8 @@
 import type { TenantId } from "../tenant/types.ts"
 import { resolveRepositories } from "./repositoryResolver.ts"
 import type { TenantRepositoryBundle } from "./repositoryResolver.ts"
+import type { TenantDbResolver } from "./repositories.ts"
+import { D1TenantDbResolver } from "./tenantDbResolver.ts"
 import type { SafeErrorCode } from "../security/safeErrors.ts"
 import {
   resolveValidatedRequestRuntimeConfig,
@@ -47,9 +49,28 @@ export async function resolveRouteRepositories(
     rt = resolved.runtime
   }
 
-  const result = await resolveRepositories(tenantId, { persistence: rt.persistence })
+  // In genuine Cloudflare production, D1 access MUST go through the tenant DB
+  // resolver: it validates the control registry (active tenant + active
+  // tenant_databases row) and returns the statically bound TENANT_DB_DEFAULT —
+  // never the control DB. The resolver is built from the SAME frozen runtime
+  // snapshot, never from ambient process.env. Local dev/test keeps the direct
+  // binding path (no resolver) for convenience.
+  let resolver: TenantDbResolver | undefined
+  if (rt.source === "cloudflare" && rt.persistence.mode === "d1" && rt.persistence.CONTROL_DB && rt.persistence.TENANT_DB_DEFAULT) {
+    resolver = new D1TenantDbResolver({
+      controlDb: rt.persistence.CONTROL_DB,
+      tenantDb: rt.persistence.TENANT_DB_DEFAULT,
+    })
+  }
+
+  const result = await resolveRepositories(tenantId, { persistence: rt.persistence, resolver })
 
   if (!result.ok) {
+    // Inactive/invalid tenant authorization → forbidden; unavailable/failed
+    // tenant-DB routing → integration_missing. Neither discloses registry detail.
+    if (result.error === "tenant_forbidden") {
+      return { ok: false, error: "forbidden", status: 403 }
+    }
     return { ok: false, error: "integration_missing", status: 503 }
   }
 

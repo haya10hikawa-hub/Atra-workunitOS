@@ -59,7 +59,10 @@ export async function GET(request: Request): Promise<NextResponse> {
   const generatedWorkUnits = transformSignalsToInboxWorkUnits(signals)
   const repoResult = await resolveRouteRepositories(tenantId as TenantId, runtime)
   if (!repoResult.ok) {
-    if (process.env.NODE_ENV === "production") {
+    // Cloudflare production NEVER returns generated fallback data on a persistence
+    // failure — surface the safe error. The local dev fallback is authorized only
+    // by the explicit request runtime config (source === "local").
+    if (runtime.source === "cloudflare") {
       return NextResponse.json(safeError(requestId, repoResult.error), { status: repoResult.status })
     }
     return NextResponse.json({ workUnits: generatedWorkUnits })

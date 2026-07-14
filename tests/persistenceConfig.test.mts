@@ -66,39 +66,32 @@ test("development: default is disabled", () => {
 test("fake resolver resolves active tenant", async () => {
   const tenants = new Map()
   tenants.set(tenantId, {
-    tenant: { id: tenantId, status: "active" },
-    dbRef: { tenant_id: tenantId, database_name: "test-db", status: "active" },
+    tenant: { status: "active" },
+    dbRef: { status: "active" },
   })
   const resolver = createFakeTenantDbResolver(tenants)
-  const ctx = await resolver.resolveTenantDb(tenantId)
-  assert.equal(ctx.tenantId, tenantId)
+  const resolution = await resolver.resolveTenantDb(tenantId)
+  assert.equal(resolution.ok, true)
+  if (resolution.ok) assert.equal(resolution.ctx.tenantId, tenantId)
 })
 
 test("fake resolver fails for missing tenant", async () => {
   const resolver = createFakeTenantDbResolver(new Map())
-  try {
-    await resolver.resolveTenantDb("missing-tenant" as TenantId)
-    assert.fail("Should have thrown")
-  } catch (error) {
-    const err = error as Error & { kind?: string }
-    assert.equal(err.kind, "tenant_not_found")
-  }
+  const resolution = await resolver.resolveTenantDb("missing-tenant" as TenantId)
+  assert.equal(resolution.ok, false)
+  if (!resolution.ok) assert.equal(resolution.reason, "tenant_not_found")
 })
 
 test("fake resolver fails for inactive tenant", async () => {
   const tenants = new Map()
   tenants.set(tenantId, {
-    tenant: { id: tenantId, status: "inactive" },
-    dbRef: { tenant_id: tenantId, database_name: "test-db", status: "inactive" },
+    tenant: { status: "suspended" },
+    dbRef: { status: "active" },
   })
   const resolver = createFakeTenantDbResolver(tenants)
-  try {
-    await resolver.resolveTenantDb(tenantId)
-    assert.fail("Should have thrown")
-  } catch (error) {
-    const err = error as Error & { kind?: string }
-    assert.equal(err.kind, "database_not_found")
-  }
+  const resolution = await resolver.resolveTenantDb(tenantId)
+  assert.equal(resolution.ok, false)
+  if (!resolution.ok) assert.equal(resolution.reason, "tenant_inactive")
 })
 
 // ─── Repository Bundle Resolver ────────────────────────────────

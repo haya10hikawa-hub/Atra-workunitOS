@@ -95,7 +95,9 @@ export class D1ApprovalRecordRepository implements ApprovalRecordRepository {
         row.usedAt ?? null,
       )
       .run()
-    return row
+    // The INSERT binds ctx.tenantId; the returned row must reflect it too, so a
+    // spoofed row.tenantId controls neither storage nor the return value.
+    return { ...row, tenantId: ctx.tenantId }
   }
 
   async findById(ctx: TenantDbContext, id: string): Promise<ApprovalRecordRow | null> {

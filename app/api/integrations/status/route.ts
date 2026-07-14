@@ -47,7 +47,13 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.json({ providers })
   }
 
-  // Fallback: return defaults
+  // Cloudflare production NEVER returns "fake" default provider status to mask a
+  // persistence failure — surface the safe error. Local dev fallback only.
+  if (runtime.source === "cloudflare") {
+    return NextResponse.json(safeError("status-na", repoResult.error), { status: repoResult.status })
+  }
+
+  // Local dev fallback: default statuses.
   return NextResponse.json({
     providers: ALL_PROVIDERS.map(defaultStatus),
   })
