@@ -12,7 +12,8 @@ const dashboardPanel = "app/components/workunit-os/adopted/AdoptedActionFieldPan
 
 test("dry-run route requires session", async () => {
   const source = await readFile(dryRunRoute, "utf8")
-  assert.equal(source.includes("requireSession(request)"), true)
+  // Session is required; the runtime config is threaded in (resolved once).
+  assert.equal(source.includes("requireSession(request, runtime)"), true)
 })
 
 test("dry-run route returns unauthorized on session failure", async () => {
@@ -100,7 +101,9 @@ test("binding module blocks on hash mismatch", async () => {
 
 test("dry-run route blocks when kill switch is active", async () => {
   const source = await readFile(dryRunRoute, "utf8")
-  assert.equal(source.includes("areExternalActionsEnabled()"), true)
+  // Kill switch driven by the request-scoped security config, not process.env.
+  assert.equal(source.includes("areExternalActionsEnabled(killSwitchEnv)"), true)
+  assert.equal(source.includes("projectRuntimeAuthorizationEnv(runtime.security)"), true)
   assert.equal(source.includes('reason: "kill_switch_active"'), true)
 })
 

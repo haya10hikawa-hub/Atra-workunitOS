@@ -31,7 +31,7 @@ import type { ApprovalStore } from "./approvalStore.ts"
 import type { ApprovalActionType } from "../domain/types.ts"
 import type { TenantId } from "../tenant/types.ts"
 import { hasPermission } from "./rbac.ts"
-import { areExternalActionsEnabled } from "./externalActions.ts"
+import { areExternalActionsEnabled, type KillSwitchEnv } from "./externalActions.ts"
 import { createCanonicalSessionIdentity } from "../phase6/canonicalIdentity/index.ts"
 import {
   evaluateRuntimeAuthorizationEligibility,
@@ -92,7 +92,7 @@ export type AuthorizeRuntimeCommandInput = {
   }
   readonly approvalStore: ApprovalStore
   readonly evidenceResolver: RuntimeAuthorizationEvidenceResolver
-  readonly env?: NodeJS.ProcessEnv
+  readonly env?: KillSwitchEnv | NodeJS.ProcessEnv
   readonly clock?: RuntimeAuthorizationClock
   readonly auditSink?: RuntimeAuthorizationAuditSink
 }
@@ -184,7 +184,7 @@ export type RuntimeAuthorizationCoreInput = {
   readonly session: Session
   readonly request: AuthorizeRuntimeCommandInput["request"]
   readonly evidenceResolver: RuntimeAuthorizationEvidenceResolver
-  readonly env?: NodeJS.ProcessEnv
+  readonly env?: KillSwitchEnv | NodeJS.ProcessEnv
   readonly clock?: RuntimeAuthorizationClock
 }
 

@@ -147,26 +147,37 @@ All failures are safe — the system fails closed.
 
 ## 8. Deployment Scripts
 
-- `npm run cf:build` — build for Cloudflare Pages (requires `@opennextjs/cloudflare`)
-- `npm run cf:dev` — build + local preview with Wrangler
-- `npm run cf:deploy` — build + deploy to Cloudflare Pages
-- Requires Next.js >= 16.2.6 or 15.5.18-15.x (upgrade from 16.1.6)
+Target: **Cloudflare Workers (OpenNext)** — a single target (no Pages). See
+[CLOUDFLARE_RUNTIME_DEPLOYMENT.md](CLOUDFLARE_RUNTIME_DEPLOYMENT.md).
 
-Runtime env is wired via:
-`extractCloudflareEnv()` → `setRequestRuntimeEnvInProd()` → `resolveRouteRepositories()`
+- `npm run cf:build` — OpenNext Worker build → `.open-next/worker.js` (requires `@opennextjs/cloudflare`)
+- `npm run cf:dev` — OpenNext build + local Worker preview with Wrangler
+- `npm run cf:deploy:preflight` / `cf:deploy:dry-run` — non-deploying, synthetic-only gates
+- `npm run cf:deploy` — guarded orchestrator (prepare → preflight → build → verify → deploy)
 
 See `CLOUDFLARE_D1_SETUP.md` for D1 database configuration.
 
-## 9. Architecture note
+### Production vs. local configuration source
 
-This phase keeps the existing environment variable set and adds an explicit auth rule:
+In **Cloudflare production** the request-scoped runtime config is derived ONCE per
+request from the Cloudflare env (`getCloudflareContext().env`) via
+`resolveValidatedRequestRuntimeConfig()` — auth, security (kill switch), LLM, and
+persistence all come from that single frozen snapshot, and **`process.env` is never
+consulted** (there is no `setRequestRuntimeEnvInProd` and no global env bridge). Dev
+adapters are impossible and every `ALLOW_DEV_*` flag rejects `"true"`.
 
-- `AUTH_ADAPTER=dev` is required for local dev identity resolution
-- `AUTH_ADAPTER=jwt` requires `JWT_AUTH_SECRET` and verifies identity only
-- `ALLOW_DEV_SESSION=true` is required for local dev-session access
-- `ALLOW_DEV_WORKSPACE_BOOTSTRAP=true` is required if local control DB rows should be auto-created
+The environment variables below apply to the **local Node development** path
+(`next dev`), which is explicit and separate. In Cloudflare, the same names are set
+in `wrangler.json` "vars" / `wrangler secret` and are read from the request env.
+
+## 9. Auth rules
+
+- `AUTH_ADAPTER=dev` — local dev identity resolution only (impossible in Cloudflare production)
+- `AUTH_ADAPTER=jwt` — requires an injected `JWT_AUTH_SECRET` (and, in production, issuer + audience); verifies identity only
+- `ALLOW_DEV_SESSION=true` — required for local dev-session access (rejected in production)
+- `ALLOW_DEV_WORKSPACE_BOOTSTRAP=true` — auto-create local control DB rows (rejected in production)
 - production rejects anonymous access by default
-- `DEV_SESSION_ROLE` is for local RBAC testing only
+- `DEV_SESSION_ROLE` — local RBAC testing only
 
 JWT claims never grant `tenantId` or `role`; both still come from control DB active membership.
-No provider token environment variables are introduced in this phase.
+No provider token environment variables are introduced in this patch.

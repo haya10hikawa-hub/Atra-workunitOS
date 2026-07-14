@@ -1,16 +1,15 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import {
-  getRequestRuntimeEnv,
-  runWithTestRuntimeEnv,
+  runWithInjectedRuntimeEnv,
+  peekInjectedRuntimeEnv,
   resetTestRuntimeEnvForRequest,
-  __setProductionRuntimeEnvProviderForTests,
-} from "../app/lib/runtime/cloudflareRuntimeEnv.ts"
-import { validateCloudflareRuntimeEnv } from "../app/lib/runtime/validatedRuntimeEnv.ts"
+} from "../app/lib/runtime/requestRuntimeEnvInjection.ts"
+import { resolveValidatedRequestRuntimeConfig } from "../app/lib/runtime/requestRuntimeConfig.ts"
 import { FakeD1Database } from "./helpers/fakeD1.ts"
 import type { AppEnv } from "../app/types/cloudflare-env.ts"
 
-function envFor(tag: string): AppEnv {
+function cloudflareEnv(tag: string): AppEnv {
   return {
     __tag: tag,
     CONTROL_DB: new FakeD1Database(),
@@ -23,95 +22,69 @@ function envFor(tag: string): AppEnv {
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-// ── Simulated request that reads its env before and after an await ──
+// A simulated request: resolve the config before and after an await, returning
+// the resolved persistence bindings each time.
 async function handleRequest(env: AppEnv, waitMs: number) {
-  return runWithTestRuntimeEnv(env, async () => {
-    const before = getRequestRuntimeEnv()
+  return runWithInjectedRuntimeEnv(env, async () => {
+    const before = resolveValidatedRequestRuntimeConfig()
     await delay(waitMs)
-    const after = getRequestRuntimeEnv()
+    const after = resolveValidatedRequestRuntimeConfig()
     return { before, after }
   })
 }
 
-test("concurrent overlapping requests observe only their own bindings", async () => {
-  const envA = envFor("A")
-  const envB = envFor("B")
-
-  // B finishes first (shorter delay) while A is still suspended → overlap.
+test("concurrent overlapping requests observe only their own D1 bindings", async () => {
+  const envA = cloudflareEnv("A")
+  const envB = cloudflareEnv("B")
+  // B finishes first while A is suspended → real overlap.
   const [a, b] = await Promise.all([handleRequest(envA, 40), handleRequest(envB, 5)])
 
-  // A only ever sees A.
-  assert.equal(a.before, envA)
-  assert.equal(a.after, envA)
-  assert.equal((a.after as unknown as { CONTROL_DB: unknown }).CONTROL_DB, envA.CONTROL_DB)
-  // B only ever sees B.
-  assert.equal(b.before, envB)
-  assert.equal(b.after, envB)
-  // Cross-request isolation.
-  assert.notEqual(a.after, envB)
-  assert.notEqual(b.after, envA)
-  assert.notEqual((a.after as unknown as { CONTROL_DB: unknown }).CONTROL_DB, envB.CONTROL_DB)
+  assert.ok(a.before.ok && a.after.ok && b.before.ok && b.after.ok)
+  if (a.after.ok && b.after.ok) {
+    assert.equal(a.after.runtime.persistence.CONTROL_DB, envA.CONTROL_DB)
+    assert.equal(b.after.runtime.persistence.CONTROL_DB, envB.CONTROL_DB)
+    assert.notEqual(a.after.runtime.persistence.CONTROL_DB, envB.CONTROL_DB)
+    assert.notEqual(b.after.runtime.persistence.TENANT_DB_DEFAULT, envA.TENANT_DB_DEFAULT)
+  }
 })
 
 test("completion order does not affect binding selection", async () => {
-  const envA = envFor("A")
-  const envB = envFor("B")
-  // A completes first this time.
+  const envA = cloudflareEnv("A")
+  const envB = cloudflareEnv("B")
   const results = await Promise.all([handleRequest(envA, 5), handleRequest(envB, 40)])
-  assert.equal(results[0].after, envA)
-  assert.equal(results[1].after, envB)
+  if (results[0].after.ok && results[1].after.ok) {
+    assert.equal(results[0].after.runtime.persistence.CONTROL_DB, envA.CONTROL_DB)
+    assert.equal(results[1].after.runtime.persistence.CONTROL_DB, envB.CONTROL_DB)
+  }
 })
 
-test("a request without context does not reuse a previous request's env", async () => {
+test("a request without an injector scope never reuses a previous request's env", async () => {
   resetTestRuntimeEnvForRequest()
-  const envA = envFor("A")
-  await handleRequest(envA, 5)
-  // Outside any injection scope → no leftover env.
-  assert.equal(getRequestRuntimeEnv(), null)
+  await handleRequest(cloudflareEnv("A"), 5)
+  // Outside any injector scope → no leftover injected env.
+  assert.equal(peekInjectedRuntimeEnv(), undefined)
 })
 
-test("missing context inside a concurrent request stays null (fails closed)", async () => {
-  const envA = envFor("A")
+test("a concurrent request without a context stays isolated (fails closed to local)", async () => {
+  const envA = cloudflareEnv("A")
   const withEnv = handleRequest(envA, 30)
-  // This "request" never injects an env; it must never observe A's env.
   const withoutEnv = (async () => {
-    const before = getRequestRuntimeEnv()
+    const before = peekInjectedRuntimeEnv()
     await delay(5)
-    const after = getRequestRuntimeEnv()
+    const after = peekInjectedRuntimeEnv()
     return { before, after }
   })()
   const [a, none] = await Promise.all([withEnv, withoutEnv])
-  assert.equal(a.after, envA)
-  assert.equal(none.before, null)
-  assert.equal(none.after, null)
+  if (a.after.ok) assert.equal(a.after.runtime.persistence.CONTROL_DB, envA.CONTROL_DB)
+  assert.equal(none.before, undefined)
+  assert.equal(none.after, undefined)
 })
 
-test("a genuine production context always wins over a test override", async () => {
-  const prodEnv = envFor("PROD")
-  const testEnv = envFor("TEST")
-  try {
-    __setProductionRuntimeEnvProviderForTests(() => prodEnv)
-    // Even inside a test injection scope, production context takes precedence.
-    const observed = runWithTestRuntimeEnv(testEnv, () => getRequestRuntimeEnv())
-    assert.equal(observed, prodEnv)
-    assert.notEqual(observed, testEnv)
-  } finally {
-    __setProductionRuntimeEnvProviderForTests(null)
-  }
-})
-
-test("resetting test state cannot mutate an already-created validated snapshot", async () => {
-  const envA = envFor("A")
-  const res = validateCloudflareRuntimeEnv(envA)
-  assert.equal(res.ok, true)
-  if (res.ok) {
-    const controlBefore = res.env.CONTROL_DB
-    // Mutate/clear source env and reset injection state.
-    ;(envA as unknown as { CONTROL_DB: unknown }).CONTROL_DB = new FakeD1Database()
-    resetTestRuntimeEnvForRequest()
-    __setProductionRuntimeEnvProviderForTests(null)
-    // Snapshot is frozen and still references the original binding.
-    assert.equal(res.env.CONTROL_DB, controlBefore)
-    assert.ok(Object.isFrozen(res.env))
-  }
+test("the injected env is async-context scoped, not a shared global", () => {
+  // Two synchronous injector scopes do not bleed into each other.
+  const a = runWithInjectedRuntimeEnv(cloudflareEnv("A"), () => peekInjectedRuntimeEnv())
+  const b = runWithInjectedRuntimeEnv(cloudflareEnv("B"), () => peekInjectedRuntimeEnv())
+  assert.notEqual(a, b)
+  // Outside every scope, nothing is injected.
+  assert.equal(peekInjectedRuntimeEnv(), undefined)
 })

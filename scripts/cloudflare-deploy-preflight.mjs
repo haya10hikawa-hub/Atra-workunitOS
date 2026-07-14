@@ -31,13 +31,25 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(__dirname, "..")
 const BASE_CONFIG_PATH = resolve(REPO_ROOT, "wrangler.json")
 
-function parseArgs(argv) {
+/** Parse args, failing closed on unknown flags or `--config` without a value. */
+export function parseArgs(argv) {
   const args = { config: null, checkArtifacts: false }
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--config") args.config = argv[++i]
-    else if (argv[i] === "--check-artifacts") args.checkArtifacts = true
+    const token = argv[i]
+    if (token === "--config") {
+      const value = argv[i + 1]
+      if (value === undefined || value.startsWith("--")) {
+        return { ok: false, error: "missing_config_value" }
+      }
+      args.config = value
+      i += 1
+    } else if (token === "--check-artifacts") {
+      args.checkArtifacts = true
+    } else {
+      return { ok: false, error: "unknown_argument" }
+    }
   }
-  return args
+  return { ok: true, args }
 }
 
 function fail(category, detail) {
@@ -46,7 +58,12 @@ function fail(category, detail) {
 }
 
 function main() {
-  const args = parseArgs(process.argv.slice(2))
+  const parsed = parseArgs(process.argv.slice(2))
+  if (!parsed.ok) {
+    fail(parsed.error)
+    process.exit(1)
+  }
+  const args = parsed.args
   const failures = []
 
   if (args.config) {
@@ -101,4 +118,7 @@ function main() {
   process.exit(0)
 }
 
-main()
+// Run only when invoked directly (importing for tests must not execute).
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main()
+}

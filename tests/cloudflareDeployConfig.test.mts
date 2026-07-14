@@ -1,19 +1,23 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { readFileSync } from "node:fs"
+import { readFileSync, mkdtempSync, symlinkSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
 import {
   validateD1Id,
   validateDeployConfig,
+  validateGeneratedConfigLocation,
   buildConfigWithIds,
   parseConfig,
   loadConfigFile,
   SYNTHETIC_D1_IDS,
+  GENERATED_CONFIG_GITIGNORE_RULE,
   EXPECTED_WORKER_MAIN,
   EXPECTED_ASSETS_DIR,
 } from "../scripts/lib/cfDeployConfig.mjs"
 import { DEPLOY_STEPS } from "../scripts/cloudflare-deploy.mjs"
+import { parseArgs as parsePreflightArgs } from "../scripts/cloudflare-deploy-preflight.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 type LooseD1 = { binding: string; database_name?: string; database_id?: unknown }
@@ -97,7 +101,7 @@ test("valid synthetic D1 IDs pass", () => {
 test("committed base with placeholder IDs fails full deploy validation", () => {
   const res = validateDeployConfig(baseConfig, { repoRoot: REPO_ROOT, configPath: "wrangler.deploy.json" })
   assert.equal(res.ok, false)
-  assert.ok(res.failures.some((f) => f.startsWith("d1_id_placeholder:")))
+  assert.ok(res.failures.some((f) => (f ?? "").startsWith("d1_id_placeholder:")))
 })
 
 test("committed base passes structure check when placeholders are allowed", () => {
@@ -167,8 +171,8 @@ test("preflight/validation never echoes an ID value in failures", () => {
   const secretish = "sk-live-supersecrettoken-doNOTecho"
   const cfg = buildConfigWithIds(baseConfig, { CONTROL_DB: secretish, TENANT_DB_DEFAULT: SYNTHETIC_D1_IDS.TENANT_DB_DEFAULT })
   const res = validateDeployConfig(cfg, { repoRoot: REPO_ROOT, configPath: "wrangler.deploy.json" })
-  assert.ok(res.failures.some((f) => f.startsWith("d1_id_malformed:CONTROL_DB")))
-  for (const f of res.failures) {
+  assert.ok(res.failures.some((f) => (f ?? "").startsWith("d1_id_malformed:CONTROL_DB")))
+  for (const f of res.failures as string[]) {
     assert.ok(!f.includes(secretish), "failure category must not contain an ID value")
   }
 })
@@ -214,10 +218,10 @@ test("committed wrangler.json contains no production D1 IDs", () => {
   }
 })
 
-test("route repository helper derives runtime env only from server context", () => {
+test("route repository helper derives persistence only from the validated runtime config", () => {
   const src = readFileSync(resolve(REPO_ROOT, "app/lib/persistence/routeRepositories.ts"), "utf8")
-  // Env must come from the server-derived, request-scoped accessor …
-  assert.match(src, /getRequestRuntimeEnv\(\)/)
+  // Persistence must come from the request-scoped validated runtime config …
+  assert.match(src, /resolveValidatedRequestRuntimeConfig|rt\.persistence/)
   // … never from client-controlled request input (body/headers/query).
   assert.doesNotMatch(src, /\.headers\b/)
   assert.doesNotMatch(src, /\.json\(\)/)
@@ -233,4 +237,104 @@ test("no CI or test path runs a real (non-dry-run) wrangler deploy", () => {
   // The real upload is gated behind an explicit execute flag in the orchestrator.
   const orch = readFileSync(resolve(REPO_ROOT, "scripts/cloudflare-deploy.mjs"), "utf8")
   assert.match(orch, /CF_DEPLOY_EXECUTE/)
+})
+
+// ─── Strict generated-config location (Blocker 2) ───────────────
+
+test("/tmp/wrangler.deploy.json fails (outside repo root)", () => {
+  const r = validateGeneratedConfigLocation("/tmp/wrangler.deploy.json", REPO_ROOT)
+  assert.equal(r.ok, false)
+  assert.equal(r.ok === false && r.failure, "generated_config_outside_repo_root")
+})
+
+test("subdir/wrangler.deploy.json fails (subdirectory not approved)", () => {
+  const r = validateGeneratedConfigLocation(resolve(REPO_ROOT, "subdir/wrangler.deploy.json"), REPO_ROOT)
+  assert.equal(r.ok, false)
+  assert.equal(r.ok === false && r.failure, "generated_config_in_subdirectory")
+})
+
+test("../wrangler.deploy.json fails (parent escape)", () => {
+  const r = validateGeneratedConfigLocation(resolve(REPO_ROOT, "../wrangler.deploy.json"), REPO_ROOT)
+  assert.equal(r.ok, false)
+  assert.equal(r.ok === false && r.failure, "generated_config_outside_repo_root")
+})
+
+test("repository-root wrangler.deploy.json passes", () => {
+  assert.equal(validateGeneratedConfigLocation(resolve(REPO_ROOT, "wrangler.deploy.json"), REPO_ROOT).ok, true)
+})
+
+test("repository-root wrangler.deploy.synthetic.json passes (synthetic dry-run)", () => {
+  assert.equal(validateGeneratedConfigLocation(resolve(REPO_ROOT, "wrangler.deploy.synthetic.json"), REPO_ROOT).ok, true)
+})
+
+test("a symlink escaping the repository fails", () => {
+  // Create <root>/<tmp-symlink> → outside dir, then place a deploy config "inside"
+  // the symlinked dir. realpath must reject the escape. Skipped if symlinks unsupported.
+  const outside = mkdtempSync(resolve(tmpdir(), "cf-escape-"))
+  const linkName = `deploy-escape-${process.pid}`
+  const linkPath = resolve(REPO_ROOT, linkName)
+  try {
+    symlinkSync(outside, linkPath, "dir")
+  } catch {
+    return // platform without symlink support
+  }
+  try {
+    const r = validateGeneratedConfigLocation(resolve(linkPath, "wrangler.deploy.json"), REPO_ROOT)
+    assert.equal(r.ok, false)
+    assert.equal(r.ok === false && r.failure, "generated_config_symlink_escape")
+  } finally {
+    rmSync(linkPath, { force: true })
+    rmSync(outside, { recursive: true, force: true })
+  }
+})
+
+test("a config with real IDs at a subdirectory path fails full validation", () => {
+  const res = validateDeployConfig(validDeployConfig(), {
+    repoRoot: REPO_ROOT,
+    configPath: resolve(REPO_ROOT, "subdir/wrangler.deploy.json"),
+  })
+  assert.equal(res.ok, false)
+  assert.ok(res.failures.includes("generated_config_in_subdirectory"))
+})
+
+test("the exact .gitignore rule for generated deploy configs is present", () => {
+  const gitignore = readFileSync(resolve(REPO_ROOT, ".gitignore"), "utf8")
+  const rules = gitignore.split("\n").map((l) => l.trim())
+  assert.ok(rules.includes(GENERATED_CONFIG_GITIGNORE_RULE), `.gitignore must contain ${GENERATED_CONFIG_GITIGNORE_RULE}`)
+})
+
+// ─── Exact D1 binding allowlist ─────────────────────────────────
+
+test("an unknown D1 binding in the deploy config fails", () => {
+  const cfg = validDeployConfig()
+  cfg.d1_databases.push({ binding: "SHADOW_DB", database_name: "shadow", database_id: SYNTHETIC_D1_IDS.CONTROL_DB })
+  const res = validateDeployConfig(cfg, { repoRoot: REPO_ROOT, configPath: "wrangler.deploy.json" })
+  assert.equal(res.ok, false)
+  assert.ok(res.failures.includes("d1_binding_unknown:SHADOW_DB"))
+})
+
+test("ASSETS remains an assets binding, not a D1 binding", () => {
+  assert.equal(baseConfig.assets?.directory, EXPECTED_ASSETS_DIR)
+  const d1Names = (baseConfig.d1_databases ?? []).map((d: { binding: string }) => d.binding)
+  assert.ok(!d1Names.includes("ASSETS"))
+})
+
+// ─── Preflight argument parsing ─────────────────────────────────
+
+test("preflight rejects unknown arguments", () => {
+  assert.equal(parsePreflightArgs(["--bogus"]).ok, false)
+  assert.equal(parsePreflightArgs(["--config", "x", "extra"]).ok, false)
+})
+
+test("preflight rejects --config without a value", () => {
+  assert.equal(parsePreflightArgs(["--config"]).ok, false)
+  assert.equal(parsePreflightArgs(["--config", "--check-artifacts"]).ok, false)
+})
+
+test("preflight accepts valid argument combinations", () => {
+  assert.equal(parsePreflightArgs([]).ok, true)
+  assert.equal(parsePreflightArgs(["--check-artifacts"]).ok, true)
+  const p = parsePreflightArgs(["--config", "wrangler.deploy.json", "--check-artifacts"])
+  assert.equal(p.ok, true)
+  assert.equal(p.ok && (p.args as { config?: string | null } | undefined)?.config, "wrangler.deploy.json")
 })

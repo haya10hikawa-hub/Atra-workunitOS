@@ -13,6 +13,7 @@ import { verifyApprovalPreviewBinding } from "../../../../../lib/security/approv
 import { validateCsrfOrigin } from "../../../../../lib/security/csrfProtection.ts"
 import { readBoundedJsonObject } from "../../../../../lib/security/requestBody.ts"
 import { checkRateLimit, getTrustedClientIp } from "../../../../../lib/security/rateLimitGate.ts"
+import { resolveValidatedRequestRuntimeConfig, projectRuntimeAuthorizationEnv } from "../../../../../lib/runtime/requestRuntimeConfig.ts"
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -65,8 +66,17 @@ export async function POST(
 
   audit("execution_dry_run_requested", requestId, { workUnitId })
 
+  // ── 0. Request-scoped runtime config (resolved ONCE) ─────────
+  const runtimeResult = resolveValidatedRequestRuntimeConfig()
+  if (!runtimeResult.ok) {
+    audit("execution_dry_run_failed", requestId, { reason: "runtime_config_invalid" })
+    return errorResponse(requestId, "integration_missing", 503)
+  }
+  const runtime = runtimeResult.runtime
+  const killSwitchEnv = projectRuntimeAuthorizationEnv(runtime.security)
+
   // ── 1. Session ───────────────────────────────────────────────
-  const sessionResult = await requireSession(request)
+  const sessionResult = await requireSession(request, runtime)
   if (!sessionResult.ok) {
     audit("execution_dry_run_failed", requestId, { reason: "unauthorized" })
     return errorResponse(
@@ -127,7 +137,7 @@ export async function POST(
   }
 
   // ── 5. Resolve repositories ──────────────────────────────────
-  const repoResult = await resolveRouteRepositories(session.tenantId as TenantId)
+  const repoResult = await resolveRouteRepositories(session.tenantId as TenantId, runtime)
   if (!repoResult.ok) {
     audit("execution_dry_run_failed", requestId, { reason: "persistence_not_available" })
     return errorResponse(requestId, "integration_missing", 503)
@@ -190,7 +200,7 @@ export async function POST(
   // ── 8a. Kill switch (LOCAL DEFENSE) ──────────────────────────
   // Explicit local kill-switch check retained as defense in depth (the runtime
   // eligibility core rechecks it too). External execution is off by default.
-  if (!areExternalActionsEnabled()) {
+  if (!areExternalActionsEnabled(killSwitchEnv)) {
     audit("execution_dry_run_blocked", requestId, { reason: "kill_switch_active" })
     return successResponse(workUnitId, previewRefs.length, requestedActionType, "blocked", "External execution is disabled by kill switch.", requestId)
   }
@@ -216,6 +226,8 @@ export async function POST(
         actionType: bound.actionType,
       },
       evidenceResolver,
+      // Kill-switch state comes from the request-scoped security config, NOT process.env.
+      env: killSwitchEnv,
     })
     if (outcome.disposition === "forbidden") { disposition = "forbidden"; break }
     if (outcome.disposition === "blocked") { disposition = "blocked"; break }

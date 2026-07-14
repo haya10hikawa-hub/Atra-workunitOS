@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs"
 import path from "node:path"
 import { POST as toolsPost } from "../app/api/workunit/tools/route.ts"
 import { resolveRouteRepositories } from "../app/lib/persistence/routeRepositories.ts"
-import { setTestRuntimeEnvForRequest, resetTestRuntimeEnvForRequest } from "../app/lib/runtime/cloudflareRuntimeEnv.ts"
+import { setTestRuntimeEnvForRequest, resetTestRuntimeEnvForRequest } from "../app/lib/runtime/requestRuntimeEnvInjection.ts"
 import { FakeD1Database } from "./helpers/fakeD1.ts"
 import { createInMemoryApprovalRecordRepository } from "../app/lib/persistence/inMemoryRepositories.ts"
 import type { AppEnv } from "../app/types/cloudflare-env.ts"
@@ -103,8 +103,18 @@ test("2. persisted tools audit metadata is redacted (operation only; no secrets/
 
 test("3. tools route source: external_action_blocked persists fail-open and adds no execution", () => {
   const src = readToolsRouteSource()
-  // Kill switch + persistence present.
-  assert.ok(src.includes("areExternalActionsEnabled()"))
+  // Kill switch present and driven by the request-scoped security config
+  // (projected via projectRuntimeAuthorizationEnv), NEVER ambient process.env.
+  assert.ok(src.includes("areExternalActionsEnabled(killSwitchEnv)"))
+  assert.ok(src.includes("projectRuntimeAuthorizationEnv(runtime.security)"))
+  assert.equal(src.includes("areExternalActionsEnabled()"), false)
+  // LLM resolution uses the request-scoped config projection, not process.env.
+  assert.ok(src.includes("resolveLlmProvider(llmEnv)"))
+  assert.equal(src.includes("resolveLlmProvider()"), false)
+  // The Runtime Authorization gate receives the request-scoped kill-switch env.
+  assert.ok(src.includes("env: projectRuntimeAuthorizationEnv(runtime.security)"))
+  // No runtime secret is ever surfaced in a response or audit metadata.
+  assert.equal(src.includes("runtime.auth.jwt"), false)
   assert.ok(src.includes('"external_action_blocked"'))
   assert.ok(src.includes("recordAuditEvent") && src.includes("persistAuditEvent"))
   // Persistence helper is fail-open (try/catch) and resolves the bundle on demand.

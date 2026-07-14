@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { resolveSession } from "../app/lib/application/auth/sessionResolver.ts"
 import { FakeD1Database } from "./helpers/fakeD1.ts"
 import type { AppEnv } from "../app/types/cloudflare-env.ts"
-import { setTestRuntimeEnvForRequest, resetTestRuntimeEnvForRequest } from "../app/lib/runtime/cloudflareRuntimeEnv.ts"
+import { setTestRuntimeEnvForRequest, resetTestRuntimeEnvForRequest } from "../app/lib/runtime/requestRuntimeEnvInjection.ts"
 import { resolveControlRepositories } from "../app/lib/infrastructure/persistence/control/controlRepositoryResolver.ts"
 import type { TenantId, UserId } from "../app/lib/tenant/types.ts"
 import { signHs256Jwt } from "./helpers/jwt.ts"
@@ -25,7 +25,7 @@ async function withAuthEnv(fn: (db: FakeD1Database) => Promise<void>) {
     JWT_AUTH_AUDIENCE: process.env.JWT_AUTH_AUDIENCE,
   }
   try {
-    process.env.NODE_ENV = "development"
+    (process.env as Record<string, string | undefined>).NODE_ENV = "development"
     process.env.AUTH_ADAPTER = "dev"
     process.env.ALLOW_DEV_SESSION = "true"
     delete process.env.JWT_AUTH_SECRET
@@ -49,7 +49,7 @@ async function withJwtAuthEnv(fn: (db: FakeD1Database) => Promise<void>) {
     JWT_AUTH_AUDIENCE: process.env.JWT_AUTH_AUDIENCE,
   }
   try {
-    process.env.NODE_ENV = "production"
+    (process.env as Record<string, string | undefined>).NODE_ENV = "production"
     process.env.AUTH_ADAPTER = "jwt"
     process.env.JWT_AUTH_SECRET = JWT_SECRET
     delete process.env.ALLOW_DEV_SESSION

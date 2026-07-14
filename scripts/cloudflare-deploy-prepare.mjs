@@ -4,7 +4,7 @@
  *
  * Assembles an UNTRACKED deploy config from validated deployment environment
  * variables. The generated config carries real D1 database IDs and is written
- * only under the git-ignored `.cf-deploy/` directory.
+ * only as the git-ignored repository-root file `wrangler.deploy.json`.
  *
  * Inputs (environment):
  *   CLOUDFLARE_CONTROL_DB_ID        → CONTROL_DB.database_id

@@ -11,19 +11,30 @@ import type { D1DatabaseLike } from "../lib/persistence/d1/types"
 // ─── Application Bindings ──────────────────────────────────────
 
 /**
- * Cloudflare Pages/Workers runtime environment.
- * Bindings are populated from wrangler.toml [[d1_databases]].
+ * Cloudflare Workers (OpenNext) request-scoped runtime environment.
+ *
+ * D1 bindings come from `wrangler.json` "d1_databases"; the string variables
+ * come from `wrangler.json` "vars" (or `wrangler secret` for secrets). This raw
+ * env is validated + projected once per request by
+ * `app/lib/runtime/requestRuntimeConfig.ts` — consumers receive narrow, frozen
+ * capability projections, never this raw shape.
  */
 export interface CloudflareEnv {
   CONTROL_DB?: D1DatabaseLike
   TENANT_DB_DEFAULT?: D1DatabaseLike
 
-  // Environment variables (from wrangler.toml [vars])
+  // Environment variables (from wrangler.json "vars"; secrets via `wrangler secret`)
   PERSISTENCE_MODE?: string
   LLM_PROVIDER?: string
   DEEPSEEK_API_KEY?: string
   EXTERNAL_ACTIONS_ENABLED?: string
   ALLOW_LEGACY_INGEST_FALLBACK?: string
+
+  // Auth configuration (request-scoped; never read from ambient process.env in prod)
+  AUTH_ADAPTER?: string
+  JWT_AUTH_SECRET?: string
+  JWT_AUTH_ISSUER?: string
+  JWT_AUTH_AUDIENCE?: string
 }
 
 /**

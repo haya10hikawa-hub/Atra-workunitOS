@@ -39,6 +39,7 @@ import {
 import { getCloudflareD1Bindings } from "./cloudflareBindings.ts"
 import { resolvePersistenceConfig } from "./persistenceConfig.ts"
 import { validateCloudflareRuntimeEnv } from "../runtime/validatedRuntimeEnv.ts"
+import type { PersistenceRuntimeConfig } from "../runtime/requestRuntimeConfig.ts"
 
 // ─── Bundle ──────────────────────────────────────────────────────
 
@@ -94,8 +95,36 @@ export async function resolveRepositories(
     d1Binding?: D1DatabaseLike
     env?: Parameters<typeof resolvePersistenceConfig>[0]
     runtimeEnv?: AppEnv
+    persistence?: PersistenceRuntimeConfig
   } = {},
 ): Promise<RepositoryResolutionResult> {
+  // ── Request-scoped validated persistence projection takes precedence ──
+  //
+  // The persistence mode AND D1 bindings come from ONE validated request-scoped
+  // config. process.env can never override it, and in-memory repositories are
+  // never returned in the production (d1) path.
+  if (options.persistence) {
+    const p = options.persistence
+    if (p.mode === "d1") {
+      if (!p.CONTROL_DB || !p.TENANT_DB_DEFAULT) return { ok: false, error: "d1_not_configured" }
+      if (options.resolver) {
+        try {
+          const ctx = await options.resolver.resolveTenantDb(tenantId)
+          const d1Store = (options.d1Binding ?? ctx.db) as D1DatabaseLike | null
+          if (!d1Store) return { ok: false, error: "d1_not_configured" }
+          return { ok: true, bundle: d1Bundle(tenantId, d1Store, ctx) }
+        } catch {
+          return { ok: false, error: "tenant_resolution_failed" }
+        }
+      }
+      // Preserve current TENANT_DB_DEFAULT behavior — Issue #130 still owns real
+      // per-tenant DB resolution — but the binding is genuine and validated.
+      return { ok: true, bundle: d1Bundle(tenantId, options.d1Binding ?? p.TENANT_DB_DEFAULT) }
+    }
+    if (p.mode === "in_memory") return { ok: true, bundle: inMemoryBundle(tenantId) }
+    return { ok: false, error: "persistence_disabled" }
+  }
+
   // ── Request-scoped Cloudflare runtime env takes precedence ──
   //
   // When a Cloudflare runtime env is present (production / OpenNext worker), the

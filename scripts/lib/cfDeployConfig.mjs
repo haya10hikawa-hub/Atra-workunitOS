@@ -15,7 +15,8 @@
  *   - Fails closed on ambiguous / malformed input.
  */
 
-import { readFileSync, existsSync, statSync } from "node:fs"
+import { readFileSync, existsSync, statSync, realpathSync } from "node:fs"
+import { resolve as resolvePath, dirname, basename as pathBasename } from "node:path"
 
 // ─── Expected Workers/OpenNext target ────────────────────────────
 
@@ -28,6 +29,58 @@ export const REQUIRED_D1_BINDINGS = ["CONTROL_DB", "TENANT_DB_DEFAULT"]
 // this basename prefix and are git-ignored via `/wrangler.deploy*.json`. They
 // MUST sit at the repo root so wrangler resolves `main`/`assets` relative to it.
 export const GENERATED_CONFIG_BASENAME_RE = /^wrangler\.deploy[.\w-]*\.json$/
+
+// The exact `.gitignore` rule that MUST ignore generated deploy configs.
+export const GENERATED_CONFIG_GITIGNORE_RULE = "/wrangler.deploy*.json"
+
+/**
+ * Strictly validate that a config carrying real D1 IDs lives at the approved,
+ * git-ignored location: EXACTLY a repository-root file named `wrangler.deploy*.json`.
+ *
+ * Fails closed on: paths outside repoRoot, any subdirectory, a non-approved
+ * basename, and symlink/traversal escapes (resolved via realpath where the path
+ * or its parent exists). Returns a safe category string, never the path value.
+ */
+export function validateGeneratedConfigLocation(configPath, repoRoot) {
+  if (typeof configPath !== "string" || configPath.length === 0) {
+    return { ok: false, failure: "generated_config_path_missing" }
+  }
+  const realRoot = realpathSyncSafe(resolvePath(repoRoot))
+  const resolved = resolvePath(configPath)
+  const parent = dirname(resolved)
+  // Resolve symlinks on the parent dir where it exists — a symlinked parent that
+  // escapes the repo root is rejected. The file itself may not exist yet.
+  const realParent = realpathSyncSafe(parent)
+
+  // The file's (real) parent directory must be exactly the (real) repo root.
+  if (realParent !== realRoot) {
+    // Distinguish subdirectory-within-repo from fully-outside for clearer signal.
+    if (realParent === parent && (parent === realRoot || parent.startsWith(realRoot + "/"))) {
+      return { ok: false, failure: "generated_config_in_subdirectory" }
+    }
+    if (parent.startsWith(realRoot + "/")) {
+      // parent is nominally under root but realpath differs → symlink escape.
+      return { ok: false, failure: "generated_config_symlink_escape" }
+    }
+    return { ok: false, failure: "generated_config_outside_repo_root" }
+  }
+
+  // Basename must be an approved generated-config filename.
+  if (!GENERATED_CONFIG_BASENAME_RE.test(pathBasename(resolved))) {
+    return { ok: false, failure: "generated_config_not_ignored" }
+  }
+
+  return { ok: true }
+}
+
+/** realpathSync that falls back to the input when the path does not exist yet. */
+function realpathSyncSafe(p) {
+  try {
+    return realpathSync(p)
+  } catch {
+    return p
+  }
+}
 
 // Pages-only directives that must never appear in a Workers config.
 export const PAGES_ONLY_KEYS = ["pages_build_output_dir"]
@@ -157,7 +210,7 @@ export function validateDeployConfig(config, options = {}) {
     failures.push("legacy_ingest_not_false")
   }
 
-  // D1 bindings: required, unique, valid IDs.
+  // D1 bindings: required, unique, EXACTLY the approved set, valid IDs.
   const dbs = Array.isArray(config.d1_databases) ? config.d1_databases : []
   const seen = new Map()
   for (const db of dbs) {
@@ -166,6 +219,11 @@ export function validateDeployConfig(config, options = {}) {
       continue
     }
     seen.set(db.binding, (seen.get(db.binding) ?? 0) + 1)
+    // Exact allowlist: a deploy config must not silently gain extra database
+    // capabilities. Only CONTROL_DB and TENANT_DB_DEFAULT are approved D1 bindings.
+    if (!REQUIRED_D1_BINDINGS.includes(db.binding)) {
+      failures.push(`d1_binding_unknown:${db.binding}`)
+    }
   }
   for (const name of REQUIRED_D1_BINDINGS) {
     const count = seen.get(name) ?? 0
@@ -189,12 +247,11 @@ export function validateDeployConfig(config, options = {}) {
       }
     }
     // A config carrying real IDs must be an approved, git-ignored generated
-    // config (basename `wrangler.deploy*.json`), never the committed base.
+    // config: EXACTLY a repository-root `wrangler.deploy*.json` — never the
+    // committed base, a subdirectory, an outside path, or a symlink escape.
     if (hasRealId && configPath) {
-      const basename = configPath.split("\\").join("/").split("/").pop() ?? ""
-      if (!GENERATED_CONFIG_BASENAME_RE.test(basename)) {
-        failures.push("generated_config_not_ignored")
-      }
+      const loc = validateGeneratedConfigLocation(configPath, repoRoot)
+      if (!loc.ok) failures.push(loc.failure)
     }
   }
 

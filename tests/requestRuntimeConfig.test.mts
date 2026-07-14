@@ -1,0 +1,260 @@
+import test from "node:test"
+import assert from "node:assert/strict"
+import {
+  resolveValidatedRequestRuntimeConfig,
+  projectRuntimeAuthorizationEnv,
+  projectLlmEnv,
+} from "../app/lib/runtime/requestRuntimeConfig.ts"
+import { runWithInjectedRuntimeEnv } from "../app/lib/runtime/requestRuntimeEnvInjection.ts"
+import { requireSession } from "../app/lib/security/session.ts"
+import { resolveControlRepositories } from "../app/lib/infrastructure/persistence/control/controlRepositoryResolver.ts"
+import { resolveLlmProvider, resolveLlmProviderConfig } from "../app/lib/llm/providerConfig.ts"
+import { evaluateRuntimeAuthorizationDryRun } from "../app/lib/security/runtimeAuthorizationGate.ts"
+import { resolveRuntimeAuthorizationEvidenceResolver } from "../app/lib/security/runtimeAuthorizationEvidenceResolver.ts"
+import { FakeD1Database } from "./helpers/fakeD1.ts"
+import { signHs256Jwt } from "./helpers/jwt.ts"
+import type { AppEnv } from "../app/types/cloudflare-env.ts"
+import type { TenantId, UserId } from "../app/lib/tenant/types.ts"
+import type { Session } from "../app/lib/security/session.ts"
+
+const JWT_SECRET = "request-scoped-secret-of-at-least-32-bytes-long"
+const JWT_ISSUER = "https://issuer.example.test"
+const JWT_AUDIENCE = "workunit-os"
+
+function cloudflareEnv(overrides: Partial<AppEnv> = {}): AppEnv {
+  return {
+    CONTROL_DB: new FakeD1Database(),
+    TENANT_DB_DEFAULT: new FakeD1Database(),
+    PERSISTENCE_MODE: "d1",
+    EXTERNAL_ACTIONS_ENABLED: "false",
+    ALLOW_LEGACY_INGEST_FALLBACK: "false",
+    ...overrides,
+  } as AppEnv
+}
+
+async function seedControlDb(db: FakeD1Database, opts: { provider: string; providerSubject: string; email: string; tenantStatus?: string }) {
+  const repos = resolveControlRepositories({ d1Binding: db })
+  if (!repos.ok) throw new Error("control repos failed")
+  const now = new Date().toISOString()
+  await repos.bundle.users.create(repos.bundle.ctx, { id: "user-1" as UserId, email: opts.email, createdAt: now, updatedAt: now })
+  await repos.bundle.tenants.create(repos.bundle.ctx, { id: "tenant-1" as TenantId, name: "T", slug: "t", status: opts.tenantStatus ?? "active", createdAt: now, updatedAt: now })
+  await repos.bundle.memberships.create(repos.bundle.ctx, { id: "m-1", tenantId: "tenant-1" as TenantId, userId: "user-1" as UserId, role: "manager", status: "active", createdAt: now, updatedAt: now })
+  await repos.bundle.authIdentities.create(repos.bundle.ctx, { id: "id-1", userId: "user-1" as UserId, provider: opts.provider, providerSubject: opts.providerSubject, email: opts.email, createdAt: now, updatedAt: now })
+}
+
+// ─── 1. AUTH_ADAPTER=jwt selects the JWT adapter ────────────────
+
+test("1. request runtime config with AUTH_ADAPTER=jwt selects the JWT adapter", () => {
+  runWithInjectedRuntimeEnv(cloudflareEnv({ AUTH_ADAPTER: "jwt", JWT_AUTH_SECRET: JWT_SECRET, JWT_AUTH_ISSUER: JWT_ISSUER, JWT_AUTH_AUDIENCE: JWT_AUDIENCE } as Partial<AppEnv>), () => {
+    const result = resolveValidatedRequestRuntimeConfig()
+    assert.ok(result.ok)
+    if (result.ok) {
+      assert.equal(result.runtime.auth.adapter, "jwt")
+      assert.equal(result.runtime.auth.jwt?.secret, JWT_SECRET)
+      assert.equal(result.runtime.source, "cloudflare")
+    }
+  })
+})
+
+// ─── 2. request-scoped JWT resolves a session against request-scoped CONTROL_DB ──
+
+test("2. a valid request-scoped JWT resolves a session against the request-scoped CONTROL_DB", async () => {
+  const db = new FakeD1Database()
+  await seedControlDb(db, { provider: "jwt", providerSubject: "jwt-user", email: "u@example.local" })
+  const token = await signHs256Jwt({ sub: "jwt-user", email: "u@example.local", iss: JWT_ISSUER, aud: JWT_AUDIENCE }, JWT_SECRET)
+  const env = cloudflareEnv({ CONTROL_DB: db, AUTH_ADAPTER: "jwt", JWT_AUTH_SECRET: JWT_SECRET, JWT_AUTH_ISSUER: JWT_ISSUER, JWT_AUTH_AUDIENCE: JWT_AUDIENCE } as Partial<AppEnv>)
+  await runWithInjectedRuntimeEnv(env, async () => {
+    const result = await requireSession(new Request("http://localhost", { headers: { Authorization: `Bearer ${token}` } }))
+    assert.equal(result.ok, true)
+    if (result.ok) {
+      assert.equal(result.session.tenantId, "tenant-1")
+      assert.equal(result.session.role, "manager")
+    }
+  })
+})
+
+// ─── 3 & 4. process.env cannot override request-scoped auth ─────
+
+test("3. process.env.AUTH_ADAPTER=none cannot override request-scoped jwt", () => {
+  const backup = process.env.AUTH_ADAPTER
+  try {
+    ;(process.env as Record<string, string | undefined>).AUTH_ADAPTER = "none"
+    runWithInjectedRuntimeEnv(cloudflareEnv({ AUTH_ADAPTER: "jwt", JWT_AUTH_SECRET: JWT_SECRET, JWT_AUTH_ISSUER: JWT_ISSUER, JWT_AUTH_AUDIENCE: JWT_AUDIENCE } as Partial<AppEnv>), () => {
+      const result = resolveValidatedRequestRuntimeConfig()
+      assert.ok(result.ok && result.runtime.auth.adapter === "jwt")
+    })
+  } finally {
+    if (backup === undefined) delete (process.env as Record<string, string | undefined>).AUTH_ADAPTER
+    else (process.env as Record<string, string>).AUTH_ADAPTER = backup
+  }
+})
+
+test("4. process.env.JWT_AUTH_SECRET cannot replace the request-scoped secret", () => {
+  const backup = process.env.JWT_AUTH_SECRET
+  try {
+    ;(process.env as Record<string, string | undefined>).JWT_AUTH_SECRET = "attacker-controlled-secret-value-32bytes"
+    runWithInjectedRuntimeEnv(cloudflareEnv({ AUTH_ADAPTER: "jwt", JWT_AUTH_SECRET: JWT_SECRET, JWT_AUTH_ISSUER: JWT_ISSUER, JWT_AUTH_AUDIENCE: JWT_AUDIENCE } as Partial<AppEnv>), () => {
+      const result = resolveValidatedRequestRuntimeConfig()
+      assert.ok(result.ok && result.runtime.auth.jwt?.secret === JWT_SECRET)
+    })
+  } finally {
+    if (backup === undefined) delete (process.env as Record<string, string | undefined>).JWT_AUTH_SECRET
+    else (process.env as Record<string, string>).JWT_AUTH_SECRET = backup
+  }
+})
+
+// ─── 5 & 6. missing / malformed JWT config fails closed ─────────
+
+test("5. missing request-scoped auth config → no jwt config (adapter fails closed)", () => {
+  runWithInjectedRuntimeEnv(cloudflareEnv({ AUTH_ADAPTER: "jwt" } as Partial<AppEnv>), () => {
+    const result = resolveValidatedRequestRuntimeConfig()
+    assert.ok(result.ok && result.runtime.auth.adapter === "jwt" && result.runtime.auth.jwt === undefined)
+  })
+})
+
+test("6. malformed (too-short) JWT secret in production → no jwt config", () => {
+  runWithInjectedRuntimeEnv(cloudflareEnv({ AUTH_ADAPTER: "jwt", JWT_AUTH_SECRET: "short", JWT_AUTH_ISSUER: JWT_ISSUER, JWT_AUTH_AUDIENCE: JWT_AUDIENCE } as Partial<AppEnv>), () => {
+    const result = resolveValidatedRequestRuntimeConfig()
+    assert.ok(result.ok && result.runtime.auth.jwt === undefined)
+  })
+})
+
+// ─── 7 & 8. kill switch is request-scoped ───────────────────────
+
+test("7. request-scoped EXTERNAL_ACTIONS_ENABLED=false blocks even when process.env says true", () => {
+  const backup = process.env.EXTERNAL_ACTIONS_ENABLED
+  try {
+    ;(process.env as Record<string, string | undefined>).EXTERNAL_ACTIONS_ENABLED = "true"
+    runWithInjectedRuntimeEnv(cloudflareEnv({ EXTERNAL_ACTIONS_ENABLED: "false" }), () => {
+      const result = resolveValidatedRequestRuntimeConfig()
+      assert.ok(result.ok && result.runtime.security.externalActionsEnabled === false)
+      const projected = projectRuntimeAuthorizationEnv(result.ok ? result.runtime.security : { externalActionsEnabled: true } as never)
+      assert.equal(projected.EXTERNAL_ACTIONS_ENABLED, "false")
+    })
+  } finally {
+    if (backup === undefined) delete (process.env as Record<string, string | undefined>).EXTERNAL_ACTIONS_ENABLED
+    else (process.env as Record<string, string>).EXTERNAL_ACTIONS_ENABLED = backup
+  }
+})
+
+test("8. request-scoped kill-switch state is honored by the Runtime Authorization gate", async () => {
+  const session = { userId: "u", tenantId: "tenant-1", role: "owner", email: "e@x.local", isDevSession: false, sessionId: "s", createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 3600_000).toISOString() } as Session
+  const killEnv = projectRuntimeAuthorizationEnv({ externalActionsEnabled: false, allowLegacyIngestFallback: false, allowDevSession: false, allowDevWorkspaceBootstrap: false, allowControlLessDevSession: false })
+  const outcome = await evaluateRuntimeAuthorizationDryRun({
+    session,
+    request: { tenantId: "tenant-1", workUnitId: "wu-1", actionPreviewId: "p-1", approvalId: "a-1", actionType: "slack_reply" },
+    evidenceResolver: resolveRuntimeAuthorizationEvidenceResolver("tenant-1" as TenantId),
+    env: killEnv,
+  })
+  assert.equal(outcome.disposition, "blocked")
+})
+
+// ─── 9. LLM resolution uses request-scoped config ───────────────
+
+test("9. LLM provider/fallback resolution uses request-scoped config", () => {
+  // Cloudflare production → disabled provider, legacy fallback per request var.
+  runWithInjectedRuntimeEnv(cloudflareEnv({ ALLOW_LEGACY_INGEST_FALLBACK: "true" }), () => {
+    const result = resolveValidatedRequestRuntimeConfig()
+    assert.ok(result.ok)
+    if (result.ok) {
+      const llmEnv = projectLlmEnv(result.runtime.llm)
+      assert.equal(resolveLlmProvider(llmEnv), null) // no real/mock provider in production
+      assert.equal(resolveLlmProviderConfig(llmEnv).allowLegacyFallback, true)
+      assert.equal(resolveLlmProviderConfig(llmEnv).isProduction, true)
+    }
+  })
+})
+
+// ─── 10. cross-request isolation of all sections ────────────────
+
+test("10. Request A and Request B cannot observe each other's auth/security/llm/D1", async () => {
+  const envA = cloudflareEnv({ AUTH_ADAPTER: "jwt", JWT_AUTH_SECRET: "secret-A-of-at-least-thirty-two-bytes!!", JWT_AUTH_ISSUER: "iss-A", JWT_AUTH_AUDIENCE: "aud-A", EXTERNAL_ACTIONS_ENABLED: "false", LLM_PROVIDER: "provider-A" } as Partial<AppEnv>)
+  const envB = cloudflareEnv({ AUTH_ADAPTER: "none", EXTERNAL_ACTIONS_ENABLED: "true", LLM_PROVIDER: "provider-B" } as Partial<AppEnv>)
+  const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  const run = (env: AppEnv, ms: number) => runWithInjectedRuntimeEnv(env, async () => {
+    const before = resolveValidatedRequestRuntimeConfig()
+    await delay(ms)
+    const after = resolveValidatedRequestRuntimeConfig()
+    return { before, after }
+  })
+  const [a, b] = await Promise.all([run(envA, 30), run(envB, 5)])
+  assert.ok(a.after.ok && b.after.ok)
+  if (a.after.ok && b.after.ok) {
+    assert.equal(a.after.runtime.auth.jwt?.secret, "secret-A-of-at-least-thirty-two-bytes!!")
+    assert.equal(a.after.runtime.security.externalActionsEnabled, false)
+    assert.equal(a.after.runtime.llm.provider, "provider-A")
+    assert.equal(b.after.runtime.auth.adapter, "none")
+    assert.equal(b.after.runtime.auth.jwt, undefined)
+    assert.equal(b.after.runtime.security.externalActionsEnabled, true)
+    assert.equal(b.after.runtime.llm.provider, "provider-B")
+    assert.equal(a.after.runtime.persistence.CONTROL_DB, envA.CONTROL_DB)
+    assert.equal(b.after.runtime.persistence.CONTROL_DB, envB.CONTROL_DB)
+  }
+})
+
+// ─── 11. no runtime secret leaks into serialized surfaces ───────
+
+test("11. no runtime secret appears in a serialized config projection", () => {
+  runWithInjectedRuntimeEnv(cloudflareEnv({ AUTH_ADAPTER: "jwt", JWT_AUTH_SECRET: JWT_SECRET, JWT_AUTH_ISSUER: JWT_ISSUER, JWT_AUTH_AUDIENCE: JWT_AUDIENCE, DEEPSEEK_API_KEY: "sk-secret-key" } as Partial<AppEnv>), () => {
+    const result = resolveValidatedRequestRuntimeConfig()
+    assert.ok(result.ok)
+    if (result.ok) {
+      // Kill-switch projection carries only the boolean literal, no secrets.
+      const killJson = JSON.stringify(projectRuntimeAuthorizationEnv(result.runtime.security))
+      assert.equal(killJson.includes(JWT_SECRET), false)
+      assert.equal(killJson.includes("sk-secret-key"), false)
+    }
+  })
+})
+
+// ─── 12. local Node development is explicit and separate ────────
+
+test("12. local Node development resolves from process.env (dev adapter allowed)", () => {
+  const result = resolveValidatedRequestRuntimeConfig({
+    processEnv: { NODE_ENV: "development", AUTH_ADAPTER: "dev", ALLOW_DEV_SESSION: "true" },
+  })
+  assert.ok(result.ok)
+  if (result.ok) {
+    assert.equal(result.runtime.source, "local")
+    assert.equal(result.runtime.auth.adapter, "dev")
+    assert.equal(result.runtime.security.allowDevSession, true)
+  }
+})
+
+test("12b. a dev adapter is impossible in Cloudflare production (fails closed)", () => {
+  const result = resolveValidatedRequestRuntimeConfig({ rawEnv: cloudflareEnv({ AUTH_ADAPTER: "dev" } as Partial<AppEnv>), production: true })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.error, "dev_adapter_forbidden")
+})
+
+test("12c. ALLOW_DEV_* = true is rejected in Cloudflare production", () => {
+  const result = resolveValidatedRequestRuntimeConfig({ rawEnv: cloudflareEnv({ ALLOW_DEV_SESSION: "true" } as Partial<AppEnv>), production: true })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.error, "dev_flag_forbidden")
+})
+
+// ─── Config resolver: fail-closed validation ────────────────────
+
+test("cloudflare config fails closed on missing D1 binding", () => {
+  const env = cloudflareEnv()
+  delete (env as Record<string, unknown>).TENANT_DB_DEFAULT
+  const result = resolveValidatedRequestRuntimeConfig({ rawEnv: env, production: true })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.error, "missing_tenant_db")
+})
+
+test("cloudflare config fails closed on a malformed boolean var", () => {
+  const result = resolveValidatedRequestRuntimeConfig({ rawEnv: cloudflareEnv({ EXTERNAL_ACTIONS_ENABLED: "1" as "true" }), production: true })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.error, "malformed_var")
+})
+
+test("validated runtime config sections are frozen", () => {
+  const result = resolveValidatedRequestRuntimeConfig({ rawEnv: cloudflareEnv(), production: true })
+  assert.ok(result.ok)
+  if (result.ok) {
+    assert.ok(Object.isFrozen(result.runtime))
+    assert.ok(Object.isFrozen(result.runtime.security))
+    assert.throws(() => { (result.runtime.security as { externalActionsEnabled: boolean }).externalActionsEnabled = true })
+  }
+})

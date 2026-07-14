@@ -109,35 +109,57 @@ It prints only safe field names and category-level failures — never a database
 stops after artifact verification. The upload step can never run before prepare
 and preflight succeed.
 
-## 7. Request-scoped runtime environment
+## 7. Request-scoped runtime configuration (auth / security / llm / persistence)
 
-There is **no** `globalThis.__CLOUDFLARE_RUNTIME_ENV__` bridge and no mutable
-module/process-global runtime env. Per request:
+There is **no** `globalThis.__CLOUDFLARE_RUNTIME_ENV__` bridge, no
+`setRequestRuntimeEnvInProd`, and no mutable module/process-global runtime env or
+config. The raw Cloudflare env is read **once per request** and projected into one
+authoritative, frozen configuration. Per request:
 
 1. `.open-next/worker.js` installs the Cloudflare context for the request.
-2. `getRequestRuntimeEnv()` reads it via `getCloudflareContext().env`
-   (`@opennextjs/cloudflare`, request-scoped, synchronous inside handlers).
-3. `validateCloudflareRuntimeEnv()` copies only an allowlisted set of bindings +
-   vars into a **frozen** snapshot (`ValidatedCloudflareRuntimeEnv`).
-4. `resolveRepositories({ runtimeEnv })` derives **both** the persistence mode and
-   the D1 bindings from that single snapshot.
+2. `getRequestRuntimeEnv()` (`app/lib/runtime/cloudflareRuntimeEnv.ts`) reads it via
+   `getCloudflareContext().env` (`@opennextjs/cloudflare`, request-scoped, sync in
+   handlers). It is **pure**: no state, no setters, no process/global fallback.
+3. `resolveValidatedRequestRuntimeConfig()`
+   (`app/lib/runtime/requestRuntimeConfig.ts`) validates + copies only allowlisted
+   fields into a frozen `ValidatedRequestRuntimeConfig` with narrow capability
+   projections:
+   - `persistence` — `PERSISTENCE_MODE` + `CONTROL_DB` / `TENANT_DB_DEFAULT`;
+   - `auth` — adapter (`none` | `jwt`; `dev` is impossible in production) + injected
+     JWT `{ secret, issuer, audience }`;
+   - `security` — kill switch (`externalActionsEnabled`), legacy fallback, and all
+     `allowDev*` flags (forced `false` in production; `"true"` is rejected);
+   - `llm` — provider / api key / mock / legacy-fallback.
+4. Each API route resolves the config **once** and threads the projections into
+   `requireSession(request, runtime)` (auth + control DB), repository resolution
+   (`runtime.persistence`), the kill switch (`projectRuntimeAuthorizationEnv`), the
+   Runtime Authorization gate (`env:` projection), and LLM resolution
+   (`projectLlmEnv`).
 
-Guarantees:
+Guarantees (proven by `tests/requestRuntimeConfig.test.mts`,
+`tests/cloudflareRuntimeContextIsolation.test.mts`,
+`tests/cloudflareRuntimeEnvArchitecture.test.mts`):
 
-- one request cannot observe another request's bindings (proven by
-  `tests/cloudflareRuntimeContextIsolation.test.mts`);
-- a missing/malformed context fails closed (`integration_missing` / 503);
-- `process.env` cannot override the active request's persistence mode;
+- one request cannot observe another request's bindings, auth, security, or LLM config;
+- a missing/malformed context or config fails closed (`integration_missing` / 503,
+  or an unauthorized session);
+- `process.env` can never override the active Cloudflare request's config;
+- `AUTH_ADAPTER=jwt` selects the JWT adapter with an injected secret; missing/weak
+  JWT config fails closed; tenant + role always come from the control DB membership,
+  never JWT claims; dev adapters are impossible in production;
 - production never returns in-memory repositories;
-- test injection (`runWithTestRuntimeEnv`) is separate from production code and a
-  genuine Cloudflare context always takes precedence over any test override;
-- no raw runtime env or binding is returned to clients or written to logs.
+- test injection lives in a structurally separate seam
+  (`requestRuntimeEnvInjection.ts`, AsyncLocalStorage) that the production accessor
+  cannot reach and that no route imports;
+- no secret (JWT secret, LLM API key) or raw binding is returned to clients, placed
+  in audit metadata, or written to logs.
 
 ## 8. Local development
 
 - `npm run dev` — plain Next.js; no Cloudflare context. `getRequestRuntimeEnv()`
-  returns `null`; persistence is in-memory (only when
-  `ALLOW_IN_MEMORY_PERSISTENCE=true`) or `integration_missing`.
+  returns `null`; the config resolver uses an **explicit, separate `process.env`
+  path** (dev adapters allowed only when `NODE_ENV !== production`). Persistence is
+  in-memory (only when `ALLOW_IN_MEMORY_PERSISTENCE=true`) or `integration_missing`.
 - `npm run cf:dev` — OpenNext build + `wrangler dev` (local Worker + local D1).
   Placeholder D1 IDs are fine locally (`wrangler dev --local` uses local SQLite).
 

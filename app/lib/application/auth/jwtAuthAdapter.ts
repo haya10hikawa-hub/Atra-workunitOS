@@ -14,16 +14,29 @@ type JwtClaims = {
   nbf?: unknown
 }
 
+/**
+ * Immutable JWT verification config, injected through the constructor. The
+ * adapter NEVER reads `process.env`: secret, issuer, and audience come only from
+ * the request-scoped validated runtime config.
+ */
+export type JwtAuthConfig = {
+  readonly secret: string
+  readonly issuer?: string
+  readonly audience?: string
+}
+
 export class JwtAuthAdapter implements AuthAdapter {
+  private readonly config: JwtAuthConfig | undefined
+
+  constructor(config?: JwtAuthConfig) {
+    this.config = config ? Object.freeze({ ...config }) : undefined
+  }
+
   async verify(request: Request): Promise<AuthAdapterResult> {
-    const secret = process.env.JWT_AUTH_SECRET
-    if (!secret) return { ok: false, reason: "adapter_not_configured" }
-    if (process.env.NODE_ENV === "production") {
-      if (new TextEncoder().encode(secret).byteLength < 32) return { ok: false, reason: "adapter_not_configured" }
-      if (!process.env.JWT_AUTH_ISSUER || !process.env.JWT_AUTH_AUDIENCE) {
-        return { ok: false, reason: "adapter_not_configured" }
-      }
-    }
+    const config = this.config
+    // Missing/invalid injected config → fail closed (the resolver only supplies a
+    // config when secret >= 32 bytes and issuer/audience are present in prod).
+    if (!config || !config.secret) return { ok: false, reason: "adapter_not_configured" }
 
     const authHeader = request.headers.get("authorization")
     if (!authHeader) return { ok: false, reason: "missing_credentials" }
@@ -33,7 +46,7 @@ export class JwtAuthAdapter implements AuthAdapter {
 
     let claims: JwtClaims | null
     try {
-      claims = await verifyJwt(match[1], secret)
+      claims = await verifyJwt(match[1], config)
     } catch {
       return { ok: false, reason: "invalid_credentials" }
     }
@@ -44,7 +57,7 @@ export class JwtAuthAdapter implements AuthAdapter {
   }
 }
 
-async function verifyJwt(token: string, secret: string): Promise<JwtClaims | null> {
+async function verifyJwt(token: string, config: JwtAuthConfig): Promise<JwtClaims | null> {
   const parts = token.split(".")
   if (parts.length !== 3) return null
 
@@ -55,11 +68,11 @@ async function verifyJwt(token: string, secret: string): Promise<JwtClaims | nul
 
   const verified = await crypto.subtle.verify(
     "HMAC",
-    await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]),
+    await crypto.subtle.importKey("raw", new TextEncoder().encode(config.secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]),
     decodeBase64UrlToArrayBuffer(encodedSignature),
     new TextEncoder().encode(`${encodedHeader}.${encodedPayload}`),
   )
-  if (!verified || !claimsAreValid(claims)) return null
+  if (!verified || !claimsAreValid(claims, config)) return null
   return claims
 }
 
@@ -75,12 +88,12 @@ function toVerifiedIdentity(claims: JwtClaims): VerifiedAuthIdentity | null {
   }
 }
 
-function claimsAreValid(claims: JwtClaims): boolean {
+function claimsAreValid(claims: JwtClaims, config: JwtAuthConfig): boolean {
   const now = Math.floor(Date.now() / 1000)
   if (!Number.isSafeInteger(claims.exp) || now >= (claims.exp as number)) return false
   if (claims.nbf !== undefined && (!Number.isSafeInteger(claims.nbf) || now < (claims.nbf as number))) return false
-  if (process.env.JWT_AUTH_ISSUER && claims.iss !== process.env.JWT_AUTH_ISSUER) return false
-  const audience = process.env.JWT_AUTH_AUDIENCE
+  if (config.issuer && claims.iss !== config.issuer) return false
+  const audience = config.audience
   if (audience) {
     if (typeof claims.aud === "string" && claims.aud !== audience) return false
     if (Array.isArray(claims.aud) && !claims.aud.includes(audience)) return false
