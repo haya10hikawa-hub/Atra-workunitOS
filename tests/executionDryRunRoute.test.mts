@@ -552,9 +552,12 @@ test("dry-run returns blocked when kill switch is active", async () => {
   })
 })
 
-test("dry-run returns verified when kill switch is off and approval valid", async () => {
+test("dry-run does NOT verify from Preview↔Approval binding alone (P6-FIX-012)", async () => {
   await withPersistence(async () => {
-    // Enable external execution
+    // Enable external execution. Preview↔Approval binding is valid and the caller
+    // is an owner, but the server-authoritative Phase 6 evidence resolver is
+    // default-deny, so the real runtime eligibility decision is `not_ready`. A
+    // valid binding alone must never be sufficient for `verified` (Issue #145).
     process.env.EXTERNAL_ACTIONS_ENABLED = "true"
     await seedApproval({ tenantId, workUnitId, status: "approved" })
     const request = makeRequest(workUnitId, {
@@ -565,8 +568,7 @@ test("dry-run returns verified when kill switch is off and approval valid", asyn
     const response = await POST(request, { params: Promise.resolve({ id: workUnitId }) })
     const body = await response.json()
     assert.equal(body.ok, true)
-    assert.equal(body.status, "verified")
-    assert.equal(body.reason.includes("allowed"), true)
+    assert.equal(body.status, "not_ready")
   })
 })
 

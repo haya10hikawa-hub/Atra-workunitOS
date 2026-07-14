@@ -161,3 +161,18 @@ test("final gate uses claimApprovalForRuntime, never the legacy markApprovalUsed
   assert.ok(GATE_SRC.includes("claimApprovalForRuntime"), "gate must use the exact-binding claim")
   assert.ok(!GATE_SRC.includes("markApprovalUsed"), "gate must NOT use the legacy unbound claim")
 })
+
+// ─── Malformed claimedAt (P6-FIX-012 hardening) ─────────────────
+
+for (const bad of ["", "not-a-date", "2026-13-40T99:99:99Z", "1717000000"]) {
+  test(`in-memory store: malformed claimedAt (${bad || "empty"}) claims nothing`, async () => {
+    const store = createInMemoryApprovalStore()
+    store.addRecord({ ...row(), tenantId } as never)
+    assert.equal(await store.claimApprovalForRuntime(claim({ claimedAt: bad })), false)
+  })
+  test(`D1 repo: malformed claimedAt (${bad || "empty"}) claims nothing`, async () => {
+    const { repo, ctx } = freshD1()
+    await repo.create(ctx, row())
+    assert.equal(await repo.claimForRuntime(ctx, { id: "approval-1", workUnitId: "wu-1", actionPreviewId: "preview-1", actionType: "slack_reply", targetHash: T_HASH, payloadHash: P_HASH, claimedAt: bad }), null)
+  })
+}

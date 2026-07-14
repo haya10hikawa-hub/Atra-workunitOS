@@ -110,19 +110,27 @@ test("the gate performs BOTH an early and a final RBAC + kill-switch check", () 
   // a single-point skip is observable even though the redundant check masks its
   // runtime effect.
   const src = codeOnly(read("app/lib/security/runtimeAuthorizationGate.ts"))
-  const rbac = src.match(/hasExecutePermission\(session\)/g) ?? []
-  const kill = src.match(/areExternalActionsEnabled\(env\)/g) ?? []
+  const rbac = src.match(/hasExecutePermission\(/g) ?? []
+  const kill = src.match(/areExternalActionsEnabled\(/g) ?? []
   assert.ok(rbac.length >= 2, `expected >=2 RBAC checks, found ${rbac.length}`)
   assert.ok(kill.length >= 2, `expected >=2 kill-switch checks, found ${kill.length}`)
 })
 
-test("the FINAL RBAC + kill-switch checks sit immediately before the claim", () => {
+test("the FINAL RBAC + kill-switch recheck follow eligibility and precede the claim", () => {
+  // In the shared core the final recheck occurs AFTER eligibility and just
+  // before the eligible return; the consuming gate claims only after that
+  // return. Removing either recheck (skip early / skip final) drops the count
+  // above or moves the last occurrence before eligibility here.
   const src = codeOnly(read("app/lib/security/runtimeAuthorizationGate.ts"))
+  const eligIdx = src.indexOf("evaluateRuntimeAuthorizationEligibility(")
+  const okReturnIdx = src.indexOf("return { ok: true, evidence")
   const claimIdx = src.indexOf(".claimApprovalForRuntime(")
-  const lastRbac = src.lastIndexOf("hasExecutePermission(session)", claimIdx)
-  const lastKill = src.lastIndexOf("areExternalActionsEnabled(env)", claimIdx)
-  assert.ok(lastRbac > 0 && lastRbac < claimIdx, "final RBAC must precede the claim")
-  assert.ok(lastKill > 0 && lastKill < claimIdx, "final kill-switch must precede the claim")
+  assert.ok(eligIdx > 0 && okReturnIdx > eligIdx, "eligibility precedes the eligible return")
+  const lastRbac = src.lastIndexOf("hasExecutePermission(", okReturnIdx)
+  const lastKill = src.lastIndexOf("areExternalActionsEnabled(", okReturnIdx)
+  assert.ok(lastRbac > eligIdx && lastRbac < okReturnIdx, "final RBAC after eligibility, before eligible return")
+  assert.ok(lastKill > eligIdx && lastKill < okReturnIdx, "final kill-switch after eligibility, before eligible return")
+  assert.ok(claimIdx > okReturnIdx, "claim occurs only after the eligible core return")
 })
 
 test("the final gate does not use the legacy unbound single-id claim", () => {
@@ -176,4 +184,32 @@ test("no Phase 6 evidence D1 migration is added in this patch", () => {
   const resolver = read("app/lib/security/runtimeAuthorizationEvidenceResolver.ts")
   assert.ok(!/CREATE TABLE/i.test(resolver))
   assert.ok(!resolver.includes("MIGRATION"))
+})
+
+// ─── F4: the receipt constructor is server-private, gate-only ────
+
+test("only the gate imports the server-private receipt constructor module", () => {
+  const importers: string[] = []
+  function walk(dir: string) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name)
+      if (entry.isDirectory()) { if (!/node_modules|\.next|\.open-next/.test(p)) walk(p); continue }
+      if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".tsx")) continue
+      if (p.endsWith("runtimeAuthorizationReceipt.ts")) continue
+      const src = readFileSync(p, "utf-8")
+      if (/from ["'][^"']*runtimeAuthorizationReceipt(\.ts)?["']/.test(src)) importers.push(p)
+    }
+  }
+  walk(join(ROOT, "app"))
+  assert.deepEqual(
+    importers.map((p) => p.replace(ROOT + "/", "")),
+    ["app/lib/security/runtimeAuthorizationGate.ts"],
+  )
+})
+
+test("the pure index does not export a branded-receipt constructor", async () => {
+  const surface = await import("../app/lib/phase6/runtimeAuthorization/index.ts")
+  for (const [name, value] of Object.entries(surface)) {
+    if (typeof value === "function") assert.ok(!/receipt/i.test(name), `pure export ${name} must not construct a receipt`)
+  }
 })

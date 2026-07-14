@@ -4,6 +4,8 @@ import { safeError } from "../../../../../lib/security/safeErrors.ts"
 import { writeAuditLog, type AuditEventKind } from "../../../../../lib/security/auditLog.ts"
 import { resolveRouteRepositories } from "../../../../../lib/persistence/routeRepositories.ts"
 import { areExternalActionsEnabled } from "../../../../../lib/security/externalActions.ts"
+import { evaluateRuntimeAuthorizationDryRun } from "../../../../../lib/security/runtimeAuthorizationGate.ts"
+import { resolveRuntimeAuthorizationEvidenceResolver } from "../../../../../lib/security/runtimeAuthorizationEvidenceResolver.ts"
 import type { TenantId } from "../../../../../lib/tenant/types.ts"
 import { canCreatePreview } from "../../../../../lib/security/tenantAccess.ts"
 import { canExecuteExternalAction } from "../../../../../lib/security/rbac.ts"
@@ -142,14 +144,15 @@ export async function POST(
     return successResponse(workUnitId, previewRefs.length, requestedActionType, "not_ready", "A stored preview reference is required before dry-run verification.", requestId)
   }
 
-  // ── 7. Explicit approval ↔ preview binding (Phase 5C) ────────
-  // No latest/workUnit-only approval lookup. For each referenced preview, resolve
-  // the approval bound to THAT exact preview (by actionPreviewId, tenant-scoped)
-  // and verify the pair. The request is ready only if some referenced preview has
-  // a fully-bound, valid approval.
+  // ── 7. Explicit approval ↔ preview binding (Phase 5C, LOCAL DEFENSE) ──
+  // Preview ↔ Approval binding remains a local defense but is NOT sufficient for
+  // `verified`: the real Phase 6 runtime eligibility decision (§8) must also
+  // pass. For each referenced preview, resolve the bound approval and verify the
+  // pair; collect the approvals for the runtime eligibility step.
   let allVerified = true
   let firstFailure: ReturnType<typeof verifyApprovalPreviewBinding> | null = null
   const now = new Date().toISOString()
+  const boundApprovals: Array<{ previewId: string; approvalId: string; actionType: string }> = []
 
   for (const previewId of previewIds) {
     const [approval, preview] = await Promise.all([
@@ -161,7 +164,8 @@ export async function POST(
       approval,
       preview,
     )
-    if (outcome.ok) {
+    if (outcome.ok && approval) {
+      boundApprovals.push({ previewId, approvalId: approval.id, actionType: approval.actionType })
       continue
     }
     allVerified = false
@@ -183,15 +187,56 @@ export async function POST(
     return successResponse(workUnitId, previewRefs.length, requestedActionType, "not_ready", reason, requestId)
   }
 
-  // ── 8. Check kill switch ─────────────────────────────────────
+  // ── 8a. Kill switch (LOCAL DEFENSE) ──────────────────────────
+  // Explicit local kill-switch check retained as defense in depth (the runtime
+  // eligibility core rechecks it too). External execution is off by default.
   if (!areExternalActionsEnabled()) {
     audit("execution_dry_run_blocked", requestId, { reason: "kill_switch_active" })
     return successResponse(workUnitId, previewRefs.length, requestedActionType, "blocked", "External execution is disabled by kill switch.", requestId)
   }
 
+  // ── 8b. Phase 6 runtime eligibility (the SAME core the real gate runs) ──
+  // Non-consuming: never claims Approval, never consumes Linkage, never builds a
+  // receipt, never calls a provider. It resolves the server-authoritative
+  // evidence, derives the current executor, re-runs verifyApprovalLinkage, the
+  // Human Decision runtime matrix, executor-vs-approver, execute RBAC, and the
+  // kill switch. A default-deny/missing evidence resolver returns `not_ready`
+  // even when the Approval Record and Preview binding are valid and the kill
+  // switch is enabled. Worst disposition across referenced previews wins.
+  const evidenceResolver = resolveRuntimeAuthorizationEvidenceResolver(session.tenantId as TenantId)
+  let disposition: "verified" | "blocked" | "forbidden" | "not_ready" = "verified"
+  for (const bound of boundApprovals) {
+    const outcome = await evaluateRuntimeAuthorizationDryRun({
+      session,
+      request: {
+        tenantId: session.tenantId,
+        workUnitId,
+        actionPreviewId: bound.previewId,
+        approvalId: bound.approvalId,
+        actionType: bound.actionType,
+      },
+      evidenceResolver,
+    })
+    if (outcome.disposition === "forbidden") { disposition = "forbidden"; break }
+    if (outcome.disposition === "blocked") { disposition = "blocked"; break }
+    if (outcome.disposition === "not_ready") { disposition = "not_ready"; break }
+  }
+
+  if (disposition === "forbidden") {
+    audit("execution_dry_run_failed", requestId, { reason: "runtime_forbidden" })
+    return errorResponse(requestId, "forbidden", 403)
+  }
+  if (disposition === "blocked") {
+    audit("execution_dry_run_blocked", requestId, { reason: "kill_switch_active" })
+    return successResponse(workUnitId, previewRefs.length, requestedActionType, "blocked", "External execution is disabled by kill switch.", requestId)
+  }
+  if (disposition === "not_ready") {
+    audit("execution_dry_run_blocked", requestId, { reason: "runtime_not_ready" })
+    return successResponse(workUnitId, previewRefs.length, requestedActionType, "not_ready", "Runtime authorization evidence is not available or not eligible.", requestId)
+  }
+
   // ── 9. Verified ──────────────────────────────────────────────
-  // IMPORTANT: dry-run NEVER marks approval as used
-  // Approval remains available for real execution if/when enabled
+  // IMPORTANT: dry-run NEVER marks approval as used and NEVER claims/consumes.
   audit("execution_dry_run_verified", requestId, {
     workUnitId,
     actionCount: previewRefs.length,

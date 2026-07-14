@@ -25,6 +25,7 @@ import {
   PAYLOAD_HASH,
 } from "./approvalLinkageFixture.mts"
 import type { CanonicalIdentity } from "../../../app/lib/phase6/canonicalIdentity/index.ts"
+import type { RuntimeAuthorizationEvidenceBundle } from "../../../app/lib/security/runtimeAuthorizationEvidenceResolver.ts"
 
 export const ISSUED_AT = EVALUATED_AT // one evaluation instant
 export const SESSION_EXPIRES_AT = "2026-07-06T00:00:00Z"
@@ -101,5 +102,45 @@ export function eligibilityInput(overrides: Record<string, unknown> = {}): Recor
     session_expires_at: SESSION_EXPIRES_AT,
     issued_at: ISSUED_AT,
     ...overrides,
+  }
+}
+
+/** A trusted clock pinned to the fixture evaluation instant. */
+export const TEST_CLOCK = { now: () => ISSUED_AT }
+
+/** The RAW server-owned sources (no baked evaluation timestamp) for a context. */
+export function evidenceSources(context: Record<string, unknown> = runtimeContext()): Record<string, unknown> {
+  return {
+    tenant_id: context.tenant_id,
+    human_decision: context.human_decision,
+    review_evidence: context.review_evidence,
+    identity_input: context.identity_input,
+    action_preview: context.action_preview,
+    approval_record: context.approval_record,
+    revoked_review_evidence_ids: context.revoked_review_evidence_ids,
+    consumed_review_evidence_ids: context.consumed_review_evidence_ids,
+    revoked_approval_ids: context.revoked_approval_ids,
+    consumed_approval_ids: context.consumed_approval_ids,
+    revoked_approval_linkage_ids: context.revoked_approval_linkage_ids,
+    consumed_approval_linkage_ids: context.consumed_approval_linkage_ids,
+  }
+}
+
+/** A fully valid server-authoritative evidence bundle for the gate/resolver. */
+export function evidenceBundle(context: Record<string, unknown> = runtimeContext()): RuntimeAuthorizationEvidenceBundle {
+  const linkage = runtimeLinkage(context)
+  const ia = intendedAction()
+  return {
+    linkage,
+    sources: evidenceSources(context) as unknown as RuntimeAuthorizationEvidenceBundle["sources"],
+    intendedAction: {
+      tenantId: ia.tenant_id as string,
+      workUnitId: ia.workunit_id as string,
+      actionPreviewId: ia.action_preview_id as string,
+      approvalId: ia.approval_id as string,
+      actionType: ia.action_type as string,
+      targetHash: ia.target_hash as string,
+      payloadHash: ia.payload_hash as string,
+    },
   }
 }

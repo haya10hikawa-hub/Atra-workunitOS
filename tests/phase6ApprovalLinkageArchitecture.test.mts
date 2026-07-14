@@ -138,7 +138,7 @@ test("the live Approval / ActionPreview routes are byte-identical to the P6-FIX-
     "app/api/workunit/[id]/action-preview/route.ts":
       "41ddc957aaa99d77ecc6257969a4475328239e0a20673f475831333231e6daab",
     "app/lib/security/approvalStore.ts":
-      "b9e5d67501339098e5ba361d259d46f6f0ff65fe3623c4680986637be2f2f5fb",
+      "fe95e65db109e10f60236a9ebe2870c29b7dcdd8ed837e3b9397aa9937d0c04c",
   }
   for (const [rel, pinned] of Object.entries(PINNED_BASELINE_DIGESTS)) {
     const bytes = readFileSync(`${REPO_ROOT}${rel}`)

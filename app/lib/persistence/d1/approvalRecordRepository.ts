@@ -9,6 +9,7 @@ import type { TenantDbContext, ApprovalRecordRow } from "../types.ts"
 import type { ApprovalRecordRepository, RuntimeApprovalClaimFields } from "../repositories.ts"
 import type { D1DatabaseLike } from "./types.ts"
 import { nowISO } from "./rowHelpers.ts"
+import { isIsoUtcTimestamp } from "../../phase6/shared/isoUtcTimestamp.ts"
 
 // ─── SQL ────────────────────────────────────────────────────────
 
@@ -144,6 +145,9 @@ export class D1ApprovalRecordRepository implements ApprovalRecordRepository {
    * on a winning single-row update is the fresh row returned.
    */
   async claimForRuntime(ctx: TenantDbContext, input: RuntimeApprovalClaimFields): Promise<ApprovalRecordRow | null> {
+    // Reject a malformed/non-ISO claimedAt before touching the database, keeping
+    // predicate behaviour equivalent to the in-memory claim.
+    if (!isIsoUtcTimestamp(input.claimedAt)) return null
     const result = await this.db.prepare(CLAIM_FOR_RUNTIME_SQL)
       .bind(
         input.claimedAt,

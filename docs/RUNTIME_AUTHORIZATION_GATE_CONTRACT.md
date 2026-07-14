@@ -104,3 +104,37 @@ No Phase 6 evidence table and no D1 migration are added in this Issue. The
 default production evidence resolver is **default-deny**, so production runtime
 authorization is closed by construction until a future patch persists the full
 server-authoritative evidence bundle.
+
+## P6-FIX-012 trust-gap repairs (PR #163 review)
+
+- **Temporal freshness.** The authoritative authorization instant is minted by an
+  injectable trusted clock **after** the final asynchronous evidence read (never
+  before), and drives executor-session validation, Linkage verification, Human
+  Decision eligibility, expiry derivation, and the CAS. A slow resolver that
+  crosses an expiry boundary fails closed; the client never supplies the time.
+- **One authoritative snapshot.** The eligibility evaluator snapshots the Linkage
+  once and deep-snapshots the Linkage context (and every nested source) once
+  before verification; `verifyApprovalLinkage`, the Human Decision matrix,
+  envelope comparison, approver lookup, expiry, and idempotency all read those
+  inert frozen snapshots. Every original scalar/array element is read at most
+  once per evaluation.
+- **One binding envelope.** The gate snapshots the resolver bundle once; the
+  claim and the receipt both derive from `eligibility.evidence`, so the claim
+  binding always equals the receipt binding.
+- **Post-claim-only receipt.** The branded receipt constructor lives in the
+  server-private `runtimeAuthorizationReceipt.ts`, imported ONLY by the gate and
+  reached only after a winning CAS. No pure export turns plain evidence into a
+  branded receipt.
+- **Dry-run parity.** The dry-run route runs the SAME non-consuming core
+  (resolver, post-resolution timestamp, executor, Linkage, HD matrix,
+  executor-vs-approver, execute RBAC, kill switch, envelope). A default-deny /
+  missing evidence resolver returns `not_ready` even with a valid Preview↔Approval
+  binding, an enabled kill switch, and an owner caller. Preview↔Approval binding
+  is a local defense and never sufficient for `verified`.
+- **Audit lifecycle.** A typed sink receives `requested → eligible → claimed →
+  created` on success and `rejected` / `replayed` / `blocked` on failure; a false
+  CAS emits `replayed` and never `claimed`/`created`. Emissions are redacted, and
+  a throwing sink never breaks the gate.
+- **Claim input validation.** All ApprovalStore/claim implementations reject a
+  malformed/non-ISO `claimedAt`; inclusive-fail expiry (`claimedAt >= expiresAt`)
+  is preserved and D1/in-memory predicates stay equivalent.

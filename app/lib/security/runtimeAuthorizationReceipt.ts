@@ -1,18 +1,19 @@
 /**
- * P6-FIX-012: the opaque Runtime Authorization receipt constructor (Issue #145).
+ * P6-FIX-012 (Issue #145): the SINGLE, server-private production point for a
+ * branded `RuntimeAuthorizationReceipt`.
  *
- * This is the ONLY production point for a `RuntimeAuthorizationReceipt`. The
- * brand is compile-time only and NOT exported, so no code outside this module
- * can forge a receipt by object literal or cast-to-shape. The server-side gate
- * invokes this constructor ONLY after the exact-binding atomic ApprovalStore
- * claim wins; a receipt therefore witnesses `authorized_not_executed`, never
- * execution.
+ * This module is deliberately NOT re-exported from any barrel and is
+ * source-guarded so that ONLY `runtimeAuthorizationGate.ts` imports it. The gate
+ * reaches this constructor only after a successful exact-binding ApprovalStore
+ * CAS, so a receipt can never exist without a won one-time-use claim. The pure
+ * `runtimeAuthorization` module intentionally exposes no callable that turns a
+ * plain `RuntimeAuthorizationEligibleEvidence` into a branded receipt.
  *
- * The receipt carries the canonical payload fields plus the `authorization_hash`
- * (SHA-256 integrity identifier, never a MAC). It never carries `executed: true`,
- * a provider response/reference, a raw target, a raw payload, credentials,
- * tokens, or a sendable request body. Constructing or holding one calls no
- * provider. Pure: no I/O, no clock, no randomness, no mutation.
+ * The `authorization_hash` is an unkeyed SHA-256 integrity identifier over the
+ * exact-allowlist canonical payload (which excludes the hash itself). The
+ * receipt carries no `executed: true`, provider response/reference, raw target,
+ * raw payload, credentials, tokens, or sendable body. Pure: no I/O, no clock, no
+ * randomness, no mutation, no provider call.
  */
 
 import {
@@ -21,18 +22,16 @@ import {
   RUNTIME_AUTHORIZATION_HASH_ALGORITHM,
   RUNTIME_AUTHORIZATION_CANONICALIZATION_ALGORITHM,
   RUNTIME_AUTHORIZATION_STATUS,
-  type RuntimeAuthorizationEligibleEvidence,
-  type RuntimeAuthorizationReceipt,
-} from "./types.ts"
-import {
   buildRuntimeAuthorizationPayload,
   hashRuntimeAuthorizationPayload,
-} from "./canonical.ts"
+  type RuntimeAuthorizationEligibleEvidence,
+  type RuntimeAuthorizationReceipt,
+} from "../phase6/runtimeAuthorization/index.ts"
 
 /**
  * Construct the opaque frozen receipt from the eligible evidence produced by a
- * successful eligibility evaluation. The caller (the gate) must only reach here
- * after the atomic claim has succeeded.
+ * successful eligibility evaluation. Callable ONLY by the gate, and only after
+ * its exact-binding CAS has succeeded.
  */
 export function constructRuntimeAuthorizationReceipt(
   evidence: RuntimeAuthorizationEligibleEvidence,

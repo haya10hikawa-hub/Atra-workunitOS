@@ -15,6 +15,7 @@ import type { ActionApprovalRecord } from "../domain/types.ts"
 import type { TenantDbContext } from "./types.ts"
 import type { ApprovalRecordRepository } from "./repositories.ts"
 import { approvalRecordRowToDomain } from "./mappers.ts"
+import { isIsoUtcTimestamp } from "../phase6/shared/isoUtcTimestamp.ts"
 
 /**
  * Create an ApprovalStore backed by an ApprovalRecordRepository.
@@ -65,6 +66,8 @@ export function createRepositoryBackedApprovalStore(
         // with every binding field matching; null otherwise. The tenant is the
         // adapter's fixed ctx.tenantId — the caller-supplied input.tenantId is
         // additionally cross-checked so a mismatched tenant claims nothing.
+        // A malformed/non-ISO claimedAt is rejected before touching the repo.
+        if (!isIsoUtcTimestamp(input.claimedAt)) return false
         if (input.tenantId !== ctx.tenantId) return false
         const claimed = await repo.claimForRuntime(ctx, {
           id: input.approvalId,

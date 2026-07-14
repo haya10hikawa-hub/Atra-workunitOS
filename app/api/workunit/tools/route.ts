@@ -29,6 +29,7 @@ import { resolveRouteRepositories } from "../../../lib/persistence/routeReposito
 // Runtime authorization gate (Issue #145) — the final gate for external ops.
 import { authorizeRuntimeCommand } from "../../../lib/security/runtimeAuthorizationGate.ts"
 import { resolveRuntimeAuthorizationEvidenceResolver } from "../../../lib/security/runtimeAuthorizationEvidenceResolver.ts"
+import type { RuntimeAuthorizationAuditSink } from "../../../lib/phase6/runtimeAuthorization/index.ts"
 import type { ApprovalActionType } from "../../../lib/domain/types.ts"
 
 // TODO: tenant boundary — validate that the requested source belongs to the caller's tenant
@@ -370,8 +371,6 @@ async function authorizeExternalOperation(
   session: Session,
   requestId: string,
 ): Promise<NextResponse> {
-  audit("runtime_authorization_requested", requestId, { operation: validated.operation })
-
   const actionType = runtimeActionTypeFor(validated.operation, validated.source)
   const workUnitId = validated.draft?.id
   if (!actionType || !workUnitId) {
@@ -389,6 +388,33 @@ async function authorizeExternalOperation(
   const approvalStore = resolveApprovalStore(session.tenantId as TenantId)
   const evidenceResolver = resolveRuntimeAuthorizationEvidenceResolver(session.tenantId as TenantId)
 
+  // Redacted audit sink: the gate emits the requested → eligible → claimed →
+  // created lifecycle (or rejected/replayed/blocked) as already-redacted events;
+  // the sink forwards them to the in-process log and best-effort durable
+  // persistence (fail-open), never re-deriving raw material.
+  const auditSink: RuntimeAuthorizationAuditSink = {
+    emit(event) {
+      audit(event.event_kind as AuditEventKind, requestId, {
+        operation: validated.operation,
+        metadata: {
+          actionType: event.action_type,
+          actionPreviewId: event.action_preview_id,
+          approvalId: event.approval_id,
+          reason: event.state,
+        },
+      })
+      void persistAuditEvent(session.tenantId, {
+        kind: event.event_kind as AuditEventKind,
+        timestamp: event.evaluated_at,
+        requestId,
+        actorId: session.userId,
+        workUnitId: event.workunit_id === "redacted" ? undefined : event.workunit_id,
+        reason: event.state,
+        metadata: { operation: validated.operation, actionType: event.action_type },
+      })
+    },
+  }
+
   const result = await authorizeRuntimeCommand({
     session,
     request: {
@@ -398,43 +424,17 @@ async function authorizeExternalOperation(
       approvalId: validated.approvalId,
       actionType,
     },
-    evaluatedAt: new Date().toISOString(),
     approvalStore,
     evidenceResolver,
+    auditSink,
   })
 
   if (!result.ok) {
     const mapped = mapRuntimeAuthorizationFailure(result.state)
-    audit(mapped.auditKind, requestId, { operation: validated.operation, reason: result.state })
-    await persistAuditEvent(session.tenantId, {
-      kind: mapped.auditKind,
-      timestamp: new Date().toISOString(),
-      requestId,
-      actorId: session.userId,
-      reason: result.state,
-      metadata: { operation: validated.operation },
-    })
     return errorResponse(requestId, mapped.code, mapped.status)
   }
 
   // Success: authorized, NOT executed. Return only redacted, safe identifiers.
-  audit("runtime_authorization_created", requestId, {
-    operation: validated.operation,
-    metadata: { actionType },
-  })
-  await persistAuditEvent(session.tenantId, {
-    kind: "runtime_authorization_created",
-    timestamp: new Date().toISOString(),
-    requestId,
-    actorId: session.userId,
-    workUnitId,
-    metadata: {
-      operation: validated.operation,
-      actionType,
-      actionPreviewId: validated.actionPreviewId,
-      approvalId: validated.approvalId,
-    },
-  })
   return json({
     ok: true,
     requestId,

@@ -44,6 +44,7 @@ import {
   type RuntimeAuthorizationIssue,
   runtimeAuthorizationIssue,
   snapshotRecordOrNull,
+  snapshotDeepFrozen,
   isRuntimeAuthorizationNonEmptyString,
 } from "./validation.ts"
 import { evaluateHumanDecisionRuntimeEligibility } from "./humanDecisionPolicy.ts"
@@ -173,34 +174,39 @@ export function evaluateRuntimeAuthorizationEligibility(
       return fail("invalid", [runtimeAuthorizationIssue("runtime_authorization_action_type_mismatch", "(intended_action).action_type")])
     }
 
-    // 3. Snapshot the linkage context once; enforce one-evaluation-timestamp
-    //    consistency (issued_at must equal the context evaluated_at), then run
-    //    verifyApprovalLinkage INTERNALLY against the same snapshot.
-    const context = snapshotRecordOrNull(snap.linkage_context)
-    if (context === null) {
+    // 3. ONE authoritative snapshot of the original Linkage and the original
+    //    Linkage context (and every nested source) BEFORE any verification. The
+    //    original getter-bearing objects are read exactly once here; every
+    //    downstream consumer — verifyApprovalLinkage, the Human Decision matrix,
+    //    envelope comparison, approver lookup, expiry, and idempotency — reads
+    //    only these inert frozen snapshots, so no field can return one value at
+    //    verification and a substituted value at use.
+    const linkage = snapshotRecordOrNull(snap.linkage)
+    if (linkage === null) {
+      return fail("invalid", [runtimeAuthorizationIssue("runtime_authorization_linkage_invalid", "(linkage)")])
+    }
+    const context = snapshotDeepFrozen(snap.linkage_context)
+    if (context === null || typeof context !== "object" || Array.isArray(context)) {
       return fail("not_ready", [runtimeAuthorizationIssue("runtime_authorization_state_missing", "(linkage_context)")])
     }
-    if (context.evaluated_at !== issuedAt) {
+    const ctx = context as Record<string, unknown>
+    if (ctx.evaluated_at !== issuedAt) {
       return fail("invalid", [runtimeAuthorizationIssue("runtime_authorization_timestamp_inconsistent", "(linkage_context).evaluated_at")])
     }
 
-    const linkageResult = verifyApprovalLinkage(snap.linkage, context)
+    // Verify the Linkage against the SAME snapshots (never the originals).
+    const linkageResult = verifyApprovalLinkage(linkage, ctx)
     if (!linkageResult.ok || linkageResult.state !== "verified") {
       const mapped = linkageStateToEligibility(linkageResult.state)
       return fail(mapped.state, [runtimeAuthorizationIssue(mapped.code, "(linkage)")])
     }
 
-    // 4. Snapshot the verified linkage record and read its binding fields. The
-    //    record is trusted post-verification, but still read via a single-read
-    //    snapshot so no getter can diverge.
-    const linkage = snapshotRecordOrNull(snap.linkage)
-    if (linkage === null) {
-      return fail("invalid", [runtimeAuthorizationIssue("runtime_authorization_linkage_invalid", "(linkage)")])
-    }
-
-    // 5. Human Decision runtime matrix over the context's authoritative Human
-    //    Decision (its content is bound into the verified linkage hash).
-    const decision = evaluateHumanDecisionRuntimeEligibility(context.human_decision)
+    // 5. Human Decision runtime matrix over the SAME Human Decision snapshot the
+    //    Linkage verifier consumed (its content is bound into the verified
+    //    linkage hash). A getter that presents linkage-bound content once and
+    //    runtime-eligible content later cannot split the two: both read this one
+    //    frozen snapshot.
+    const decision = evaluateHumanDecisionRuntimeEligibility(ctx.human_decision)
     if (!decision.ok) {
       return fail("not_ready", decision.issues)
     }

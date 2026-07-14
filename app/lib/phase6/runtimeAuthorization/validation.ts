@@ -109,3 +109,32 @@ export function snapshotRecordOrNull(value: unknown): Record<string, unknown> | 
   }
   return snapshot
 }
+
+/**
+ * Bounded single-read DEEP snapshot. Every own enumerable property and every
+ * array element of the original graph (down to `maxDepth`) is read EXACTLY ONCE
+ * into a fresh frozen structure, so no downstream consumer can re-read an
+ * original getter/Proxy and observe a substituted value. A throwing getter or
+ * `ownKeys` trap surfaces as a thrown error the caller catches fail-closed;
+ * leaves beyond `maxDepth` (in practice scalars) pass through unchanged.
+ *
+ * This reads the ORIGINAL object once; the frozen result is inert and may be
+ * read any number of times. It performs no `toJSON`/prototype traversal and
+ * copies own enumerable keys only.
+ */
+export function snapshotDeepFrozen(value: unknown, maxDepth = 8): unknown {
+  if (maxDepth <= 0) return value
+  if (Array.isArray(value)) {
+    const out: unknown[] = []
+    for (const el of value) out.push(snapshotDeepFrozen(el, maxDepth - 1))
+    return Object.freeze(out)
+  }
+  if (isRuntimeAuthorizationRecordObject(value)) {
+    const out: Record<string, unknown> = {}
+    for (const key of Object.keys(value)) {
+      out[key] = snapshotDeepFrozen((value as Record<string, unknown>)[key], maxDepth - 1)
+    }
+    return Object.freeze(out)
+  }
+  return value
+}

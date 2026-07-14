@@ -17,6 +17,7 @@
 
 import type { ActionApprovalRecord, ApprovalActionType, ApprovalStatus } from "../domain/types.ts"
 import type { TenantId } from "../tenant/types.ts"
+import { isIsoUtcTimestamp } from "../phase6/shared/isoUtcTimestamp.ts"
 
 // ─── Lookup Input ───────────────────────────────────────────────
 
@@ -212,7 +213,9 @@ export function createInMemoryApprovalStore(): ApprovalStore & {
     async claimApprovalForRuntime(input) {
       // Issue #145: exact-binding compare-and-set. Predicate parity with the D1
       // CLAIM_FOR_RUNTIME_SQL. Any binding-field mismatch, wrong status, prior
-      // use, or inclusive-fail expiry (claimedAt >= expiresAt) claims nothing.
+      // use, malformed/non-ISO claimedAt, or inclusive-fail expiry
+      // (claimedAt >= expiresAt) claims nothing.
+      if (!isIsoUtcTimestamp(input.claimedAt)) return false
       const record = records.get(input.approvalId)
       if (!record) return false
       if (record.tenantId !== input.tenantId) return false

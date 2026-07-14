@@ -44,6 +44,23 @@ function safeId(value: unknown): string {
 }
 
 /**
+ * A typed sink the server-side gate emits redacted runtime-authorization
+ * lifecycle events into. `emit` must never throw and must never be given, or
+ * forward, unredacted material — the gate always passes it the output of
+ * `projectRuntimeAuthorizationAudit`.
+ */
+export interface RuntimeAuthorizationAuditSink {
+  emit(event: RuntimeAuthorizationAuditEvent): void
+}
+
+/** A sink that discards events (default when no audit wiring is supplied). */
+export const noopRuntimeAuthorizationAuditSink: RuntimeAuthorizationAuditSink = {
+  emit() {
+    /* no-op */
+  },
+}
+
+/**
  * Project one redacted runtime-authorization audit event. Only allowlisted
  * identifiers survive; every issue code is filtered through the canonical
  * allowlist.

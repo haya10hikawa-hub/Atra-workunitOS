@@ -7,8 +7,15 @@
  * payload / integrity hash / deterministic idempotency + id builders
  * (./canonical.ts), the Human Decision runtime eligibility policy
  * (./humanDecisionPolicy.ts), the pure eligibility evaluator (./eligibility.ts),
- * the opaque receipt constructor (./constructors.ts), and the redacted audit
- * projection (./audit.ts).
+ * and the redacted audit projection (./audit.ts).
+ *
+ * The branded `RuntimeAuthorizationReceipt` production point is DELIBERATELY NOT
+ * on this public surface. No pure export accepts a plain
+ * `RuntimeAuthorizationEligibleEvidence` and returns a branded receipt; the
+ * canonical builders here return only plain, non-authorizing payload/hash
+ * values. The single receipt constructor lives server-private in
+ * `app/lib/security/runtimeAuthorizationReceipt.ts` and is reachable only by the
+ * gate, after a successful exact-binding CAS.
  *
  * Dependency direction: artifacts / canonicalIdentity / identityIndependence /
  * reviewEvidence / approvalLinkage / security-hash-leaf → runtimeAuthorization.
@@ -30,5 +37,4 @@ export * from "./validation.ts"
 export * from "./canonical.ts"
 export * from "./humanDecisionPolicy.ts"
 export * from "./eligibility.ts"
-export * from "./constructors.ts"
 export * from "./audit.ts"

@@ -1,6 +1,9 @@
 /**
  * P6-FIX-012 (Issue #145): canonical Runtime Authorization payload, integrity
- * hash, deterministic idempotency key + id, and receipt construction.
+ * hash, and deterministic idempotency key + id. These pure builders return only
+ * PLAIN, non-authorizing values — the branded receipt is NOT constructed here
+ * (that production point is server-private and post-claim-only; see the gate and
+ * architecture suites).
  */
 
 import test from "node:test"
@@ -10,7 +13,6 @@ import {
   hashRuntimeAuthorizationPayload,
   deriveRuntimeAuthorizationIdempotencyKey,
   deriveRuntimeAuthorizationId,
-  constructRuntimeAuthorizationReceipt,
   RUNTIME_AUTHORIZATION_HASH_DOMAIN,
   RUNTIME_AUTHORIZATION_STATUS,
   type RuntimeAuthorizationEligibleEvidence,
@@ -67,35 +69,16 @@ test("authorization id is a deterministic function of the idempotency key", () =
   assert.equal(id, deriveRuntimeAuthorizationId(key))
 })
 
-test("receipt is frozen, authorized_not_executed, and carries the hash", () => {
-  const receipt = constructRuntimeAuthorizationReceipt(EVIDENCE)
-  assert.equal(receipt.status, "authorized_not_executed")
-  assert.match(receipt.authorization_hash, /^[0-9a-f]{64}$/)
-  assert.equal(Object.isFrozen(receipt), true)
-  // No execution / provider material leaks into the receipt shape (camelCase
-  // AND snake_case variants).
-  for (const forbidden of [
-    "executed", "provider", "providerRef", "provider_ref", "externalRef", "external_ref",
-    "rawTarget", "raw_target", "rawPayload", "raw_payload", "sendableBody", "sendable_body",
-    "token", "credential",
-  ]) {
-    assert.ok(!(forbidden in receipt), `receipt must not carry ${forbidden}`)
+test("the pure surface exposes no branded-receipt constructor", async () => {
+  // A plain eligible-evidence object must NOT be turnable into a branded receipt
+  // through any pure export. Scan the public surface for a callable that returns
+  // a receipt shape.
+  const surface = await import("../app/lib/phase6/runtimeAuthorization/index.ts")
+  for (const [name, value] of Object.entries(surface)) {
+    if (typeof value !== "function") continue
+    assert.ok(
+      !/receipt/i.test(name),
+      `pure export ${name} must not be a receipt constructor`,
+    )
   }
-  // The receipt shape is exactly the allowlisted fields (no extra key sneaks in).
-  assert.deepEqual(
-    Object.keys(receipt).sort(),
-    [
-      "action_preview_id", "action_type", "approval_id", "approval_linkage_id",
-      "authorization_hash", "authorization_id", "canonicalization_algorithm",
-      "executor_id", "expires_at", "hash_algorithm", "hash_domain", "hash_version",
-      "idempotency_key", "issued_at", "payload_hash", "status", "target_hash",
-      "tenant_id", "workunit_id",
-    ],
-  )
-})
-
-test("receipt hash matches an independently recomputed payload hash", () => {
-  const receipt = constructRuntimeAuthorizationReceipt(EVIDENCE)
-  const recomputed = hashRuntimeAuthorizationPayload(buildRuntimeAuthorizationPayload({ ...EVIDENCE }))
-  assert.equal(receipt.authorization_hash, recomputed)
 })
