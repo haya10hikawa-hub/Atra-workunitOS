@@ -6,7 +6,7 @@
  */
 
 import type { TenantDbContext, ApprovalRecordRow } from "../types.ts"
-import type { ApprovalRecordRepository } from "../repositories.ts"
+import type { ApprovalRecordRepository, RuntimeApprovalClaimFields } from "../repositories.ts"
 import type { D1DatabaseLike } from "./types.ts"
 import { nowISO } from "./rowHelpers.ts"
 
@@ -44,6 +44,25 @@ const MARK_USED_SQL = `
      SET status = 'used', used_at = ?
    WHERE tenant_id = ?
      AND id = ?
+     AND status = 'approved'
+     AND used_at IS NULL
+     AND expires_at > ?
+`
+
+// Issue #145: exact-binding atomic compare-and-set. Every binding field must
+// match the stored row — a substituted target/payload/action-type/WorkUnit/
+// ActionPreview/Approval/tenant matches 0 rows and claims nothing. `expires_at >
+// ?` keeps expiry inclusive-fail (claimedAt == expires_at ⇒ 0 rows).
+const CLAIM_FOR_RUNTIME_SQL = `
+  UPDATE approval_records
+     SET status = 'used', used_at = ?
+   WHERE tenant_id = ?
+     AND id = ?
+     AND work_unit_id = ?
+     AND action_preview_id = ?
+     AND action_type = ?
+     AND target_hash = ?
+     AND payload_hash = ?
      AND status = 'approved'
      AND used_at IS NULL
      AND expires_at > ?
@@ -117,6 +136,29 @@ export class D1ApprovalRecordRepository implements ApprovalRecordRepository {
     const result = await this.db.prepare(MARK_USED_SQL).bind(usedAt, ctx.tenantId, id, usedAt).run()
     if ((result.meta?.rows_written ?? 0) < 1) return null
     return this.findById(ctx, id)
+  }
+
+  /**
+   * Issue #145 exact-binding atomic claim. The conditional UPDATE requires every
+   * binding field; a mismatch matches 0 rows and returns null (claim lost). Only
+   * on a winning single-row update is the fresh row returned.
+   */
+  async claimForRuntime(ctx: TenantDbContext, input: RuntimeApprovalClaimFields): Promise<ApprovalRecordRow | null> {
+    const result = await this.db.prepare(CLAIM_FOR_RUNTIME_SQL)
+      .bind(
+        input.claimedAt,
+        ctx.tenantId,
+        input.id,
+        input.workUnitId,
+        input.actionPreviewId,
+        input.actionType,
+        input.targetHash,
+        input.payloadHash,
+        input.claimedAt,
+      )
+      .run()
+    if ((result.meta?.rows_written ?? 0) < 1) return null
+    return this.findById(ctx, input.id)
   }
 
   // ── Private ──────────────────────────────────────────────────

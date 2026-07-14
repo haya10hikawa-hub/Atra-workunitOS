@@ -97,6 +97,31 @@ export interface ApprovalRecordRepository {
    * wrong status, or wrong tenant).
    */
   markUsed(ctx: TenantDbContext, id: string, usedAt: string): Promise<ApprovalRecordRow | null>
+
+  /**
+   * Issue #145 exact-binding atomic one-time-use claim for the final runtime
+   * authorization gate. Returns the updated row only when this call claimed the
+   * approval AND every binding field (tenant, id, WorkUnit, ActionPreview,
+   * action type, target hash, payload hash) matched the stored approved, unused,
+   * unexpired row (`expires_at > claimedAt`). Returns null on any mismatch or a
+   * lost race.
+   */
+  claimForRuntime(ctx: TenantDbContext, input: RuntimeApprovalClaimFields): Promise<ApprovalRecordRow | null>
+}
+
+/**
+ * The exact-binding fields the runtime claim predicate must match. Mirrors the
+ * security-layer `RuntimeApprovalClaimInput` without importing the security
+ * module into the persistence contract.
+ */
+export type RuntimeApprovalClaimFields = {
+  readonly id: string
+  readonly workUnitId: string
+  readonly actionPreviewId: string
+  readonly actionType: string
+  readonly targetHash: string
+  readonly payloadHash: string
+  readonly claimedAt: string
 }
 
 // ─── Execution Result Repository ────────────────────────────────

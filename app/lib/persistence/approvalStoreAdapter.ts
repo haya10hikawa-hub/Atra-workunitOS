@@ -57,5 +57,29 @@ export function createRepositoryBackedApprovalStore(
         return false
       }
     },
+
+    async claimApprovalForRuntime(input): Promise<boolean> {
+      try {
+        // Issue #145: the repository claimForRuntime is an exact-binding atomic
+        // compare-and-set. It returns the row only when this call won the claim
+        // with every binding field matching; null otherwise. The tenant is the
+        // adapter's fixed ctx.tenantId — the caller-supplied input.tenantId is
+        // additionally cross-checked so a mismatched tenant claims nothing.
+        if (input.tenantId !== ctx.tenantId) return false
+        const claimed = await repo.claimForRuntime(ctx, {
+          id: input.approvalId,
+          workUnitId: input.workUnitId,
+          actionPreviewId: input.actionPreviewId,
+          actionType: input.actionType,
+          targetHash: input.targetHash,
+          payloadHash: input.payloadHash,
+          claimedAt: input.claimedAt,
+        })
+        return claimed !== null
+      } catch {
+        // Fail closed: treat a repository error as "claim not won".
+        return false
+      }
+    },
   }
 }

@@ -6,6 +6,7 @@ import { resolveRouteRepositories } from "../../../../../lib/persistence/routeRe
 import { areExternalActionsEnabled } from "../../../../../lib/security/externalActions.ts"
 import type { TenantId } from "../../../../../lib/tenant/types.ts"
 import { canCreatePreview } from "../../../../../lib/security/tenantAccess.ts"
+import { canExecuteExternalAction } from "../../../../../lib/security/rbac.ts"
 import { verifyApprovalPreviewBinding } from "../../../../../lib/security/approvalPreviewBinding.ts"
 import { validateCsrfOrigin } from "../../../../../lib/security/csrfProtection.ts"
 import { readBoundedJsonObject } from "../../../../../lib/security/requestBody.ts"
@@ -112,7 +113,13 @@ export async function POST(
     typeof body.requestedActionType === "string" ? body.requestedActionType : null
 
   // ── 4. RBAC ──────────────────────────────────────────────────
-  if (!canCreatePreview(session)) {
+  // Issue #145: a dry-run that reports "would be allowed" is a preview of the
+  // REAL execution decision, so it must require the real execute permission
+  // (`workunit.execute_external_action`) — never preview-creation permission as
+  // a substitute. A "verified" dry-run means only that all current evidence and
+  // policy would permit ATTEMPTING the atomic claim now; no authorization is
+  // created and no Approval or Linkage state is consumed.
+  if (!canExecuteExternalAction(session) || !canCreatePreview(session)) {
     audit("execution_dry_run_failed", requestId, { reason: "rbac_denied" })
     return errorResponse(requestId, "forbidden", 403)
   }

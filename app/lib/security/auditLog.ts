@@ -75,6 +75,14 @@ export type AuditEventKind =
   | "execution_dry_run_verified"
   | "execution_dry_run_blocked"
   | "execution_dry_run_failed"
+  // Runtime authorization (Issue #145)
+  | "runtime_authorization_requested"
+  | "runtime_authorization_eligible"
+  | "runtime_authorization_claimed"
+  | "runtime_authorization_created"
+  | "runtime_authorization_rejected"
+  | "runtime_authorization_replayed"
+  | "runtime_authorization_blocked"
 
 export type AuditEvent = {
   kind: AuditEventKind
