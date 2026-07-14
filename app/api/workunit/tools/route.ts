@@ -32,6 +32,14 @@ import { resolveRuntimeAuthorizationEvidenceResolver } from "../../../lib/securi
 import type { RuntimeAuthorizationAuditSink } from "../../../lib/phase6/runtimeAuthorization/index.ts"
 import type { ApprovalActionType } from "../../../lib/domain/types.ts"
 
+// Request-scoped validated runtime config (auth / security / llm / persistence).
+import {
+  resolveValidatedRequestRuntimeConfig,
+  projectRuntimeAuthorizationEnv,
+  projectLlmEnv,
+  type ValidatedRequestRuntimeConfig,
+} from "../../../lib/runtime/requestRuntimeConfig.ts"
+
 // TODO: tenant boundary — validate that the requested source belongs to the caller's tenant
 // Phase 5A: CSRF, rate limit, and role fail-closed hardening applied above
 
@@ -61,9 +69,13 @@ function audit(kind: AuditEventKind, requestId: string, extras?: Partial<Paramet
 // and fail-open. The repository bundle is resolved on demand because these calls
 // run only on terminal blocked/guarded paths. Metadata is redacted and requestId
 // sanitized inside recordAuditEvent; this helper never throws.
-async function persistAuditEvent(tenantId: string, event: AuditEvent): Promise<void> {
+async function persistAuditEvent(
+  tenantId: string,
+  event: AuditEvent,
+  runtime?: ValidatedRequestRuntimeConfig,
+): Promise<void> {
   try {
-    const repoResult = await resolveRouteRepositories(tenantId as TenantId)
+    const repoResult = await resolveRouteRepositories(tenantId as TenantId, runtime)
     if (!repoResult.ok) return
     await recordAuditEvent(repoResult.bundle.auditLogs, repoResult.bundle.ctx, event)
   } catch {
@@ -82,7 +94,11 @@ function errorResponse(requestId: string, code: ReturnType<typeof safeError>["er
 // ─── GET ────────────────────────────────────────────────────────
 
 export async function GET(request: Request): Promise<NextResponse> {
-  const sessionResult = await requireSession(request)
+  const runtimeResult = resolveValidatedRequestRuntimeConfig()
+  if (!runtimeResult.ok) {
+    return errorResponse("tools-list-na", "integration_missing", 503)
+  }
+  const sessionResult = await requireSession(request, runtimeResult.runtime)
   if (!sessionResult.ok) {
     return errorResponse(
       "tools-list-na",
@@ -113,8 +129,18 @@ export async function POST(request: Request): Promise<NextResponse> {
   // ── 2. Audit: request received ──────────────────────────────
   audit("tool_request_received", requestId)
 
+  // ── 2b. Resolve the request-scoped runtime config ONCE ──────
+  // Auth, security (kill switch), LLM, and persistence all derive from this one
+  // frozen snapshot. A config error (malformed Cloudflare env) fails closed.
+  const runtimeResult = resolveValidatedRequestRuntimeConfig()
+  if (!runtimeResult.ok) {
+    audit("integration_missing" as AuditEventKind, requestId, { reason: "runtime_config_invalid" })
+    return errorResponse(requestId, "integration_missing", 503)
+  }
+  const runtime = runtimeResult.runtime
+
   // ── 3. Session boundary ─────────────────────────────────────
-  const sessionResult = await requireSession(request)
+  const sessionResult = await requireSession(request, runtime)
   if (!sessionResult.ok) {
     audit("auth_required", requestId, { reason: sessionResult.reason })
     return errorResponse(
@@ -171,14 +197,15 @@ export async function POST(request: Request): Promise<NextResponse> {
       actorId: session.userId,
       reason: `missing_permission:${requiredPermission}`,
       metadata: { operation: validated.operation },
-    })
+    }, runtime)
     return errorResponse(requestId, "forbidden", 403)
   }
 
   // ── 6. LLM Ingest Path ────────────────────────────────────────
   if (validated.operation === "ingest" && validated.event) {
-    const providerResult = resolveLlmProvider()
-    const config = resolveLlmProviderConfig()
+    const llmEnv = projectLlmEnv(runtime.llm)
+    const providerResult = resolveLlmProvider(llmEnv)
+    const config = resolveLlmProviderConfig(llmEnv)
 
     if (!providerResult) {
       // Legacy fallback: only if explicitly allowed
@@ -232,8 +259,10 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   // ── 7. Kill switch for external operations ────────────────────
+  // Kill-switch state comes from the request-scoped security config, NOT process.env.
+  const killSwitchEnv = projectRuntimeAuthorizationEnv(runtime.security)
   if (isExternalOperation(validated.operation)) {
-    if (!areExternalActionsEnabled()) {
+    if (!areExternalActionsEnabled(killSwitchEnv)) {
       audit("external_action_blocked", requestId, {
         operation: validated.operation,
         reason: "kill_switch_off",
@@ -247,7 +276,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         actorId: session.userId,
         reason: "kill_switch_off",
         metadata: { operation: validated.operation },
-      })
+      }, runtime)
       return errorResponse(requestId, "external_actions_disabled", 403)
     }
   }
@@ -268,7 +297,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   // resolver is default-deny in this patch, so production external operations
   // fail closed until server-authoritative evidence persistence lands.
   if (isExternalOperation(validated.operation)) {
-    return await authorizeExternalOperation(validated, session, requestId)
+    return await authorizeExternalOperation(validated, session, requestId, runtime)
   }
 
   // ── 8. Execute (legacy backend) ───────────────────────────────
@@ -278,7 +307,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     // Resolve preview hash context for external operations
     let previewHashContext: { actionPreviewId: string; targetHash: string; payloadHash: string } | undefined
     if (isExternalOperation(validated.operation) && validated.approvalId && validated.actionPreviewId) {
-      const repoResult = await resolveRouteRepositories(session.tenantId as TenantId)
+      const repoResult = await resolveRouteRepositories(session.tenantId as TenantId, runtime)
       if (!repoResult.ok) {
         audit("execution_approval_failed" as AuditEventKind, requestId, {
           operation: validated.operation,
@@ -370,6 +399,7 @@ async function authorizeExternalOperation(
   validated: ToolBackendRequest,
   session: Session,
   requestId: string,
+  runtime: ValidatedRequestRuntimeConfig,
 ): Promise<NextResponse> {
   const actionType = runtimeActionTypeFor(validated.operation, validated.source)
   const workUnitId = validated.draft?.id
@@ -416,7 +446,7 @@ async function authorizeExternalOperation(
           workUnitId: event.workunit_id === "redacted" ? undefined : event.workunit_id,
           reason,
           metadata: { operation: validated.operation, actionType: event.action_type },
-        })
+        }, runtime)
       }
     },
   }
@@ -432,6 +462,8 @@ async function authorizeExternalOperation(
     },
     approvalStore,
     evidenceResolver,
+    // Kill-switch state comes from the request-scoped security config, NOT process.env.
+    env: projectRuntimeAuthorizationEnv(runtime.security),
     auditSink,
   })
 

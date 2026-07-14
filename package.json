@@ -11,7 +11,10 @@
     "alpha:safety-gate": "node scripts/alpha-safety-gate.mjs",
     "cf:build": "opennextjs-cloudflare build",
     "cf:dev": "opennextjs-cloudflare build && wrangler dev",
-    "cf:deploy": "opennextjs-cloudflare build && wrangler deploy",
+    "cf:deploy:prepare": "node scripts/cloudflare-deploy-prepare.mjs",
+    "cf:deploy:preflight": "node scripts/cloudflare-deploy-preflight.mjs",
+    "cf:deploy:dry-run": "node scripts/cloudflare-deploy-dry-run.mjs",
+    "cf:deploy": "node scripts/cloudflare-deploy.mjs",
     "electron:dev": "ATRA_ELECTRON_START_URL=http://localhost:3000 NODE_OPTIONS=--experimental-strip-types electron electron/main.ts",
     "electron:build:check": "node scripts/electron-build-check.mjs",
     "electron:runtime-smoke": "node scripts/electron-runtime-smoke.mjs"

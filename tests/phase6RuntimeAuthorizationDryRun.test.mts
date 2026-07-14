@@ -13,7 +13,7 @@ import assert from "node:assert/strict"
 import { POST } from "../app/api/workunit/[id]/execution/dry-run/route.ts"
 import { resolveRouteRepositories } from "../app/lib/persistence/routeRepositories.ts"
 import { resolveControlRepositories } from "../app/lib/infrastructure/persistence/control/controlRepositoryResolver.ts"
-import { setTestRuntimeEnvForRequest, resetTestRuntimeEnvForRequest } from "../app/lib/runtime/cloudflareRuntimeEnv.ts"
+import { setTestRuntimeEnvForRequest, resetTestRuntimeEnvForRequest } from "../app/lib/runtime/requestRuntimeEnvInjection.ts"
 import { FakeD1Database } from "./helpers/fakeD1.ts"
 import { signHs256Jwt } from "./helpers/jwt.ts"
 import {

@@ -52,3 +52,7 @@ next-env.d.ts
 # build artifacts
 /.open-next/
 /.npm-cache/
+
+# generated cloudflare deploy config (assembled from deploy env vars, holds real D1 IDs)
+# committed base is `wrangler.json`; generated deploy configs must never be committed.
+/wrangler.deploy*.json

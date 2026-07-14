@@ -6,6 +6,7 @@ import { resolveRouteRepositories } from "../../../../../lib/persistence/routeRe
 import type { TenantId } from "../../../../../lib/tenant/types.ts"
 import { canCreatePreview } from "../../../../../lib/security/tenantAccess.ts"
 import type { ApprovalRecordRow } from "../../../../../lib/persistence/types.ts"
+import { resolveValidatedRequestRuntimeConfig } from "../../../../../lib/runtime/requestRuntimeConfig.ts"
 
 // ─── Helpers ────────────────────────────────────────────────────
 
@@ -47,8 +48,16 @@ export async function GET(
 
   audit("approval_status_requested", requestId, { workUnitId })
 
+  // ── Request-scoped runtime config (resolved ONCE) ────────────
+  const runtimeResult = resolveValidatedRequestRuntimeConfig()
+  if (!runtimeResult.ok) {
+    audit("approval_status_failed", requestId, { reason: "runtime_config_invalid" })
+    return errorResponse(requestId, "integration_missing", 503)
+  }
+  const runtime = runtimeResult.runtime
+
   // ── Session ──────────────────────────────────────────────────
-  const sessionResult = await requireSession(request)
+  const sessionResult = await requireSession(request, runtime)
   if (!sessionResult.ok) {
     audit("approval_status_failed", requestId, { reason: "unauthorized" })
     return errorResponse(
@@ -65,8 +74,8 @@ export async function GET(
     return errorResponse(requestId, "forbidden", 403)
   }
 
-  // ── Resolve repositories ────────────────────────────────────
-  const repoResult = await resolveRouteRepositories(session.tenantId as TenantId)
+  // ── Resolve repositories (same frozen runtime config) ───────
+  const repoResult = await resolveRouteRepositories(session.tenantId as TenantId, runtime)
   if (!repoResult.ok) {
     return errorResponse(requestId, "integration_missing", 503)
   }

@@ -52,9 +52,14 @@ test("5. CI uses no secrets", () => {
 })
 
 test("6. CI does not deploy", () => {
-  for (const bad of ["cf:deploy", "wrangler deploy", "npm run deploy", "actions/deploy", "cf:dev"]) {
+  for (const bad of ["wrangler deploy", "npm run deploy", "actions/deploy", "cf:dev"]) {
     assert.equal(ci.includes(bad), false, `CI must not deploy via ${bad}`)
   }
+  // The bare deploy command is forbidden, but the non-deploying, synthetic-only
+  // gates `cf:deploy:preflight` / `cf:deploy:dry-run` are allowed (and required).
+  assert.equal(/cf:deploy(?![:\w-])/.test(ci), false, "CI must not run the bare cf:deploy command")
+  assert.ok(ci.includes("cf:deploy:preflight"), "CI must run the deploy preflight gate")
+  assert.ok(ci.includes("cf:deploy:dry-run"), "CI must run the non-deploying dry-run gate")
 })
 
 test("7. CI does not enable external execution or real LLM", () => {

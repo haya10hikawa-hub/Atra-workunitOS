@@ -4,7 +4,7 @@ import { requireSession, createDevSessionWithRole } from "../app/lib/security/se
 import { hasPermission } from "../app/lib/security/rbac.ts"
 import type { WorkUnitPermission } from "../app/lib/security/policy.ts"
 import type { ToolBackendOperation } from "../app/types/toolBackend.ts"
-import { setTestRuntimeEnvForRequest, resetTestRuntimeEnvForRequest } from "../app/lib/runtime/cloudflareRuntimeEnv.ts"
+import { setTestRuntimeEnvForRequest, resetTestRuntimeEnvForRequest } from "../app/lib/runtime/requestRuntimeEnvInjection.ts"
 import type { AppEnv } from "../app/types/cloudflare-env.ts"
 import { FakeD1Database } from "./helpers/fakeD1.ts"
 

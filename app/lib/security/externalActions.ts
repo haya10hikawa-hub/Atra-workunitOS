@@ -16,7 +16,13 @@ const EXTERNAL_OPERATIONS: ReadonlySet<ToolBackendOperation> = new Set([
  * The kill switch is checked in both the API route and the backend function
  * so that external execution is never possible through any call path.
  */
-export function areExternalActionsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+/** Minimal shape the kill switch needs — satisfied by both `process.env` and
+ * the request-scoped security projection (`projectRuntimeAuthorizationEnv`). */
+export type KillSwitchEnv = { readonly EXTERNAL_ACTIONS_ENABLED?: string }
+
+export function areExternalActionsEnabled(
+  env: KillSwitchEnv | NodeJS.ProcessEnv = process.env,
+): boolean {
   return env.EXTERNAL_ACTIONS_ENABLED === "true"
 }
 

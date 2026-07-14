@@ -8,6 +8,7 @@ import { canCreateFeedback } from "../../../../lib/security/tenantAccess.ts"
 import { validateCsrfOrigin } from "../../../../lib/security/csrfProtection.ts"
 import { readBoundedJsonObject } from "../../../../lib/security/requestBody.ts"
 import { checkRateLimit, getTrustedClientIp } from "../../../../lib/security/rateLimitGate.ts"
+import { resolveValidatedRequestRuntimeConfig } from "../../../../lib/runtime/requestRuntimeConfig.ts"
 
 const VALID_FEEDBACK = new Set(["useful", "not_useful", "later", "done"])
 
@@ -25,7 +26,11 @@ export async function POST(
   const csrf = validateCsrfOrigin(request)
   if (!csrf.ok) return errorResponse(requestId, csrf.reason, 403)
 
-  const sessionResult = await requireSession(request)
+  const runtimeResult = resolveValidatedRequestRuntimeConfig()
+  if (!runtimeResult.ok) return errorResponse(requestId, "integration_missing", 503)
+  const runtime = runtimeResult.runtime
+
+  const sessionResult = await requireSession(request, runtime)
   if (!sessionResult.ok) {
     return errorResponse(
       requestId,
@@ -45,7 +50,7 @@ export async function POST(
   const feedback = bodyResult.value.feedback as string | undefined
   if (!feedback || !VALID_FEEDBACK.has(feedback)) return errorResponse(requestId, "invalid_request", 400)
 
-  const repoResult = await resolveRouteRepositories(tenantId)
+  const repoResult = await resolveRouteRepositories(tenantId, runtime)
   if (!repoResult.ok) return errorResponse(requestId, "integration_missing", 503)
 
   const { workUnitFeedback: fbRepo, workUnits: wuRepo, auditLogs: auditRepo, usage, ctx } = repoResult.bundle

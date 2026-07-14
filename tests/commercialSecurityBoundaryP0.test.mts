@@ -67,7 +67,7 @@ test("P0: tools inventory GET requires session and preview GET omits server-owne
   const approval = await readFile("app/api/workunit/[id]/approval/route.ts", "utf8")
   const getStart = tools.indexOf("export async function GET")
   const postStart = tools.indexOf("export async function POST")
-  assert.ok(tools.slice(getStart, postStart).includes("requireSession(request)"))
+  assert.ok(tools.slice(getStart, postStart).includes("requireSession(request, runtimeResult.runtime)"))
   const approvalGet = approval.slice(approval.indexOf("export async function GET"))
   assert.equal(approvalGet.includes("targetHash: row.targetHash"), false)
   assert.equal(approvalGet.includes("payloadHash: row.payloadHash"), false)

@@ -4,6 +4,7 @@ import { safeError } from "../../../lib/security/safeErrors.ts"
 import { resolveRouteRepositories } from "../../../lib/persistence/routeRepositories.ts"
 import type { TenantId } from "../../../lib/tenant/types.ts"
 import { canViewAudit } from "../../../lib/security/tenantAccess.ts"
+import { resolveValidatedRequestRuntimeConfig } from "../../../lib/runtime/requestRuntimeConfig.ts"
 
 const DEFAULT_LIMIT = 50
 const MAX_LIMIT = 100
@@ -11,7 +12,10 @@ const SENSITIVE_KEYS = new Set(["token", "accesstoken", "refreshtoken", "secret"
 
 export async function GET(request: Request): Promise<NextResponse> {
   const requestId = `audit-recent:${Date.now()}`
-  const sessionResult = await requireSession(request)
+  const runtimeResult = resolveValidatedRequestRuntimeConfig()
+  if (!runtimeResult.ok) return NextResponse.json(safeError("audit-na", "integration_missing"), { status: 503 })
+  const runtime = runtimeResult.runtime
+  const sessionResult = await requireSession(request, runtime)
   if (!sessionResult.ok) {
     return NextResponse.json(safeError("audit-na", sessionResult.reason === "forbidden" || sessionResult.reason === "invalid_tenant" ? "forbidden" : "unauthorized"), { status: getSessionErrorStatus(sessionResult.reason) })
   }
@@ -20,7 +24,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   const limit = parseLimit(new URL(request.url).searchParams.get("limit"))
   if (limit === null) return NextResponse.json(safeError(requestId, "invalid_request"), { status: 400 })
 
-  const repoResult = await resolveRouteRepositories(sessionResult.session.tenantId as TenantId)
+  const repoResult = await resolveRouteRepositories(sessionResult.session.tenantId as TenantId, runtime)
   if (!repoResult.ok) {
     if (process.env.NODE_ENV === "production") return NextResponse.json(safeError(requestId, repoResult.error), { status: repoResult.status })
     return NextResponse.json({ auditLogs: [] })

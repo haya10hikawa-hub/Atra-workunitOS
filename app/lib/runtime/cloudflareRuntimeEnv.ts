@@ -1,80 +1,40 @@
 /**
- * Cloudflare Runtime Environment Bridge
+ * Cloudflare Runtime Environment Accessor (production, pure)
  *
- * Provides a safe, testable way to access Cloudflare runtime environment
- * (including D1 bindings) from route handlers.
+ * The ONLY production source of the per-request Cloudflare environment. It reads
+ * the request-scoped context installed by the generated OpenNext worker
+ * (`.open-next/worker.js`) through the officially supported accessor
+ * `getCloudflareContext()` from `@opennextjs/cloudflare`.
  *
- * LOCAL DEV / Next.js:
- *   - No Cloudflare runtime available → getRequestRuntimeEnv() returns null.
- *   - All persistence falls back to in-memory (if allowed) or disabled.
+ * SAFETY INVARIANTS (enforced by tests/cloudflareRuntimeEnvArchitecture.test.mts):
+ *   - NO mutable module/process-global env variable.
+ *   - NO exported setter.
+ *   - NO fallback to a process/module-global env object.
+ *   - Absence or malformation of the request context returns null (fail closed).
  *
- * CLOUDFLARE PAGES:
- *   - Deployment adapter (next-on-pages etc.) provides context.env.
- *   - This module provides a hook to pass that env into routes.
- *
- * TESTS:
- *   - setTestRuntimeEnvForRequest() injects fake env for testing.
- *   - resetTestRuntimeEnvForRequest() clears between tests.
+ * Test injection lives in a STRUCTURALLY SEPARATE module
+ * (`requestRuntimeEnvInjection.ts`) and is NOT reachable from this accessor.
  */
 
+import { getCloudflareContext } from "@opennextjs/cloudflare"
 import type { AppEnv } from "../../types/cloudflare-env.ts"
-
-// ─── Global Test State (NO production use) ──────────────────────
-
-let __testRuntimeEnv: AppEnv | null = null
-
-/**
- * Set a fake runtime env for the current test.
- * ONLY for test files. Never call in production routes.
- */
-export function setTestRuntimeEnvForRequest(env: AppEnv | null): void {
-  __testRuntimeEnv = env
-}
-
-/**
- * Reset fake runtime env between tests.
- */
-export function resetTestRuntimeEnvForRequest(): void {
-  __testRuntimeEnv = null
-}
-
-// ─── Runtime Env Access ─────────────────────────────────────────
 
 /**
  * Get the Cloudflare runtime environment for the current request.
  *
- * Returns null when running locally (Next.js dev server) or when
- * no Cloudflare adapter has injected the env.
- *
- * In production on Cloudflare Pages, the deployment adapter
- * (next-on-pages, OpenNext, etc.) should call setRequestRuntimeEnvInProd
- * or provide env through request context.
+ * Returns null when no worker context is active (local dev / SSG / tests) or the
+ * context is malformed. Never throws; never caches; never falls back to a global.
  */
 export function getRequestRuntimeEnv(): AppEnv | null {
-  // Test mode: return explicitly set fake env
-  if (__testRuntimeEnv !== null) return __testRuntimeEnv
-
-  // Cloudflare Pages: check for global env (injected by adapter)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const globalEnv = (globalThis as any).__CLOUDFLARE_RUNTIME_ENV__
-  if (globalEnv && typeof globalEnv === "object") return globalEnv as AppEnv
-
-  // No runtime env available
-  return null
-}
-
-// ─── Production Adapter Hook ────────────────────────────────────
-
-/**
- * Store the Cloudflare runtime env for production request handling.
- *
- * Called once by the deployment adapter (next-on-pages, etc.) before
- * the Next.js app handles the request.
- *
- * The adapter should call this with context.env from the Cloudflare
- * Pages function handler.
- */
-export function setRequestRuntimeEnvInProd(env: AppEnv): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ;(globalThis as any).__CLOUDFLARE_RUNTIME_ENV__ = env
+  try {
+    // Sync mode: valid inside a request handler where OpenNext has installed the
+    // per-request context on the global scope. Throws otherwise.
+    const context = getCloudflareContext() as { env?: unknown } | undefined
+    const env = context?.env
+    if (env && typeof env === "object") return env as AppEnv
+    return null
+  } catch {
+    // No active request context / malformed context → fail closed.
+    return null
+  }
 }

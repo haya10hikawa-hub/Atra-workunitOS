@@ -6,13 +6,36 @@ import {
   type SessionResolutionFailureReason,
   type SessionResolutionResult,
 } from "../application/auth/sessionResolver.ts"
+import {
+  resolveValidatedRequestRuntimeConfig,
+  type ValidatedRequestRuntimeConfig,
+} from "../runtime/requestRuntimeConfig.ts"
 
 export type Session = SessionContext
 
 export type SessionVerificationResult = SessionResolutionResult
 
-export async function requireSession(request: Request = new Request("http://localhost")): Promise<SessionVerificationResult> {
-  return resolveSession(request)
+/**
+ * Require an authenticated session. The auth adapter, JWT config, dev gates, and
+ * control-DB binding all come from the request-scoped validated runtime config —
+ * never ambient `process.env` (the config's local path owns that seam). Routes
+ * resolve the config ONCE and thread it in; a config error fails closed.
+ */
+export async function requireSession(
+  request: Request = new Request("http://localhost"),
+  runtime?: ValidatedRequestRuntimeConfig,
+): Promise<SessionVerificationResult> {
+  let rt = runtime
+  if (!rt) {
+    const resolved = resolveValidatedRequestRuntimeConfig()
+    if (!resolved.ok) return { ok: false, reason: "unauthorized" }
+    rt = resolved.runtime
+  }
+  return resolveSession(request, {
+    auth: rt.auth,
+    security: rt.security,
+    controlDbBinding: rt.persistence.CONTROL_DB,
+  })
 }
 
 export function getSessionErrorStatus(reason: SessionResolutionFailureReason): number {

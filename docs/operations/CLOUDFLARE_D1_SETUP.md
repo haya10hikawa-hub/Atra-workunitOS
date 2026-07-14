@@ -6,9 +6,16 @@ WorkUnit OS uses Cloudflare D1 for production persistence. This document covers
 how to set up local and production D1 databases, run migrations, and configure
 the required bindings.
 
+> **Deployment target:** Cloudflare **Workers** via OpenNext (single target — no
+> Pages). See [CLOUDFLARE_RUNTIME_DEPLOYMENT.md](CLOUDFLARE_RUNTIME_DEPLOYMENT.md)
+> for the runtime/deploy contract. The committed config is `wrangler.json`; it
+> holds **placeholder** D1 IDs only. Real IDs are supplied at deploy time via
+> environment variables and written to an untracked, git-ignored
+> `wrangler.deploy.json`.
+
 ## 2. Prerequisites
 
-- Cloudflare account with Workers/Pages enabled
+- Cloudflare account with Workers enabled
 - Wrangler CLI installed (or `npx wrangler`)
 - Authenticated: `wrangler login`
 - Next.js >= 16.2.6 (project: 16.2.9)
@@ -23,23 +30,10 @@ wrangler d1 create workunit-control-db
 wrangler d1 create workunit-tenant
 ```
 
-Copy the database IDs from the output.
-
-### Update wrangler.toml
-
-Replace the placeholder IDs:
-
-```toml
-[[d1_databases]]
-binding = "CONTROL_DB"
-database_name = "workunit-control-db"
-database_id = "YOUR_CONTROL_DB_ID_HERE"
-
-[[d1_databases]]
-binding = "TENANT_DB_DEFAULT"
-database_name = "workunit-tenant"
-database_id = "YOUR_TENANT_DB_ID_HERE"
-```
+Copy the database IDs from the output — but do **not** paste them into
+`wrangler.json`. The committed config keeps `REPLACE_WITH_*` placeholders; local
+`wrangler dev --local` uses a local SQLite for each binding and ignores the
+remote `database_id`, so placeholders are fine for local development.
 
 ### Run migrations locally
 
@@ -63,7 +57,16 @@ wrangler d1 create workunit-control-db
 wrangler d1 create workunit-tenant
 ```
 
-Update `wrangler.toml` with production database IDs.
+Supply the production database IDs at deploy time via environment variables
+(never commit them):
+
+```bash
+export CLOUDFLARE_CONTROL_DB_ID=<control-db-uuid>
+export CLOUDFLARE_TENANT_DB_DEFAULT_ID=<tenant-db-uuid>
+```
+
+`npm run cf:deploy` assembles these into an untracked `wrangler.deploy.json` and
+validates them via the deploy preflight before any upload.
 
 ### Run migrations on production
 
@@ -78,9 +81,10 @@ wrangler d1 execute TENANT_DB_DEFAULT --env production --file=migrations/0002_te
 wrangler secret put DEEPSEEK_API_KEY
 # Enter API key at prompt
 
-# Production flags in wrangler.toml [vars]:
+# Production flags in wrangler.json "vars":
 # EXTERNAL_ACTIONS_ENABLED = "false" (enable only after auth + RBAC)
 # ALLOW_LEGACY_INGEST_FALLBACK = "false"
+# PERSISTENCE_MODE = "d1"
 ```
 
 ## 5. Required Bindings
@@ -116,19 +120,26 @@ Before enabling `EXTERNAL_ACTIONS_ENABLED=true` in production:
 
 ## 9. Runtime Env Wiring
 
-The OpenNext Cloudflare adapter provides Cloudflare runtime env
-(including D1 bindings) to the application.
+The OpenNext Cloudflare worker provides the Cloudflare runtime env (D1 bindings +
+vars) to the application on a **per-request** basis. There is no mutable global
+runtime-env bridge.
 
-### Adapter Chain
+### Request-scoped chain
 
 ```
-Cloudflare Pages request
-  → OpenNext request handler (functions/[[path]].ts)
-  → extractCloudflareEnv(context)  [app/lib/runtime/openNextCloudflareEnv.ts]
-  → setRequestRuntimeEnvInProd(env)  [app/lib/runtime/cloudflareRuntimeEnv.ts]
-  → resolveRouteRepositories() uses runtimeEnv
-  → D1 repositories
+Cloudflare Workers request
+  → .open-next/worker.js installs the per-request Cloudflare context
+  → getRequestRuntimeEnv()  [app/lib/runtime/cloudflareRuntimeEnv.ts]
+      → getCloudflareContext().env   (@opennextjs/cloudflare, request-scoped)
+  → validateCloudflareRuntimeEnv()   [app/lib/runtime/validatedRuntimeEnv.ts]
+      → frozen, allowlisted snapshot (D1 bindings + PERSISTENCE_MODE + flags)
+  → resolveRouteRepositories() / resolveRepositories({ runtimeEnv })
+  → D1 repositories (mode + bindings from the SAME validated snapshot)
 ```
+
+One request can never observe another request's bindings; a missing/malformed
+context fails closed (`integration_missing` / 503). `process.env` can never
+override the active request's persistence mode.
 
 ### Local Dev
 
@@ -150,12 +161,16 @@ or returns `integration_missing`.
    wrangler d1 create workunit-control-db
    wrangler d1 create workunit-tenant
    ```
-   Copy the database IDs into `wrangler.toml` (replace `REPLACE_*` placeholders).
+   Export the IDs as deploy env vars (never commit them):
+   ```bash
+   export CLOUDFLARE_CONTROL_DB_ID=<control-db-uuid>
+   export CLOUDFLARE_TENANT_DB_DEFAULT_ID=<tenant-db-uuid>
+   ```
 
 3. Run migrations:
    ```bash
-   wrangler d1 execute CONTROL_DB --local --file=migrations/0001_control_db.sql
-   wrangler d1 execute TENANT_DB_DEFAULT --local --file=migrations/0002_tenant_core.sql
+   wrangler d1 execute CONTROL_DB --file=migrations/0001_control_db.sql
+   wrangler d1 execute TENANT_DB_DEFAULT --file=migrations/0002_tenant_core.sql
    ```
 
 4. Set secrets:
@@ -163,9 +178,9 @@ or returns `integration_missing`.
    wrangler secret put DEEPSEEK_API_KEY
    ```
 
-5. Deploy:
+5. Deploy (assembles untracked config → preflight → build → verify → upload):
    ```bash
-   npm run cf:deploy
+   CF_DEPLOY_EXECUTE=1 npm run cf:deploy
    ```
 
 Local tests use `FakeD1Database` and do NOT require real D1.

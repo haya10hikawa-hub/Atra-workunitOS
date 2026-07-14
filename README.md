@@ -63,11 +63,15 @@ npm run build
 # Run tests (Node.js built-in test runner)
 npm test
 
-# Cloudflare Workers build
+# Cloudflare Workers build (OpenNext → .open-next/worker.js)
 npm run cf:build
 
-# Cloudflare Workers dev
+# Cloudflare Workers dev (local Worker + local D1)
 npm run cf:dev
+
+# Deploy preflight + non-uploading dry-run (synthetic config, no credentials)
+npm run cf:deploy:preflight
+npm run cf:deploy:dry-run
 ```
 
 Environment variables:
@@ -98,11 +102,25 @@ node --test --experimental-strip-types tests/executionDryRunRoute.test.mts
 
 Tests include: pure model tests, route behavior tests, source-scan regression tests, and internal alpha flow coverage.
 
-## Cloudflare Build
+## Cloudflare Deployment (Workers / OpenNext)
+
+The single deployment target is **Cloudflare Workers** built with OpenNext. The
+committed config is `wrangler.json` (Workers target, placeholder D1 IDs only).
+Full details: [docs/operations/CLOUDFLARE_RUNTIME_DEPLOYMENT.md](docs/operations/CLOUDFLARE_RUNTIME_DEPLOYMENT.md).
 
 ```bash
-npm run cf:build
+npm run cf:build            # → .open-next/worker.js + .open-next/assets
+npm run cf:deploy:preflight # fail-closed config validation (no network)
+npm run cf:deploy:dry-run   # wrangler deploy --dry-run, no upload
+
+# Real deploy: supply IDs via env, then run the guarded orchestrator.
+export CLOUDFLARE_CONTROL_DB_ID=<uuid>
+export CLOUDFLARE_TENANT_DB_DEFAULT_ID=<uuid>
+CF_DEPLOY_EXECUTE=1 npm run cf:deploy   # prepare → preflight → build → verify → deploy
 ```
+
+Real D1 IDs are never committed: they are assembled at deploy time into an
+untracked, git-ignored `wrangler.deploy.json`.
 
 After `cf:build`, clean generated artifacts before committing:
 
@@ -111,7 +129,8 @@ git restore .open-next
 git clean -fd .open-next
 ```
 
-`.open-next/` and `.npm-cache/` are in `.gitignore` and must never be committed.
+`.open-next/`, `.npm-cache/`, and `wrangler.deploy*.json` are in `.gitignore` and
+must never be committed.
 
 ## Repository Hygiene
 
