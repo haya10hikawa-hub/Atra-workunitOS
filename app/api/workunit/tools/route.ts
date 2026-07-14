@@ -388,30 +388,36 @@ async function authorizeExternalOperation(
   const approvalStore = resolveApprovalStore(session.tenantId as TenantId)
   const evidenceResolver = resolveRuntimeAuthorizationEvidenceResolver(session.tenantId as TenantId)
 
-  // Redacted audit sink: the gate emits the requested → eligible → claimed →
-  // created lifecycle (or rejected/replayed/blocked) as already-redacted events;
-  // the sink forwards them to the in-process log and best-effort durable
-  // persistence (fail-open), never re-deriving raw material.
+  // Redacted, DURABLE audit sink: the gate buffers the requested → eligible →
+  // claimed → created lifecycle (or rejected/replayed/blocked) as already-redacted
+  // events and flushes them here ONCE, after the terminal decision — never inside
+  // the security-critical window. Persistence is AWAITED (internally fail-open) so
+  // its completion is attached to the request lifecycle; a persistence failure
+  // never changes the authorization result. Issue codes are the gate's canonical
+  // allowlisted reasons.
   const auditSink: RuntimeAuthorizationAuditSink = {
-    emit(event) {
-      audit(event.event_kind as AuditEventKind, requestId, {
-        operation: validated.operation,
-        metadata: {
-          actionType: event.action_type,
-          actionPreviewId: event.action_preview_id,
-          approvalId: event.approval_id,
-          reason: event.state,
-        },
-      })
-      void persistAuditEvent(session.tenantId, {
-        kind: event.event_kind as AuditEventKind,
-        timestamp: event.evaluated_at,
-        requestId,
-        actorId: session.userId,
-        workUnitId: event.workunit_id === "redacted" ? undefined : event.workunit_id,
-        reason: event.state,
-        metadata: { operation: validated.operation, actionType: event.action_type },
-      })
+    async flush(events) {
+      for (const event of events) {
+        const reason = event.issue_codes[0] ?? event.state
+        audit(event.event_kind as AuditEventKind, requestId, {
+          operation: validated.operation,
+          metadata: {
+            actionType: event.action_type,
+            actionPreviewId: event.action_preview_id,
+            approvalId: event.approval_id,
+            reason,
+          },
+        })
+        await persistAuditEvent(session.tenantId, {
+          kind: event.event_kind as AuditEventKind,
+          timestamp: event.evaluated_at,
+          requestId,
+          actorId: session.userId,
+          workUnitId: event.workunit_id === "redacted" ? undefined : event.workunit_id,
+          reason,
+          metadata: { operation: validated.operation, actionType: event.action_type },
+        })
+      }
     },
   }
 

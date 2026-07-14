@@ -54,6 +54,9 @@ export const RUNTIME_AUTHORIZATION_ISSUE_CODES = [
   "runtime_authorization_expired",
   // Timestamp consistency
   "runtime_authorization_timestamp_inconsistent",
+  // Final policy rechecks (gate-emitted audit reasons)
+  "runtime_authorization_rbac_denied",
+  "runtime_authorization_kill_switch_off",
 ] as const
 
 export type RuntimeAuthorizationIssueCode =

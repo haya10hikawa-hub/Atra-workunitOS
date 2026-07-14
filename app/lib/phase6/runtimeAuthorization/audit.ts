@@ -44,18 +44,24 @@ function safeId(value: unknown): string {
 }
 
 /**
- * A typed sink the server-side gate emits redacted runtime-authorization
- * lifecycle events into. `emit` must never throw and must never be given, or
- * forward, unredacted material — the gate always passes it the output of
+ * A typed BATCH sink the server-side gate flushes redacted runtime-authorization
+ * lifecycle events into — ONCE, AFTER the terminal authorization decision.
+ *
+ * The gate never invokes the sink inside the security-critical window (between
+ * the final RBAC/kill-switch checks and the atomic claim): it buffers frozen,
+ * redacted events locally and flushes the ordered array only after a terminal
+ * result. `flush` is awaited by the gate so durable persistence completes within
+ * the request lifecycle; it must be internally fail-open (a flush failure must
+ * never change the authorization result) and is always given the output of
  * `projectRuntimeAuthorizationAudit`.
  */
 export interface RuntimeAuthorizationAuditSink {
-  emit(event: RuntimeAuthorizationAuditEvent): void
+  flush(events: readonly RuntimeAuthorizationAuditEvent[]): void | Promise<void>
 }
 
 /** A sink that discards events (default when no audit wiring is supplied). */
 export const noopRuntimeAuthorizationAuditSink: RuntimeAuthorizationAuditSink = {
-  emit() {
+  flush() {
     /* no-op */
   },
 }

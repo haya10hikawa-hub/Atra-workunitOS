@@ -116,21 +116,59 @@ test("the gate performs BOTH an early and a final RBAC + kill-switch check", () 
   assert.ok(kill.length >= 2, `expected >=2 kill-switch checks, found ${kill.length}`)
 })
 
-test("the FINAL RBAC + kill-switch recheck follow eligibility and precede the claim", () => {
-  // In the shared core the final recheck occurs AFTER eligibility and just
-  // before the eligible return; the consuming gate claims only after that
-  // return. Removing either recheck (skip early / skip final) drops the count
-  // above or moves the last occurrence before eligibility here.
+/** The body of the consuming gate function (authorizeRuntimeCommand). */
+function consumingGateBody(): string {
   const src = codeOnly(read("app/lib/security/runtimeAuthorizationGate.ts"))
-  const eligIdx = src.indexOf("evaluateRuntimeAuthorizationEligibility(")
-  const okReturnIdx = src.indexOf("return { ok: true, evidence")
-  const claimIdx = src.indexOf(".claimApprovalForRuntime(")
-  assert.ok(eligIdx > 0 && okReturnIdx > eligIdx, "eligibility precedes the eligible return")
-  const lastRbac = src.lastIndexOf("hasExecutePermission(", okReturnIdx)
-  const lastKill = src.lastIndexOf("areExternalActionsEnabled(", okReturnIdx)
-  assert.ok(lastRbac > eligIdx && lastRbac < okReturnIdx, "final RBAC after eligibility, before eligible return")
-  assert.ok(lastKill > eligIdx && lastKill < okReturnIdx, "final kill-switch after eligibility, before eligible return")
-  assert.ok(claimIdx > okReturnIdx, "claim occurs only after the eligible core return")
+  const start = src.indexOf("export async function authorizeRuntimeCommand")
+  assert.ok(start > 0, "authorizeRuntimeCommand must exist")
+  const dryRun = src.indexOf("export async function evaluateRuntimeAuthorizationDryRun")
+  return src.slice(start, dryRun > start ? dryRun : undefined)
+}
+
+test("the FINAL RBAC + kill-switch recheck occur in the consuming gate, before the claim", () => {
+  // MB1: BOTH an early and a final RBAC + kill-switch check must live in the
+  // consuming authorization function (authorizeRuntimeCommand) — not inside an
+  // async core — and the final ones precede the claim. Moving either check out
+  // of the consuming function drops its count here.
+  const body = consumingGateBody()
+  const rbac = body.match(/hasExecutePermission\(/g) ?? []
+  const kill = body.match(/areExternalActionsEnabled\(/g) ?? []
+  assert.ok(rbac.length >= 2, `consuming gate must hold >=2 RBAC checks, found ${rbac.length}`)
+  assert.ok(kill.length >= 2, `consuming gate must hold >=2 kill-switch checks, found ${kill.length}`)
+  const lastRbac = body.lastIndexOf("hasExecutePermission(")
+  const lastKill = body.lastIndexOf("areExternalActionsEnabled(")
+  const claimIdx = body.indexOf(".claimApprovalForRuntime(")
+  assert.ok(claimIdx > 0 && lastRbac < claimIdx, "final RBAC precedes the claim")
+  assert.ok(lastKill < claimIdx, "final kill-switch precedes the claim")
+})
+
+test("no await, callback, or audit emission sits between the final checks and the claim", () => {
+  // MB1/MB2: on the passing path there must be no `await`, sink flush/emit,
+  // logger, or other externally-supplied callback between the final kill-switch
+  // check and the claim invocation. The critical window runs from the
+  // CLAIM-ADJACENT marker (which sits after the kill-switch if-block closes) to
+  // the claim call. Read RAW source so the marker comment survives.
+  const raw = read("app/lib/security/runtimeAuthorizationGate.ts")
+  const gateStart = raw.indexOf("export async function authorizeRuntimeCommand")
+  const markerIdx = raw.indexOf("CLAIM-ADJACENT", gateStart)
+  const claimIdx = raw.indexOf(".claimApprovalForRuntime(", gateStart)
+  assert.ok(markerIdx > gateStart && claimIdx > markerIdx, "CLAIM-ADJACENT marker precedes the claim")
+  // Start after the marker comment LINE (which itself names await/callback/emit).
+  const afterMarkerLine = raw.indexOf("\n", markerIdx)
+  const window = raw.slice(afterMarkerLine, claimIdx)
+  for (const forbidden of ["await", "sink.", ".flush(", ".emit(", "flushAndReturn(", "events.push", "persistAuditEvent", "writeAuditLog", "callback"]) {
+    assert.ok(!window.includes(forbidden), `no "${forbidden}" may appear between the final kill-switch check and the claim`)
+  }
+})
+
+test("the audit flush trigger is only reached on terminal return paths (buffered flush)", () => {
+  // MB2: `flushAndReturn(` (the only place `sink.flush` is invoked) must never be
+  // called between the final checks and the claim; it is only used on terminal
+  // returns. The window test above already forbids it in the critical window;
+  // here assert the flush helper is invoked (buffered lifecycle actually flushes).
+  const body = consumingGateBody()
+  assert.ok(body.includes("await sink.flush(events)"), "flush must await the batch sink")
+  assert.ok((body.match(/flushAndReturn\(/g) ?? []).length >= 2, "every terminal path flushes")
 })
 
 test("the final gate does not use the legacy unbound single-id claim", () => {
@@ -212,4 +250,23 @@ test("the pure index does not export a branded-receipt constructor", async () =>
   for (const [name, value] of Object.entries(surface)) {
     if (typeof value === "function") assert.ok(!/receipt/i.test(name), `pure export ${name} must not construct a receipt`)
   }
+})
+
+// ─── MB3: durable, awaited audit persistence in the route ───────
+
+test("the tools route runtime-authorization audit sink awaits durable persistence", () => {
+  const src = read("app/api/workunit/tools/route.ts")
+  const sinkStart = src.indexOf("const auditSink")
+  const sinkEnd = src.indexOf("const result = await authorizeRuntimeCommand", sinkStart)
+  assert.ok(sinkStart > 0 && sinkEnd > sinkStart, "runtime-authorization audit sink exists")
+  const sink = src.slice(sinkStart, sinkEnd)
+  assert.ok(/async flush\s*\(/.test(sink), "sink must use an async batch flush")
+  assert.ok(sink.includes("await persistAuditEvent"), "sink must AWAIT durable persistence")
+  assert.ok(!/void persistAuditEvent/.test(sink), "sink must not fire-and-forget durable persistence")
+})
+
+test("the runtime-authorization audit sink is flush-based, not emit-per-event", () => {
+  const audit = read("app/lib/phase6/runtimeAuthorization/audit.ts")
+  assert.ok(/flush\(events: readonly RuntimeAuthorizationAuditEvent\[\]\)/.test(audit), "sink contract is a batch flush")
+  assert.ok(!/\bemit\(/.test(audit), "sink contract exposes no per-event emit")
 })

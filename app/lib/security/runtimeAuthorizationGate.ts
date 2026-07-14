@@ -39,6 +39,7 @@ import {
   noopRuntimeAuthorizationAuditSink,
   snapshotDeepFrozen,
   type RuntimeAuthorizationAuditSink,
+  type RuntimeAuthorizationAuditEvent,
   type RuntimeAuthorizationEligibleEvidence,
   type RuntimeAuthorizationResult,
   type RuntimeAuthorizationEligibilityState,
@@ -173,9 +174,9 @@ function buildVerificationContext(
   }
 }
 
-// ─── Shared core (consuming + dry-run parity) ───────────────────
+// ─── Resolution + synchronous finalization ──────────────────────
 
-type CoreOk = { readonly ok: true; readonly evidence: RuntimeAuthorizationEligibleEvidence }
+type CoreOk = { readonly ok: true; readonly evidence: RuntimeAuthorizationEligibleEvidence; readonly sessionSnap: SessionSnapshot }
 type CoreErr = { readonly ok: false; readonly state: EligState; readonly issueCode: string }
 type CoreResult = CoreOk | CoreErr
 
@@ -187,55 +188,37 @@ export type RuntimeAuthorizationCoreInput = {
   readonly clock?: RuntimeAuthorizationClock
 }
 
+/** The inert inert-identifier request shape both consuming functions accept. */
+type RuntimeAuthorizationRequest = AuthorizeRuntimeCommandInput["request"]
+
+function requestFieldsValid(request: RuntimeAuthorizationRequest): boolean {
+  return (
+    isNonEmptyString(request.tenantId) &&
+    isNonEmptyString(request.workUnitId) &&
+    isNonEmptyString(request.actionPreviewId) &&
+    isNonEmptyString(request.approvalId) &&
+    isNonEmptyString(request.actionType)
+  )
+}
+
 /**
- * The shared, NON-CONSUMING core: early guards → async resolution → fresh
- * timestamp → session snapshot → executor → verify at the fresh instant → final
- * RBAC + kill-switch recheck. Returns eligible evidence WITHOUT claiming. Both
- * the consuming gate and the dry-run evaluator call this so they agree exactly
- * on the pre-claim classification.
+ * The SYNCHRONOUS finalization step shared by the consuming gate and the dry-run
+ * evaluator. Given the already-resolved (snapshotted) bundle, the session
+ * snapshot, the fresh post-resolution `claimAt` instant, and the inert request,
+ * it re-derives the current executor and runs `evaluateRuntimeAuthorizationEligibility`
+ * (Linkage verification, Human Decision matrix, executor-vs-approver, bounded
+ * expiry). It performs NO `await`, NO RBAC/kill-switch policy check, and NO audit
+ * emission — the consuming function owns those and keeps them claim-adjacent.
+ * Returns the eligible evidence bound to `claimAt`.
  */
-async function evaluateRuntimeAuthorizationCore(input: RuntimeAuthorizationCoreInput): Promise<CoreResult> {
-  const { session, request, evidenceResolver } = input
-  const env = input.env ?? process.env
-  const clock = resolveClock(input.clock)
+function evaluateResolvedRuntimeAuthorization(input: {
+  readonly bundleSnap: RuntimeAuthorizationEvidenceBundle
+  readonly sessionSnap: SessionSnapshot
+  readonly claimAt: string
+  readonly request: RuntimeAuthorizationRequest
+}): CoreResult {
+  const { bundleSnap, sessionSnap, claimAt, request } = input
 
-  // 1. Inert request identifiers must be present and well-formed.
-  if (
-    !isNonEmptyString(request.tenantId) ||
-    !isNonEmptyString(request.workUnitId) ||
-    !isNonEmptyString(request.actionPreviewId) ||
-    !isNonEmptyString(request.approvalId) ||
-    !isNonEmptyString(request.actionType)
-  ) {
-    return { ok: false, state: "invalid", issueCode: "invalid_runtime_authorization_input" }
-  }
-
-  // 2. Early RBAC + kill-switch fast-fail (defense in depth; rechecked below).
-  if (!hasExecutePermission(session)) {
-    return { ok: false, state: "forbidden", issueCode: "runtime_authorization_rbac_denied" }
-  }
-  if (!areExternalActionsEnabled(env)) {
-    return { ok: false, state: "blocked", issueCode: "runtime_authorization_kill_switch_off" }
-  }
-
-  // 3. Server-authoritative evidence — never from the client. This is the last
-  //    asynchronous read; everything after uses the post-resolution timestamp.
-  const bundle = await evidenceResolver.resolveEvidenceBundle({
-    tenantId: request.tenantId,
-    workUnitId: request.workUnitId,
-    actionPreviewId: request.actionPreviewId,
-    approvalId: request.approvalId,
-  })
-  if (bundle === null) {
-    return { ok: false, state: "not_ready", issueCode: "runtime_authorization_state_missing" }
-  }
-
-  // 4. Snapshot the resolver bundle ONCE; never read the resolver-owned object
-  //    again. Every nested source is captured here.
-  const bundleSnap = snapshotDeepFrozen(bundle) as RuntimeAuthorizationEvidenceBundle | null
-  if (bundleSnap === null || typeof bundleSnap !== "object") {
-    return { ok: false, state: "not_ready", issueCode: "runtime_authorization_state_missing" }
-  }
   const envelope = bundleSnap.intendedAction
   if (
     !isNonEmptyString(envelope?.tenantId) || envelope.tenantId !== request.tenantId ||
@@ -249,18 +232,12 @@ async function evaluateRuntimeAuthorizationCore(input: RuntimeAuthorizationCoreI
     return { ok: false, state: "stale", issueCode: "runtime_authorization_state_missing" }
   }
 
-  // 5. FRESH authoritative authorization instant — AFTER the async read.
-  const now = clock.now()
-
-  // 6. Snapshot the current session ONCE and derive the executor at `now`.
-  const sessionSnap = snapshotSession(session)
-  if (sessionSnap === null) {
-    return { ok: false, state: "forbidden", issueCode: "runtime_authorization_executor_invalid" }
-  }
+  // Current executor identity, derived at the fresh instant from the session
+  // snapshot only. Sync; no clock read here (claimAt is supplied).
   const executorResult = createCanonicalSessionIdentity(sessionSnap, {
     actor_kind: "executor",
     expected_tenant_id: request.tenantId,
-    observed_at: now,
+    observed_at: claimAt,
   })
   if (!executorResult.ok) {
     return { ok: false, state: "forbidden", issueCode: "runtime_authorization_executor_invalid" }
@@ -268,10 +245,7 @@ async function evaluateRuntimeAuthorizationCore(input: RuntimeAuthorizationCoreI
   const executor = executorResult.identity
   const sessionExpiresAt = sessionSnap.expiresAt
 
-  // 7. Verify all evidence at the fresh instant (Linkage + HD matrix + executor
-  //    separation + bounded expiry). Context is built from RAW sources with the
-  //    fresh timestamp stamped in.
-  const context = buildVerificationContext(bundleSnap.sources, now)
+  const context = buildVerificationContext(bundleSnap.sources, claimAt)
   const eligibility = evaluateRuntimeAuthorizationEligibility({
     linkage: bundleSnap.linkage,
     linkage_context: context,
@@ -286,22 +260,33 @@ async function evaluateRuntimeAuthorizationCore(input: RuntimeAuthorizationCoreI
       payload_hash: envelope.payloadHash,
     },
     session_expires_at: typeof sessionExpiresAt === "string" ? sessionExpiresAt : "",
-    issued_at: now,
+    issued_at: claimAt,
   })
   if (!eligibility.ok) {
     return { ok: false, state: eligibility.state, issueCode: eligibility.issue_codes[0] ?? "runtime_authorization_state_missing" }
   }
+  return { ok: true, evidence: eligibility.evidence, sessionSnap }
+}
 
-  // 8. FINAL RBAC + kill-switch recheck, immediately before any claim. Never
-  //    reuse the earlier `true`; re-evaluate from source (session snapshot).
-  if (!hasExecutePermission(sessionSnap as unknown as Session)) {
-    return { ok: false, state: "forbidden", issueCode: "runtime_authorization_rbac_denied" }
-  }
-  if (!areExternalActionsEnabled(env)) {
-    return { ok: false, state: "blocked", issueCode: "runtime_authorization_kill_switch_off" }
-  }
-
-  return { ok: true, evidence: eligibility.evidence }
+/**
+ * Resolve + snapshot the bundle. This is the ONLY asynchronous step; everything
+ * after it in the consuming functions is synchronous through claim initiation.
+ * Returns the snapshotted bundle, or null when evidence is unavailable.
+ */
+async function resolveBundleSnapshot(
+  resolver: RuntimeAuthorizationEvidenceResolver,
+  request: RuntimeAuthorizationRequest,
+): Promise<RuntimeAuthorizationEvidenceBundle | null> {
+  const bundle = await resolver.resolveEvidenceBundle({
+    tenantId: request.tenantId,
+    workUnitId: request.workUnitId,
+    actionPreviewId: request.actionPreviewId,
+    approvalId: request.approvalId,
+  })
+  if (bundle === null) return null
+  const snap = snapshotDeepFrozen(bundle) as RuntimeAuthorizationEvidenceBundle | null
+  if (snap === null || typeof snap !== "object") return null
+  return snap
 }
 
 function auditFrom(
@@ -339,39 +324,80 @@ export async function authorizeRuntimeCommand(
   input: AuthorizeRuntimeCommandInput,
 ): Promise<RuntimeAuthorizationResult> {
   const clock = resolveClock(input.clock)
+  const env = input.env ?? process.env
   const sink = input.auditSink ?? noopRuntimeAuthorizationAuditSink
-  const emit = (e: ReturnType<typeof projectRuntimeAuthorizationAudit>) => {
+
+  // Audit events are BUFFERED here and flushed to the externally-supplied sink
+  // ONCE, after the terminal result. The sink is never invoked inside the
+  // security-critical window (between the final RBAC/kill-switch checks and the
+  // claim), so a hostile sink cannot flip policy state after the last check.
+  const events: RuntimeAuthorizationAuditEvent[] = []
+  const flushAndReturn = async (result: RuntimeAuthorizationResult): Promise<RuntimeAuthorizationResult> => {
     try {
-      sink.emit(e)
+      await sink.flush(events)
     } catch {
-      /* audit must never break the gate */
+      /* fail-open: audit persistence never changes the authorization result */
     }
+    return result
   }
+
   try {
     const requestedAt = clock.now()
-    emit(auditFrom("runtime_authorization_requested", input.request, "not_ready", requestedAt))
+    events.push(auditFrom("runtime_authorization_requested", input.request, "not_ready", requestedAt))
 
-    const core = await evaluateRuntimeAuthorizationCore({
-      session: input.session,
-      request: input.request,
-      evidenceResolver: input.evidenceResolver,
-      env: input.env,
-      clock,
-    })
-    if (!core.ok) {
-      const kind = core.state === "blocked" ? "runtime_authorization_blocked" : "runtime_authorization_rejected"
-      emit(auditFrom(kind, input.request, core.state, requestedAt, [core.issueCode]))
-      return fail(core.state, core.issueCode)
+    // 1. Inert request identifiers.
+    if (!requestFieldsValid(input.request)) {
+      events.push(auditFrom("runtime_authorization_rejected", input.request, "invalid", requestedAt, ["invalid_runtime_authorization_input"]))
+      return flushAndReturn(fail("invalid", "invalid_runtime_authorization_input"))
     }
 
-    const evidence = core.evidence
-    // eligible is emitted ONLY after internal Linkage + policy eligibility and
-    // the final RBAC + kill-switch recheck have all succeeded.
-    emit(auditFrom("runtime_authorization_eligible", evidence, "eligible", evidence.issued_at))
+    // 2. Early RBAC + kill-switch fast-fail (defense in depth).
+    if (!hasExecutePermission(input.session)) {
+      events.push(auditFrom("runtime_authorization_rejected", input.request, "forbidden", requestedAt, ["runtime_authorization_rbac_denied"]))
+      return flushAndReturn(fail("forbidden", "runtime_authorization_rbac_denied"))
+    }
+    if (!areExternalActionsEnabled(env)) {
+      events.push(auditFrom("runtime_authorization_blocked", input.request, "blocked", requestedAt, ["runtime_authorization_kill_switch_off"]))
+      return flushAndReturn(fail("blocked", "runtime_authorization_kill_switch_off"))
+    }
 
-    // 9. Exact-binding atomic one-time-use claim, using the SAME fresh instant.
-    //    Never the legacy unbound single-id claim method.
-    const claimed = await input.approvalStore.claimApprovalForRuntime({
+    // 3. THE ONLY await before the claim: resolve + snapshot the evidence bundle.
+    const bundleSnap = await resolveBundleSnapshot(input.evidenceResolver, input.request)
+    if (bundleSnap === null) {
+      events.push(auditFrom("runtime_authorization_rejected", input.request, "not_ready", requestedAt, ["runtime_authorization_state_missing"]))
+      return flushAndReturn(fail("not_ready", "runtime_authorization_state_missing"))
+    }
+
+    // 4. SYNCHRONOUS finalization — no `await` from here through claim initiation.
+    const sessionSnap = snapshotSession(input.session)
+    if (sessionSnap === null) {
+      events.push(auditFrom("runtime_authorization_rejected", input.request, "forbidden", requestedAt, ["runtime_authorization_executor_invalid"]))
+      return flushAndReturn(fail("forbidden", "runtime_authorization_executor_invalid"))
+    }
+    const claimAt = clock.now() // fresh, post-resolution
+    const resolved = evaluateResolvedRuntimeAuthorization({ bundleSnap, sessionSnap, claimAt, request: input.request })
+    if (!resolved.ok) {
+      const kind = resolved.state === "blocked" ? "runtime_authorization_blocked" : "runtime_authorization_rejected"
+      events.push(auditFrom(kind, input.request, resolved.state, claimAt, [resolved.issueCode]))
+      return flushAndReturn(fail(resolved.state, resolved.issueCode))
+    }
+    const evidence = resolved.evidence
+    // eligible is BUFFERED (not flushed): the sink must not run before the claim.
+    events.push(auditFrom("runtime_authorization_eligible", evidence, "eligible", evidence.issued_at))
+
+    // 5. FINAL RBAC + kill-switch recheck IN THIS CONSUMING FUNCTION, immediately
+    //    before the claim. There must be NO await, callback, event emission, or
+    //    logger call between these two checks and the claim initiation below.
+    if (!hasExecutePermission(sessionSnap as unknown as Session)) {
+      events.push(auditFrom("runtime_authorization_rejected", evidence, "forbidden", claimAt, ["runtime_authorization_rbac_denied"]))
+      return flushAndReturn(fail("forbidden", "runtime_authorization_rbac_denied"))
+    }
+    if (!areExternalActionsEnabled(env)) {
+      events.push(auditFrom("runtime_authorization_blocked", evidence, "blocked", claimAt, ["runtime_authorization_kill_switch_off"]))
+      return flushAndReturn(fail("blocked", "runtime_authorization_kill_switch_off"))
+    }
+    // ── CLAIM-ADJACENT: no await/callback/emit between the check above and here ──
+    const claimedPromise = input.approvalStore.claimApprovalForRuntime({
       tenantId: evidence.tenant_id as TenantId,
       workUnitId: evidence.workunit_id,
       actionPreviewId: evidence.action_preview_id,
@@ -381,20 +407,22 @@ export async function authorizeRuntimeCommand(
       payloadHash: evidence.payload_hash,
       claimedAt: evidence.issued_at,
     })
-    if (!claimed) {
-      // A false CAS emits replayed and never claimed/created — no receipt.
-      emit(auditFrom("runtime_authorization_replayed", evidence, "used", evidence.issued_at, ["runtime_authorization_linkage_used"]))
-      return fail("used", "runtime_authorization_linkage_used")
-    }
-    emit(auditFrom("runtime_authorization_claimed", evidence, "eligible", evidence.issued_at))
+    const claimed = await claimedPromise
 
-    // 10. Receipt construction — ONLY after the claim succeeds.
+    if (!claimed) {
+      // A false CAS buffers replayed and never claimed/created — no receipt.
+      events.push(auditFrom("runtime_authorization_replayed", evidence, "used", evidence.issued_at, ["runtime_authorization_linkage_used"]))
+      return flushAndReturn(fail("used", "runtime_authorization_linkage_used"))
+    }
+    events.push(auditFrom("runtime_authorization_claimed", evidence, "eligible", evidence.issued_at))
+
+    // 6. Receipt construction — ONLY after the claim succeeds.
     const receipt = constructRuntimeAuthorizationReceipt(evidence)
-    emit(auditFrom("runtime_authorization_created", evidence, "authorized_not_executed", evidence.issued_at))
-    return Object.freeze({ ok: true, state: "authorized_not_executed", receipt })
+    events.push(auditFrom("runtime_authorization_created", evidence, "authorized_not_executed", evidence.issued_at))
+    return flushAndReturn(Object.freeze({ ok: true, state: "authorized_not_executed", receipt }))
   } catch {
-    emit(auditFrom("runtime_authorization_rejected", input.request, "invalid", clock.now(), ["runtime_authorization_validation_exception"]))
-    return fail("invalid", "runtime_authorization_validation_exception")
+    events.push(auditFrom("runtime_authorization_rejected", input.request, "invalid", clock.now(), ["runtime_authorization_validation_exception"]))
+    return flushAndReturn(fail("invalid", "runtime_authorization_validation_exception"))
   }
 }
 
@@ -418,12 +446,32 @@ export type RuntimeAuthorizationDryRunResult =
 export async function evaluateRuntimeAuthorizationDryRun(
   input: RuntimeAuthorizationCoreInput,
 ): Promise<RuntimeAuthorizationDryRunResult> {
+  const env = input.env ?? process.env
+  const clock = resolveClock(input.clock)
   try {
-    const core = await evaluateRuntimeAuthorizationCore(input)
-    if (core.ok) return { disposition: "verified" }
-    if (core.state === "blocked") return { disposition: "blocked" }
-    if (core.state === "forbidden") return { disposition: "forbidden" }
-    return { disposition: "not_ready" }
+    // Early guards (parity with the consuming gate).
+    if (!requestFieldsValid(input.request)) return { disposition: "not_ready" }
+    if (!hasExecutePermission(input.session)) return { disposition: "forbidden" }
+    if (!areExternalActionsEnabled(env)) return { disposition: "blocked" }
+
+    // The only await; everything after is synchronous.
+    const bundleSnap = await resolveBundleSnapshot(input.evidenceResolver, input.request)
+    if (bundleSnap === null) return { disposition: "not_ready" }
+
+    const sessionSnap = snapshotSession(input.session)
+    if (sessionSnap === null) return { disposition: "forbidden" }
+    const claimAt = clock.now()
+    const resolved = evaluateResolvedRuntimeAuthorization({ bundleSnap, sessionSnap, claimAt, request: input.request })
+    if (!resolved.ok) {
+      if (resolved.state === "blocked") return { disposition: "blocked" }
+      if (resolved.state === "forbidden") return { disposition: "forbidden" }
+      return { disposition: "not_ready" }
+    }
+
+    // FINAL RBAC + kill-switch recheck (parity) — the dry-run NEVER claims.
+    if (!hasExecutePermission(sessionSnap as unknown as Session)) return { disposition: "forbidden" }
+    if (!areExternalActionsEnabled(env)) return { disposition: "blocked" }
+    return { disposition: "verified" }
   } catch {
     return { disposition: "not_ready" }
   }

@@ -138,3 +138,30 @@ server-authoritative evidence bundle.
 - **Claim input validation.** All ApprovalStore/claim implementations reject a
   malformed/non-ISO `claimedAt`; inclusive-fail expiry (`claimedAt >= expiresAt`)
   is preserved and D1/in-memory predicates stay equivalent.
+
+## P6-FIX-012 claim-adjacency repairs (PR #163 review, round 3)
+
+- **Claim-adjacent final checks.** Asynchronous evidence resolution is separated
+  from synchronous finalization. The consuming gate (`authorizeRuntimeCommand`)
+  performs the FINAL RBAC + kill-switch rechecks itself, immediately before the
+  atomic claim; there is NO `await`, audit sink flush/emit, logger call, or other
+  externally-supplied callback between those checks and the claim invocation. The
+  dry-run reuses the shared synchronous evaluator (`evaluateResolvedRuntimeAuthorization`)
+  and its own final checks but never claims.
+- **Buffered audit (no callback in the critical window).** Redacted lifecycle
+  events are buffered locally and the externally-supplied sink is flushed ONCE,
+  after the terminal result — never before the claim. A hostile sink that
+  disables the kill switch or flips RBAC cannot affect a claim, because it is not
+  invoked in the pre-claim window (proven by an instrumented CLAIM-before-SINK
+  ordering test, a microtask test, and a malicious-sink test).
+- **Durable, awaited persistence.** The audit sink is a batch `flush(events)`;
+  the route implementation AWAITS `persistAuditEvent` per event in order
+  (internally fail-open), so persistence completes within the request lifecycle.
+  Fire-and-forget (`void persistAuditEvent`) is removed from the runtime-authorization
+  path. Success persists `requested → eligible → claimed → created`; a false CAS
+  persists `requested → eligible → replayed` and never `claimed`/`created`. Audit
+  failure remains fail-open and never changes the authorization result.
+- **Canonical audit reasons.** `runtime_authorization_rbac_denied` and
+  `runtime_authorization_kill_switch_off` are added to the canonical issue-code
+  allowlist, so blocked / RBAC-denied audit events retain exactly one allowlisted
+  reason code without exposing raw values.

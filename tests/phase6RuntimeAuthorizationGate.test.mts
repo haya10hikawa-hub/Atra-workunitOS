@@ -278,7 +278,18 @@ import type { RuntimeAuthorizationAuditSink } from "../app/lib/phase6/runtimeAut
 function recordingSink(): { sink: RuntimeAuthorizationAuditSink; kinds: string[]; events: Array<Record<string, unknown>> } {
   const kinds: string[] = []
   const events: Array<Record<string, unknown>> = []
-  return { sink: { emit(e) { kinds.push(e.event_kind); events.push(e as unknown as Record<string, unknown>) } }, kinds, events }
+  return {
+    sink: {
+      flush(evts) {
+        for (const e of evts) {
+          kinds.push(e.event_kind)
+          events.push(e as unknown as Record<string, unknown>)
+        }
+      },
+    },
+    kinds,
+    events,
+  }
 }
 
 test("audit lifecycle: requested → eligible → claimed → created on success", async () => {
@@ -322,8 +333,8 @@ test("audit lifecycle: a blocked kill switch emits requested → blocked, never 
   assert.deepEqual(rec.kinds, ["runtime_authorization_requested", "runtime_authorization_blocked"])
 })
 
-test("audit sink that throws never breaks the gate", async () => {
-  const r = await authorizeRuntimeCommand(gateInput({ auditSink: { emit() { throw new Error("audit boom") } } }))
+test("audit sink whose flush throws never breaks the gate", async () => {
+  const r = await authorizeRuntimeCommand(gateInput({ auditSink: { flush() { throw new Error("audit boom") } } }))
   assert.equal(r.ok, true)
 })
 
@@ -352,4 +363,92 @@ test("the authorization instant is minted AFTER resolution (resolver advances th
     claimedAt: "2026-07-05T03:00:00Z",
   })
   assert.equal(claimable, true)
+})
+
+// ─── MB1/MB2: claim-adjacency & malicious audit sink ────────────
+
+test("a malicious audit sink cannot disable the kill switch before the claim (flush is post-claim)", async () => {
+  const env = { EXTERNAL_ACTIONS_ENABLED: "true" } as Record<string, string>
+  const sink: RuntimeAuthorizationAuditSink = { flush() { env.EXTERNAL_ACTIONS_ENABLED = "false" } }
+  const r = await authorizeRuntimeCommand(gateInput({ env: env as unknown as NodeJS.ProcessEnv, auditSink: sink }))
+  // The sink runs only AFTER the claim; the claim used the enabled switch.
+  assert.equal(r.ok, true)
+})
+
+test("the audit sink is invoked only AFTER the claim (instrumented ordering)", async () => {
+  const log: string[] = []
+  const inner = freshStore()
+  const store = {
+    findApprovalById: inner.findApprovalById.bind(inner),
+    markApprovalUsed: inner.markApprovalUsed.bind(inner),
+    async claimApprovalForRuntime(i: Parameters<typeof inner.claimApprovalForRuntime>[0]) {
+      log.push("CLAIM")
+      return inner.claimApprovalForRuntime(i)
+    },
+  }
+  const sink: RuntimeAuthorizationAuditSink = { flush() { log.push("SINK") } }
+  const r = await authorizeRuntimeCommand({
+    session: session(), request: request(), approvalStore: store as never,
+    evidenceResolver: seededResolver(), env: ENABLED, clock: TEST_CLOCK, auditSink: sink,
+  })
+  assert.equal(r.ok, true)
+  assert.deepEqual(log, ["CLAIM", "SINK"])
+})
+
+test("a microtask that flips the kill switch mid-flight is caught by the fresh final check", async () => {
+  const env = { EXTERNAL_ACTIONS_ENABLED: "true" } as Record<string, string>
+  const bundle = evidenceBundle()
+  const resolver: RuntimeAuthorizationEvidenceResolver = {
+    async resolveEvidenceBundle() {
+      // Schedule a microtask that disables the switch during completion.
+      Promise.resolve().then(() => { env.EXTERNAL_ACTIONS_ENABLED = "false" })
+      return bundle
+    },
+  }
+  const store = freshStore()
+  const r = await authorizeRuntimeCommand({
+    session: session(), request: request(), approvalStore: store, evidenceResolver: resolver,
+    env: env as unknown as NodeJS.ProcessEnv, clock: TEST_CLOCK,
+  })
+  // A disabled switch must NEVER result in a successful claim: the microtask runs
+  // at the resolver await (before the final check), so the fresh check blocks.
+  assert.equal(r.ok, false)
+  if (r.ok) return
+  assert.equal(r.state, "blocked")
+  // The approval was not claimed.
+  const claimable = await store.claimApprovalForRuntime({
+    tenantId: "tenant-1" as TenantId, workUnitId: "wu-1", actionPreviewId: "preview-1", approvalId: "approval:preview-1",
+    actionType: "slack_reply", targetHash: intendedAction().target_hash as string, payloadHash: intendedAction().payload_hash as string,
+    claimedAt: "2026-07-05T03:00:00Z",
+  })
+  assert.equal(claimable, true)
+})
+
+test("a role change on the original session after snapshot cannot subvert (snapshot is authoritative)", async () => {
+  const sess = session()
+  const sink: RuntimeAuthorizationAuditSink = { flush() { (sess as { role: string }).role = "viewer" } }
+  const r = await authorizeRuntimeCommand(gateInput({ session: sess, auditSink: sink }))
+  assert.equal(r.ok, true)
+})
+
+test("the durable audit flush is awaited before the gate returns", async () => {
+  let flushed = false
+  const sink: RuntimeAuthorizationAuditSink = { async flush() { await Promise.resolve(); await Promise.resolve(); flushed = true } }
+  const r = await authorizeRuntimeCommand(gateInput({ auditSink: sink }))
+  assert.equal(r.ok, true)
+  assert.equal(flushed, true, "flush must complete before the gate returns")
+})
+
+test("blocked and RBAC-denied audit events carry one allowlisted reason code (no raw values)", async () => {
+  const recBlocked = recordingSink()
+  await authorizeRuntimeCommand(gateInput({ env: {} as NodeJS.ProcessEnv, auditSink: recBlocked.sink }))
+  const blocked = recBlocked.events.find((e) => e.event_kind === "runtime_authorization_blocked")
+  assert.ok(blocked)
+  assert.deepEqual(blocked!.issue_codes, ["runtime_authorization_kill_switch_off"])
+
+  const recRbac = recordingSink()
+  await authorizeRuntimeCommand(gateInput({ session: session("executor-1", "viewer"), auditSink: recRbac.sink }))
+  const rejected = recRbac.events.find((e) => e.event_kind === "runtime_authorization_rejected")
+  assert.ok(rejected)
+  assert.deepEqual(rejected!.issue_codes, ["runtime_authorization_rbac_denied"])
 })
