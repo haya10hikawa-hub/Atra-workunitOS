@@ -22,29 +22,17 @@
 /**
  * The untrusted structural input for one review attestation. Identity and
  * binding fields (`tenant_id`, `reviewer_id`, `source_human_decision_id`) are
- * deliberately ABSENT: they are server-owned and must come from the server
- * construction context and the validated Human Decision artifact. Input that
- * carries them anyway is rejected fail-closed (`client_owned_identity_field`)
- * so attempted mass assignment stays observable.
+ * deliberately ABSENT: they are server-owned and must come from the canonical
+ * reviewer identity (P6-FIX-010, Issue #143) and the validated Human Decision
+ * artifact. Input that carries them anyway is rejected fail-closed
+ * (`client_owned_identity_field`) so attempted mass assignment stays
+ * observable.
  */
 export type UnvalidatedReviewAttestationInput = {
   readonly review_attestation_id: string
   readonly source_workunit_id: string
   readonly reviewed_payload_hash: string
   readonly reviewed_at: string
-}
-
-/**
- * Server-owned construction context for a Review Attestation. These values are
- * derived by trusted server code — never from the untrusted review payload.
- * This patch establishes the ownership boundary only; Issue #143 connects it
- * to canonical server/session identities and enforces requester/creator/
- * reviewer/approver independence. A structural TypeScript object is not
- * cryptographic proof of identity.
- */
-export type ReviewAttestationServerContext = {
-  readonly tenant_id: string
-  readonly reviewer_id: string
 }
 
 /**

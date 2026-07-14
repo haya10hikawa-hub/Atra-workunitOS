@@ -312,6 +312,8 @@ A TypeScript cast can always lie. The opaque type is a compile-time provenance b
 
 four_eyes_required: true is a policy declaration, not evidence that two reviews occurred. Four-Eyes Review Evidence is a separate, immutable artifact defined in FOUR_EYES_REVIEW_EVIDENCE_CONTRACT.md and produced by the independent app/lib/phase6/reviewEvidence module; the Human Decision Record itself never carries second-reviewer completion fields. Review Evidence is not ApprovalStore approval, not runtime authorization, and not execution permission.
 
+Likewise, self_approval_blocked: true is a policy declaration, not an identity comparison, and human_reviewer_id is an attribution field — NOT an authorization identity. The Human Decision Record validator carries no identity-comparison semantics. Canonical identity derivation and requester / creator / reviewer / approver independence are enforced by the separate Phase 6 identity-independence gate (P6-FIX-010, Issue #143) defined in CANONICAL_IDENTITY_INDEPENDENCE_CONTRACT.md; identity independence verification is not ApprovalStore approval, not runtime authorization, and not execution permission.
+
 ### 15.2 Decision Status / Outcome Semantic Matrix (P6-FIX-008)
 
 The allowed decision_status × decision_outcome matrix is:

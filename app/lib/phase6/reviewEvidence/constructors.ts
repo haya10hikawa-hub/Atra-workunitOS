@@ -10,19 +10,25 @@
  * execution permission, not persistence, and not Formal WorkUnit promotion.
  *
  * SERVER-OWNED IDENTITY BOUNDARY (fail-closed policy: REJECT). `tenant_id` and
- * `reviewer_id` are never mass-assignable from the untrusted input: they come
- * only from the server-owned construction context, and
- * `source_human_decision_id` comes only from the validated Human Decision
- * artifact. Untrusted input that carries any server-owned field is rejected
- * with `client_owned_identity_field` so attempted mass assignment stays
- * observable. Issue #143 connects this boundary to canonical server/session
- * identities; a structural TypeScript object is not cryptographic proof of
- * identity, and future runtime gates must re-check identity server-side.
+ * `reviewer_id` are never mass-assignable from the untrusted input: they are
+ * derived only from a constructor-produced canonical reviewer identity
+ * (P6-FIX-010, Issue #143 — `actor_kind: "reviewer"`, `identity_source:
+ * "authenticated_session"`, supported human subject type, tenant matching the
+ * Human Decision), and `source_human_decision_id` comes only from the
+ * validated Human Decision artifact. Untrusted input that carries any
+ * server-owned field is rejected with `client_owned_identity_field` so
+ * attempted mass assignment stays observable. The former structural
+ * `ReviewAttestationServerContext` (`{ tenant_id, reviewer_id }`) is removed:
+ * arbitrary caller-supplied reviewer strings can no longer enter. A
+ * TypeScript cast is still not cryptographic proof of identity — the
+ * canonical identity is defensively re-validated at runtime, and future
+ * runtime gates (Issue #145) must re-check identity server-side.
  *
  * The trusted Human Decision surface is imported ONLY through the artifacts
- * module public index. Because a TypeScript cast can lie, the Human Decision
- * argument is defensively re-validated at runtime even though its static type
- * is ValidatedHumanDecisionRecord.
+ * module public index, and the canonical identity surface ONLY through the
+ * canonicalIdentity module public index. Because a TypeScript cast can lie,
+ * the Human Decision and reviewer identity arguments are defensively
+ * re-validated at runtime even though their static types are trusted.
  *
  * No I/O, no clock (ids and timestamps are caller-supplied and validated), no
  * randomness, no mutation of any input.
@@ -32,6 +38,10 @@ import {
   validateHumanDecisionRecord,
   type ValidatedHumanDecisionRecord,
 } from "../artifacts/index.ts"
+import {
+  validateCanonicalIdentity,
+  type CanonicalIdentity,
+} from "../canonicalIdentity/index.ts"
 import {
   type ReviewEvidenceValidationIssue,
   reviewEvidenceIssue,
@@ -45,7 +55,6 @@ import {
 import type {
   ReviewAttestation,
   FourEyesReviewEvidence,
-  ReviewAttestationServerContext,
 } from "./types.ts"
 
 // ─── Construction result (frozen, non-authorizing) ──────────────
@@ -162,30 +171,78 @@ function copyAllowlisted(
   return artifact
 }
 
-/** Server context validation: missing/malformed server state fails closed. */
-function collectServerContextIssues(
-  context: unknown,
+/**
+ * Pure shallow single-read snapshot of an unknown value (P6-FIX-010
+ * snapshot-consistency hardening). Returns a plain object that copies every
+ * own-enumerable property exactly once, or `null` when the value is not a
+ * record or when reading it throws — a hostile getter or `ownKeys` trap fails
+ * closed here rather than escaping. After a snapshot is taken the original
+ * object is never read again, so validation and use always observe the same
+ * bytes: a getter cannot validate as one identity and be stored as another.
+ */
+function snapshotRecordOrNull(value: unknown): Record<string, unknown> | null {
+  try {
+    if (!isRecordObject(value)) return null
+    const snapshot: Record<string, unknown> = {}
+    for (const key of Object.keys(value)) {
+      snapshot[key] = value[key]
+    }
+    return snapshot
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Canonical reviewer identity boundary (P6-FIX-010, Issue #143). The reviewer
+ * argument must be a constructor-produced CanonicalIdentity; because a cast
+ * can lie, it is defensively re-validated through the canonical identity
+ * module's own validator, then constrained to exactly the reviewer position:
+ * `actor_kind === "reviewer"`, `identity_source === "authenticated_session"`,
+ * and the supported human subject type. A plain structural
+ * `{ tenant_id, reviewer_id }` object fails here — arbitrary caller-supplied
+ * reviewer strings can no longer become attestation identity. Underlying
+ * canonical-identity issue details are not echoed; the stable code
+ * `invalid_reviewer_identity` reports the failing aspect by field only.
+ *
+ * Snapshot consistency: the identity is snapshotted ONCE up front; validation,
+ * every position check, and the derived tenant/reviewer IDs all read that same
+ * snapshot. The original object is never re-read, so a getter/Proxy cannot
+ * pass validation as one reviewer and be stored as another. This is snapshot
+ * consistency only — it does not turn the compile-time opaque brand into
+ * cryptographic proof.
+ */
+function collectReviewerIdentityIssues(
+  reviewerIdentity: unknown,
 ): { readonly issues: readonly ReviewEvidenceValidationIssue[]; readonly tenantId: string; readonly reviewerId: string } {
-  if (!isRecordObject(context)) {
+  const snapshot = snapshotRecordOrNull(reviewerIdentity)
+  if (snapshot === null || !validateCanonicalIdentity(snapshot).ok) {
     return {
-      issues: [reviewEvidenceIssue("review_evidence_state_missing", "(server_context)")],
+      issues: [reviewEvidenceIssue("invalid_reviewer_identity", "(reviewer_identity)")],
       tenantId: "",
       reviewerId: "",
     }
   }
   const issues: ReviewEvidenceValidationIssue[] = []
-  const tenantId = context.tenant_id
-  const reviewerId = context.reviewer_id
-  if (!isNonEmptyString(tenantId)) {
-    issues.push(reviewEvidenceIssue("review_evidence_state_missing", "(server_context).tenant_id"))
+  if (snapshot.actor_kind !== "reviewer") {
+    issues.push(reviewEvidenceIssue("invalid_reviewer_identity", "(reviewer_identity).actor_kind"))
   }
-  if (!isNonEmptyString(reviewerId)) {
-    issues.push(reviewEvidenceIssue("review_evidence_state_missing", "(server_context).reviewer_id"))
+  if (snapshot.identity_source !== "authenticated_session") {
+    issues.push(
+      reviewEvidenceIssue("invalid_reviewer_identity", "(reviewer_identity).identity_source"),
+    )
   }
+  if (snapshot.subject_type !== "human_user") {
+    issues.push(
+      reviewEvidenceIssue("invalid_reviewer_identity", "(reviewer_identity).subject_type"),
+    )
+  }
+  const tenantId = snapshot.tenant_id
+  const reviewerId = snapshot.user_id
   return {
     issues,
-    tenantId: isNonEmptyString(tenantId) ? tenantId : "",
-    reviewerId: isNonEmptyString(reviewerId) ? reviewerId : "",
+    tenantId: issues.length === 0 && isNonEmptyString(tenantId) ? tenantId : "",
+    reviewerId: issues.length === 0 && isNonEmptyString(reviewerId) ? reviewerId : "",
   }
 }
 
@@ -193,20 +250,24 @@ function collectServerContextIssues(
  * Defensive Human Decision re-validation: the static type promises a
  * constructor-produced artifact, but a cast can lie, so the runtime shape is
  * always re-checked through the artifacts module's own validator.
+ *
+ * Snapshot consistency: the decision is snapshotted ONCE; validation and the
+ * derived decision/tenant IDs read that same snapshot, never the original
+ * object.
  */
 function collectHumanDecisionIssues(
   decision: unknown,
 ): { readonly issues: readonly ReviewEvidenceValidationIssue[]; readonly decisionId: string; readonly tenantId: string } {
-  const validation = validateHumanDecisionRecord(decision)
-  if (!validation.ok || !isRecordObject(decision)) {
+  const snapshot = snapshotRecordOrNull(decision)
+  if (snapshot === null || !validateHumanDecisionRecord(snapshot).ok) {
     return {
       issues: [reviewEvidenceIssue("invalid_source_human_decision", "(source_human_decision)")],
       decisionId: "",
       tenantId: "",
     }
   }
-  const decisionId = decision.human_decision_id
-  const tenantId = decision.tenant_id
+  const decisionId = snapshot.human_decision_id
+  const tenantId = snapshot.tenant_id
   if (!isNonEmptyString(decisionId) || !isNonEmptyString(tenantId)) {
     return {
       issues: [reviewEvidenceIssue("invalid_source_human_decision", "(source_human_decision)")],
@@ -221,14 +282,16 @@ function collectHumanDecisionIssues(
 
 /**
  * The only production function that returns a ReviewAttestation. `tenant_id`
- * and `reviewer_id` come exclusively from the server-owned context;
+ * and `reviewer_id` come exclusively from the constructor-produced canonical
+ * reviewer identity (`user_id` becomes the stored reviewer ID);
  * `source_human_decision_id` comes exclusively from the validated Human
- * Decision artifact. The raw reviewed payload is never accepted or stored —
- * only its 64-character lowercase hex hash. Success grants nothing.
+ * Decision artifact. No session token, email, role, or raw session data is
+ * stored. The raw reviewed payload is never accepted or stored — only its
+ * 64-character lowercase hex hash. Success grants nothing.
  */
 export function createReviewAttestation(
   input: unknown,
-  serverContext: ReviewAttestationServerContext,
+  reviewerIdentity: CanonicalIdentity,
   sourceHumanDecision: ValidatedHumanDecisionRecord,
 ): ReviewEvidenceConstructionResult<ReviewAttestation> {
   try {
@@ -238,26 +301,26 @@ export function createReviewAttestation(
     const issues: ReviewEvidenceValidationIssue[] = []
     issues.push(...collectClientOwnedIdentityIssues(snap.snapshot, ATTESTATION_SERVER_OWNED_FIELDS))
 
-    const context = collectServerContextIssues(serverContext)
-    issues.push(...context.issues)
+    const reviewer = collectReviewerIdentityIssues(reviewerIdentity)
+    issues.push(...reviewer.issues)
 
     const decision = collectHumanDecisionIssues(sourceHumanDecision)
     issues.push(...decision.issues)
 
     // Cross-tenant construction is a fail-closed mismatch, not a fallback.
     if (
-      context.issues.length === 0 &&
+      reviewer.issues.length === 0 &&
       decision.issues.length === 0 &&
-      context.tenantId !== decision.tenantId
+      reviewer.tenantId !== decision.tenantId
     ) {
-      issues.push(reviewEvidenceIssue("review_tenant_mismatch", "(server_context).tenant_id"))
+      issues.push(reviewEvidenceIssue("review_tenant_mismatch", "(reviewer_identity).tenant_id"))
     }
 
     if (issues.length > 0) return failConstruction(issues)
 
     const artifact = copyAllowlisted(snap.snapshot, ATTESTATION_INPUT_FIELDS)
-    artifact.tenant_id = context.tenantId
-    artifact.reviewer_id = context.reviewerId
+    artifact.tenant_id = reviewer.tenantId
+    artifact.reviewer_id = reviewer.reviewerId
     artifact.source_human_decision_id = decision.decisionId
 
     const validation = validateReviewAttestation(artifact)

@@ -144,3 +144,44 @@ test("approval is single-decision, rejects expired previews, and GET omits inter
     assert.equal(expired.status, 400)
   })
 })
+
+test("approval rejects self-approval and missing-creator previews with self_approval_forbidden", async () => {
+  // P6-FIX-010 route regression (Issue #143): the route's LOCAL four-eyes
+  // defense — stored creator versus session approver — must keep failing
+  // closed. The broader Phase 6 identity-independence gate is deliberately
+  // NOT wired here before Issue #144.
+  await withPersistence(async () => {
+    const bundle = await seedWorkUnit()
+
+    // Same user: the dev session user is the stored creator.
+    const selfPreviewId = "preview:self-approval"
+    await bundle.actionPreviews.create(bundle.ctx, {
+      id: selfPreviewId, tenantId, workUnitId, actionType: "slack_reply",
+      targetPreview: "{}", payloadPreview: "{}", requiresApproval: 1, status: "preview",
+      targetHash: "t", payloadHash: "p", createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      creatorUserId: "dev-user",
+    } as Parameters<typeof bundle.actionPreviews.create>[1])
+    const selfResponse = await decideApproval(
+      request(`/api/workunit/${workUnitId}/approval`, { actionPreviewId: selfPreviewId, decision: "approve" }),
+      { params: Promise.resolve({ id: workUnitId }) },
+    )
+    assert.equal(selfResponse.status, 403)
+    assert.equal(((await selfResponse.json()) as { error?: string }).error, "self_approval_forbidden")
+
+    // Missing creator: a pre-P1 row cannot prove distinct actors — fail closed.
+    const orphanPreviewId = "preview:missing-creator"
+    await bundle.actionPreviews.create(bundle.ctx, {
+      id: orphanPreviewId, tenantId, workUnitId, actionType: "slack_reply",
+      targetPreview: "{}", payloadPreview: "{}", requiresApproval: 1, status: "preview",
+      targetHash: "t", payloadHash: "p", createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    })
+    const orphanResponse = await decideApproval(
+      request(`/api/workunit/${workUnitId}/approval`, { actionPreviewId: orphanPreviewId, decision: "approve" }),
+      { params: Promise.resolve({ id: workUnitId }) },
+    )
+    assert.equal(orphanResponse.status, 403)
+    assert.equal(((await orphanResponse.json()) as { error?: string }).error, "self_approval_forbidden")
+  })
+})

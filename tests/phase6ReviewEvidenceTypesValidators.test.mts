@@ -347,6 +347,7 @@ test("issue codes are the stable exported set (pinned independently)", () => {
       "unknown_field",
       "forbidden_grant_field_present",
       "client_owned_identity_field",
+      "invalid_reviewer_identity",
       "invalid_source_human_decision",
       "invalid_review_attestation",
       "duplicate_review_attestation",

@@ -14,6 +14,10 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { createHumanDecisionRecord } from "../app/lib/phase6/artifacts/index.ts"
 import {
+  createCanonicalSessionIdentity,
+  type CanonicalIdentity,
+} from "../app/lib/phase6/canonicalIdentity/index.ts"
+import {
   createReviewAttestation,
   createFourEyesReviewEvidence,
   verifyFourEyesReviewEvidence,
@@ -22,6 +26,25 @@ import {
 
 const HASH = "a".repeat(64)
 const T = "2026-07-05T00:00:00Z"
+
+/** Canonical reviewer identity fixture (P6-FIX-010): derived from a session. */
+function reviewerIdentityOf(userId: string): CanonicalIdentity {
+  const result = createCanonicalSessionIdentity(
+    {
+      userId,
+      tenantId: "tenant-1",
+      role: "manager",
+      email: `${userId}@example.test`,
+      isDevSession: false,
+      sessionId: `sess-${userId}`,
+      createdAt: "2026-07-04T00:00:00Z",
+      expiresAt: "2026-07-06T00:00:00Z",
+    },
+    { actor_kind: "reviewer", expected_tenant_id: "tenant-1", observed_at: "2026-07-05T00:30:00Z" },
+  )
+  if (!result.ok) throw new Error("fixture reviewer identity must construct")
+  return result.identity
+}
 
 function buildEvidence(): FourEyesReviewEvidence {
   const decisionResult = createHumanDecisionRecord({
@@ -70,7 +93,7 @@ function buildEvidence(): FourEyesReviewEvidence {
       reviewed_payload_hash: HASH,
       reviewed_at: "2026-07-05T01:00:00Z",
     },
-    { tenant_id: "tenant-1", reviewer_id: "reviewer-alpha" },
+    reviewerIdentityOf("reviewer-alpha"),
     decision,
   )
   const second = createReviewAttestation(
@@ -80,7 +103,7 @@ function buildEvidence(): FourEyesReviewEvidence {
       reviewed_payload_hash: HASH,
       reviewed_at: "2026-07-05T02:00:00Z",
     },
-    { tenant_id: "tenant-1", reviewer_id: "reviewer-beta" },
+    reviewerIdentityOf("reviewer-beta"),
     decision,
   )
   assert.equal(first.ok, true)
