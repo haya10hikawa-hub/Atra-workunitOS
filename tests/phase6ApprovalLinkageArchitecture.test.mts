@@ -127,16 +127,22 @@ test("the live Approval / ActionPreview routes are byte-identical to the P6-FIX-
   // passes identically in a normal checkout AND in the shallow merge-ref
   // checkout GitHub Actions uses.
   //
-  // The two live routes remain byte-identical to the P6-FIX-011 baseline
-  // (354fe0c). `approvalStore.ts` is intentionally advanced by Issue #145
-  // (P6-FIX-012): it adds the exact-binding `claimApprovalForRuntime` method and
-  // harmonizes `verifyApproval` expiry to inclusive-fail. Its pin is therefore
-  // updated to the P6-FIX-012 content; a further accidental edit still fails.
+  // `approvalStore.ts` is intentionally advanced by Issue #145 (P6-FIX-012): it
+  // adds the exact-binding `claimApprovalForRuntime` method and harmonizes
+  // `verifyApproval` expiry to inclusive-fail. Its pin stays at that content.
+  //
+  // The two live routes are advanced by Issue #129 (P0-RUNTIME-013, round 3): each
+  // now resolves the request-scoped runtime config ONCE and threads that single
+  // frozen object into `requireSession(request, runtime)` and
+  // `resolveRouteRepositories(tenantId, runtime)` — a security fix (one snapshot
+  // per request; no double resolution). The approval decision logic, hashing,
+  // four-eyes, and RBAC are otherwise unchanged. The pins are updated to the new
+  // content; a further accidental/unauthorized edit still fails.
   const PINNED_BASELINE_DIGESTS: Readonly<Record<string, string>> = {
     "app/api/workunit/[id]/approval/route.ts":
-      "7b893beba7c2e9cdcdb6c712d13aea6e5b9548e4b8bb571c28b14bf5fcedc61c",
+      "4b8ece954371d1a552de9e073c30d3c4244136ad5056ad873c3f5ab30e3c5278",
     "app/api/workunit/[id]/action-preview/route.ts":
-      "41ddc957aaa99d77ecc6257969a4475328239e0a20673f475831333231e6daab",
+      "ca5544297bc453133751efa79285749feb3898df4e7767564a61bd25d0ce86be",
     "app/lib/security/approvalStore.ts":
       "fe95e65db109e10f60236a9ebe2870c29b7dcdd8ed837e3b9397aa9937d0c04c",
   }

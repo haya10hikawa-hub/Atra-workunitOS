@@ -15,7 +15,7 @@
  *   - Fails closed on ambiguous / malformed input.
  */
 
-import { readFileSync, existsSync, statSync, realpathSync } from "node:fs"
+import { readFileSync, existsSync, statSync, realpathSync, lstatSync } from "node:fs"
 import { resolve as resolvePath, dirname, basename as pathBasename } from "node:path"
 
 // ─── Expected Workers/OpenNext target ────────────────────────────
@@ -68,6 +68,20 @@ export function validateGeneratedConfigLocation(configPath, repoRoot) {
   // Basename must be an approved generated-config filename.
   if (!GENERATED_CONFIG_BASENAME_RE.test(pathBasename(resolved))) {
     return { ok: false, failure: "generated_config_not_ignored" }
+  }
+
+  // Reject a config file that is ITSELF a symbolic link — a generated config must
+  // be a plain repository-root file, never a link that could escape the repo (a
+  // valid parent + basename is not sufficient). `lstat` does not follow the link.
+  // A not-yet-created path (prepare stage) has no lstat and is allowed.
+  let linkStat = null
+  try {
+    linkStat = lstatSync(resolved)
+  } catch {
+    linkStat = null
+  }
+  if (linkStat && linkStat.isSymbolicLink()) {
+    return { ok: false, failure: "generated_config_symlink_escape" }
   }
 
   return { ok: true }

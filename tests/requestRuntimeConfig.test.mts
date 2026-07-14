@@ -2,6 +2,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import {
   resolveValidatedRequestRuntimeConfig,
+  resolveRuntimeConfigFromRawEnv,
   projectRuntimeAuthorizationEnv,
   projectLlmEnv,
 } from "../app/lib/runtime/requestRuntimeConfig.ts"
@@ -37,7 +38,7 @@ async function seedControlDb(db: FakeD1Database, opts: { provider: string; provi
   if (!repos.ok) throw new Error("control repos failed")
   const now = new Date().toISOString()
   await repos.bundle.users.create(repos.bundle.ctx, { id: "user-1" as UserId, email: opts.email, createdAt: now, updatedAt: now })
-  await repos.bundle.tenants.create(repos.bundle.ctx, { id: "tenant-1" as TenantId, name: "T", slug: "t", status: opts.tenantStatus ?? "active", createdAt: now, updatedAt: now })
+  await repos.bundle.tenants.create(repos.bundle.ctx, { id: "tenant-1" as TenantId, name: "T", slug: "t", status: (opts.tenantStatus ?? "active") as "active" | "suspended" | "deleted", createdAt: now, updatedAt: now })
   await repos.bundle.memberships.create(repos.bundle.ctx, { id: "m-1", tenantId: "tenant-1" as TenantId, userId: "user-1" as UserId, role: "manager", status: "active", createdAt: now, updatedAt: now })
   await repos.bundle.authIdentities.create(repos.bundle.ctx, { id: "id-1", userId: "user-1" as UserId, provider: opts.provider, providerSubject: opts.providerSubject, email: opts.email, createdAt: now, updatedAt: now })
 }
@@ -151,18 +152,47 @@ test("8. request-scoped kill-switch state is honored by the Runtime Authorizatio
 
 // ─── 9. LLM resolution uses request-scoped config ───────────────
 
-test("9. LLM provider/fallback resolution uses request-scoped config", () => {
-  // Cloudflare production → disabled provider, legacy fallback per request var.
-  runWithInjectedRuntimeEnv(cloudflareEnv({ ALLOW_LEGACY_INGEST_FALLBACK: "true" }), () => {
+test("9. LLM provider/fallback resolution uses request-scoped config (no legacy fallback in prod)", () => {
+  // Cloudflare production → disabled provider AND legacy fallback forced OFF.
+  runWithInjectedRuntimeEnv(cloudflareEnv(), () => {
     const result = resolveValidatedRequestRuntimeConfig()
     assert.ok(result.ok)
     if (result.ok) {
       const llmEnv = projectLlmEnv(result.runtime.llm)
       assert.equal(resolveLlmProvider(llmEnv), null) // no real/mock provider in production
-      assert.equal(resolveLlmProviderConfig(llmEnv).allowLegacyFallback, true)
+      assert.equal(resolveLlmProviderConfig(llmEnv).allowLegacyFallback, false)
+      assert.equal(resolveLlmProviderConfig(llmEnv).allowMock, false)
       assert.equal(resolveLlmProviderConfig(llmEnv).isProduction, true)
     }
   })
+})
+
+test("9b. production ALLOW_LEGACY_INGEST_FALLBACK=true is rejected (fail-closed)", () => {
+  const result = resolveValidatedRequestRuntimeConfig({ rawEnv: cloudflareEnv({ ALLOW_LEGACY_INGEST_FALLBACK: "true" }), production: true })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.error, "forbidden_capability")
+})
+
+test("9c. every production ALLOW_* capability = true is rejected fail-closed", () => {
+  const forbidden = {
+    ALLOW_LEGACY_INGEST_FALLBACK: "forbidden_capability",
+    ALLOW_MOCK_LLM: "forbidden_capability",
+    ALLOW_IN_MEMORY_PERSISTENCE: "forbidden_capability",
+    ALLOW_IN_MEMORY_APPROVAL_STORE: "forbidden_capability",
+    ALLOW_DEV_SESSION: "dev_flag_forbidden",
+    ALLOW_DEV_WORKSPACE_BOOTSTRAP: "dev_flag_forbidden",
+    ALLOW_DEV_CONTROLLESS_SESSION: "dev_flag_forbidden",
+  } as const
+  for (const [key, expected] of Object.entries(forbidden)) {
+    const trueResult = resolveValidatedRequestRuntimeConfig({ rawEnv: cloudflareEnv({ [key]: "true" } as never), production: true })
+    assert.equal(trueResult.ok, false, `${key}=true must be rejected`)
+    if (!trueResult.ok) assert.equal(trueResult.error, expected, `${key}=true → ${expected}`)
+    // Malformed literal also fails closed; "false"/absent are accepted.
+    const malformed = resolveValidatedRequestRuntimeConfig({ rawEnv: cloudflareEnv({ [key]: "1" } as never), production: true })
+    assert.equal(malformed.ok, false, `${key}=1 must fail closed`)
+    if (!malformed.ok) assert.equal(malformed.error, "malformed_var")
+    assert.equal(resolveValidatedRequestRuntimeConfig({ rawEnv: cloudflareEnv({ [key]: "false" } as never), production: true }).ok, true, `${key}=false accepted`)
+  }
 })
 
 // ─── 10. cross-request isolation of all sections ────────────────
@@ -257,4 +287,40 @@ test("validated runtime config sections are frozen", () => {
     assert.ok(Object.isFrozen(result.runtime.security))
     assert.throws(() => { (result.runtime.security as { externalActionsEnabled: boolean }).externalActionsEnabled = true })
   }
+})
+
+// ─── Blocker 2: genuine Cloudflare context outranks test injection ──
+
+const CLOUDFLARE_CONTEXT_SYMBOL = Symbol.for("__cloudflare-context__")
+
+test("a genuine Cloudflare context outranks a concurrent test injection", () => {
+  const genuineControl = new FakeD1Database()
+  const injectedControl = new FakeD1Database()
+  const genuineEnv = cloudflareEnv({ CONTROL_DB: genuineControl } as Partial<AppEnv>)
+  const injectedEnv = cloudflareEnv({ CONTROL_DB: injectedControl } as Partial<AppEnv>)
+
+  // Install a genuine OpenNext request context on the global scope (what the
+  // generated worker does per request).
+  ;(globalThis as Record<symbol, unknown>)[CLOUDFLARE_CONTEXT_SYMBOL] = { env: genuineEnv, cf: undefined, ctx: {} }
+  try {
+    // …while ALSO inside a test-injection scope. The genuine context must win.
+    runWithInjectedRuntimeEnv(injectedEnv, () => {
+      const result = resolveValidatedRequestRuntimeConfig()
+      assert.ok(result.ok)
+      if (result.ok) {
+        assert.equal(result.runtime.persistence.CONTROL_DB, genuineControl)
+        assert.notEqual(result.runtime.persistence.CONTROL_DB, injectedControl)
+      }
+    }, { production: true })
+  } finally {
+    delete (globalThis as Record<symbol, unknown>)[CLOUDFLARE_CONTEXT_SYMBOL]
+  }
+})
+
+test("resolveRuntimeConfigFromRawEnv is a pure projection (no ambient reads)", () => {
+  const env = cloudflareEnv()
+  const cf = resolveRuntimeConfigFromRawEnv(env, "cloudflare")
+  assert.ok(cf.ok && cf.runtime.source === "cloudflare")
+  const local = resolveRuntimeConfigFromRawEnv(env, "local", { NODE_ENV: "development", PERSISTENCE_MODE: "d1" })
+  assert.ok(local.ok && local.runtime.source === "local")
 })

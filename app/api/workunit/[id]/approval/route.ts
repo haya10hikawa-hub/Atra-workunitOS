@@ -10,6 +10,7 @@ import { readBoundedJsonObject } from "../../../../lib/security/requestBody.ts"
 import { checkRateLimit, getTrustedClientIp } from "../../../../lib/security/rateLimitGate.ts"
 import { hasClientOwnedFields, isPreviewExpired, resolveRequestId } from "../../../../lib/security/routeGuards.ts"
 import { recordAuditEvent } from "../../../../lib/security/auditPersistence.ts"
+import { resolveValidatedRequestRuntimeConfig } from "../../../../lib/runtime/requestRuntimeConfig.ts"
 
 // ─── Helpers ────────────────────────────────────────────────────
 
@@ -39,8 +40,16 @@ export async function POST(
 
   audit("approval_create_requested", requestId, { workUnitId })
 
+  // ── Request-scoped runtime config (resolved ONCE) ────────────
+  const runtimeResult = resolveValidatedRequestRuntimeConfig()
+  if (!runtimeResult.ok) {
+    audit("approval_create_failed", requestId, { reason: "runtime_config_invalid" })
+    return errorResponse(requestId, "integration_missing", 503)
+  }
+  const runtime = runtimeResult.runtime
+
   // ── Session ──────────────────────────────────────────────────
-  const sessionResult = await requireSession(request)
+  const sessionResult = await requireSession(request, runtime)
   if (!sessionResult.ok) {
     audit("approval_create_failed", requestId, { reason: "unauthorized" })
     return errorResponse(
@@ -54,8 +63,8 @@ export async function POST(
     return errorResponse(requestId, "rate_limited", 429)
   }
 
-  // ── Resolve repositories ────────────────────────────────────
-  const repoResult = await resolveRouteRepositories(session.tenantId as TenantId)
+  // ── Resolve repositories (same frozen runtime config) ───────
+  const repoResult = await resolveRouteRepositories(session.tenantId as TenantId, runtime)
   if (!repoResult.ok) {
     audit("approval_create_failed", requestId, { reason: "persistence_not_available" })
     return errorResponse(requestId, "integration_missing", 503)
@@ -191,7 +200,13 @@ export async function GET(
 ): Promise<NextResponse> {
   const { id: workUnitId } = await params
 
-  const sessionResult = await requireSession(request)
+  const runtimeResult = resolveValidatedRequestRuntimeConfig()
+  if (!runtimeResult.ok) {
+    return NextResponse.json(safeError("na", "integration_missing" as Parameters<typeof safeError>[1]), { status: 503 })
+  }
+  const runtime = runtimeResult.runtime
+
+  const sessionResult = await requireSession(request, runtime)
   if (!sessionResult.ok) {
     return NextResponse.json(
       safeError("na", (sessionResult.reason === "forbidden" || sessionResult.reason === "invalid_tenant") ? "forbidden" : "unauthorized"),
@@ -203,7 +218,7 @@ export async function GET(
     return NextResponse.json(safeError("na", "forbidden" as Parameters<typeof safeError>[1]), { status: 403 })
   }
 
-  const repoResult = await resolveRouteRepositories(sessionResult.session.tenantId as TenantId)
+  const repoResult = await resolveRouteRepositories(sessionResult.session.tenantId as TenantId, runtime)
   if (!repoResult.ok) {
     return errorResponse("na", "integration_missing", 503)
   }

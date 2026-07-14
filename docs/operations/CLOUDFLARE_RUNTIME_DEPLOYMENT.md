@@ -144,6 +144,15 @@ Guarantees (proven by `tests/requestRuntimeConfig.test.mts`,
 - a missing/malformed context or config fails closed (`integration_missing` / 503,
   or an unauthorized session);
 - `process.env` can never override the active Cloudflare request's config;
+- **a genuine OpenNext Cloudflare context ALWAYS outranks test injection** — the
+  resolver checks the genuine context first; the injector is only ever entered by a
+  test and is consulted only when no genuine context exists;
+- **every production development/fallback capability is rejected fail-closed** —
+  `ALLOW_LEGACY_INGEST_FALLBACK`, `ALLOW_MOCK_LLM`, `ALLOW_IN_MEMORY_PERSISTENCE`,
+  `ALLOW_IN_MEMORY_APPROVAL_STORE`, `ALLOW_DEV_SESSION`,
+  `ALLOW_DEV_WORKSPACE_BOOTSTRAP`, `ALLOW_DEV_CONTROLLESS_SESSION`. An explicit
+  `"true"` returns a runtime-config error (never normalized to false); a malformed
+  literal also fails closed; Cloudflare always projects them all as `false`;
 - `AUTH_ADAPTER=jwt` selects the JWT adapter with an injected secret; missing/weak
   JWT config fails closed; tenant + role always come from the control DB membership,
   never JWT claims; dev adapters are impossible in production;
@@ -175,6 +184,35 @@ CF_DEPLOY_EXECUTE=1 npm run cf:deploy
 
 A successful **dry-run alone does not imply production readiness** — see the
 open-issue limitations below.
+
+### 9.1 Production authentication variables
+
+The committed `wrangler.json` deliberately contains **no secrets** and no auth
+config, so deploying only the base config leaves authentication **fail-closed**
+(`AUTH_ADAPTER` absent → adapter `none` → every request is unauthorized). To
+enable JWT auth in production, supply these OUT of the repository:
+
+| Variable | Kind | How to provision |
+|----------|------|------------------|
+| `AUTH_ADAPTER=jwt` | non-secret Worker var | `wrangler.json` "vars", or `wrangler deploy --var AUTH_ADAPTER:jwt` |
+| `JWT_AUTH_SECRET` | **secret** | `wrangler secret put JWT_AUTH_SECRET` (never committed; ≥ 32 bytes required in production) |
+| `JWT_AUTH_ISSUER` | non-secret var (or secret) | `wrangler.json` "vars" or `wrangler secret put JWT_AUTH_ISSUER` |
+| `JWT_AUTH_AUDIENCE` | non-secret var (or secret) | `wrangler.json` "vars" or `wrangler secret put JWT_AUTH_AUDIENCE` |
+
+Notes:
+
+- `JWT_AUTH_SECRET` must be provisioned via `wrangler secret put` — do NOT place it
+  in `wrangler.json` and do NOT commit it. Issuer and audience may be plain vars or
+  secrets depending on your policy; in production the JWT config is only accepted
+  when the secret is ≥ 32 bytes AND issuer AND audience are all present (otherwise
+  auth fails closed).
+- The request-scoped config reads these from the Cloudflare env only — never from
+  ambient `process.env`.
+- **A JWT alone does not create a session.** The control DB must already contain a
+  matching `auth_identities` row (provider `jwt`, the token's `sub`) linked to a
+  `users` row with an **active** `memberships` row for an **active** tenant. Tenant
+  and role are taken from that membership, never from JWT claims. Seed these records
+  (see `CLOUDFLARE_D1_SETUP.md`) before JWT authentication can produce a session.
 
 ## 10. Rollback procedure
 

@@ -12,6 +12,7 @@ import { readBoundedJsonObject } from "../../../../lib/security/requestBody.ts"
 import { checkRateLimit, getTrustedClientIp } from "../../../../lib/security/rateLimitGate.ts"
 import { hasClientOwnedFields, resolveRequestId } from "../../../../lib/security/routeGuards.ts"
 import { recordAuditEvent } from "../../../../lib/security/auditPersistence.ts"
+import { resolveValidatedRequestRuntimeConfig } from "../../../../lib/runtime/requestRuntimeConfig.ts"
 
 // ─── Helpers ────────────────────────────────────────────────────
 
@@ -41,8 +42,16 @@ export async function POST(
 
   audit("action_preview_create_requested", requestId, { workUnitId })
 
+  // ── Request-scoped runtime config (resolved ONCE) ────────────
+  const runtimeResult = resolveValidatedRequestRuntimeConfig()
+  if (!runtimeResult.ok) {
+    audit("action_preview_create_failed", requestId, { reason: "runtime_config_invalid" })
+    return errorResponse(requestId, "integration_missing", 503)
+  }
+  const runtime = runtimeResult.runtime
+
   // ── Session ──────────────────────────────────────────────────
-  const sessionResult = await requireSession(request)
+  const sessionResult = await requireSession(request, runtime)
   if (!sessionResult.ok) {
     audit("action_preview_create_failed", requestId, { reason: "unauthorized" })
     return errorResponse(
@@ -56,8 +65,8 @@ export async function POST(
     return errorResponse(requestId, "rate_limited", 429)
   }
 
-  // ── Resolve repositories ────────────────────────────────────
-  const repoResult = await resolveRouteRepositories(session.tenantId as TenantId)
+  // ── Resolve repositories (same frozen runtime config) ───────
+  const repoResult = await resolveRouteRepositories(session.tenantId as TenantId, runtime)
   if (!repoResult.ok) {
     audit("action_preview_create_failed", requestId, { reason: "persistence_not_available" })
     return errorResponse(requestId, "integration_missing", 503)

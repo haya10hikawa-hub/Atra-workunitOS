@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server.js"
 import { getSessionErrorStatus, requireSession } from "../../../lib/security/session.ts"
 import { safeError } from "../../../lib/security/safeErrors.ts"
+import { resolveValidatedRequestRuntimeConfig } from "../../../lib/runtime/requestRuntimeConfig.ts"
 import { MOCK_SIGNALS } from "../../../lib/application/workunitInbox/mockSignals.ts"
 import { transformSignalsToInboxWorkUnits } from "../../../lib/application/workunitInbox/transform.ts"
 import { inboxWorkUnitToRow, workUnitRowToInboxWorkUnit } from "../../../lib/application/workunitInbox/persistenceMapping.ts"
@@ -22,7 +23,12 @@ const VALID_SOURCES = new Set(["mock", "github", "slack", "calendar", "all"])
 
 export async function GET(request: Request): Promise<NextResponse> {
   const requestId = `inbox:${Date.now()}`
-  const sessionResult = await requireSession(request)
+  const runtimeResult = resolveValidatedRequestRuntimeConfig()
+  if (!runtimeResult.ok) {
+    return NextResponse.json(safeError("inbox-na", "integration_missing" as Parameters<typeof safeError>[1]), { status: 503 })
+  }
+  const runtime = runtimeResult.runtime
+  const sessionResult = await requireSession(request, runtime)
   if (!sessionResult.ok) {
     return NextResponse.json(
       safeError("inbox-na", (sessionResult.reason === "forbidden" || sessionResult.reason === "invalid_tenant") ? "forbidden" : "unauthorized"),
@@ -51,7 +57,7 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   const signals = await resolveSignals(source, tenantId)
   const generatedWorkUnits = transformSignalsToInboxWorkUnits(signals)
-  const repoResult = await resolveRouteRepositories(tenantId as TenantId)
+  const repoResult = await resolveRouteRepositories(tenantId as TenantId, runtime)
   if (!repoResult.ok) {
     if (process.env.NODE_ENV === "production") {
       return NextResponse.json(safeError(requestId, repoResult.error), { status: repoResult.status })

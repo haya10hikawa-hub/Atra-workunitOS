@@ -77,6 +77,28 @@ export type RequestRuntimeConfigError =
   | "malformed_var"
   | "dev_flag_forbidden"
   | "dev_adapter_forbidden"
+  | "forbidden_capability"
+
+// ─── Forbidden production capabilities ───────────────────────────
+//
+// In a genuine Cloudflare production runtime EVERY development/fallback
+// capability must be absent or exactly "false". An explicit "true" is rejected
+// fail-closed (never silently normalized); a malformed literal also fails closed.
+const DEV_FLAG_KEYS: ReadonlySet<string> = new Set([
+  "ALLOW_DEV_SESSION",
+  "ALLOW_DEV_WORKSPACE_BOOTSTRAP",
+  "ALLOW_DEV_CONTROLLESS_SESSION",
+])
+
+const FORBIDDEN_PRODUCTION_CAPABILITIES: readonly string[] = [
+  "ALLOW_LEGACY_INGEST_FALLBACK",
+  "ALLOW_MOCK_LLM",
+  "ALLOW_IN_MEMORY_PERSISTENCE",
+  "ALLOW_IN_MEMORY_APPROVAL_STORE",
+  "ALLOW_DEV_SESSION",
+  "ALLOW_DEV_WORKSPACE_BOOTSTRAP",
+  "ALLOW_DEV_CONTROLLESS_SESSION",
+]
 
 export type RequestRuntimeConfigResult =
   | { ok: true; runtime: ValidatedRequestRuntimeConfig }
@@ -124,17 +146,16 @@ function resolveCloudflareConfig(raw: AppEnv): RequestRuntimeConfigResult {
   const mode = raw.PERSISTENCE_MODE
   if (mode !== undefined && mode !== "d1") return { ok: false, error: "malformed_persistence_mode" }
 
-  // Security vars — exact literals only.
+  // Security vars — exact literals only. The external-actions kill switch is
+  // separately gated (it may be "true"); it is NOT a development/fallback capability.
   const externalActions = parseBoolLiteral(raw.EXTERNAL_ACTIONS_ENABLED)
   if (externalActions === null) return { ok: false, error: "malformed_var" }
-  const legacyIngest = parseBoolLiteral(raw.ALLOW_LEGACY_INGEST_FALLBACK)
-  if (legacyIngest === null) return { ok: false, error: "malformed_var" }
 
-  // Every production ALLOW_DEV_* flag must reject "true" (dev is impossible).
-  for (const key of ["ALLOW_DEV_SESSION", "ALLOW_DEV_WORKSPACE_BOOTSTRAP", "ALLOW_DEV_CONTROLLESS_SESSION"]) {
+  // Every production development/fallback capability must be absent or "false".
+  for (const key of FORBIDDEN_PRODUCTION_CAPABILITIES) {
     const parsed = parseBoolLiteral(raw[key])
     if (parsed === null) return { ok: false, error: "malformed_var" }
-    if (parsed === true) return { ok: false, error: "dev_flag_forbidden" }
+    if (parsed === true) return { ok: false, error: DEV_FLAG_KEYS.has(key) ? "dev_flag_forbidden" : "forbidden_capability" }
   }
 
   // Auth adapter — dev is forbidden in Cloudflare production.
@@ -173,9 +194,11 @@ function resolveCloudflareConfig(raw: AppEnv): RequestRuntimeConfigResult {
       TENANT_DB_DEFAULT: raw.TENANT_DB_DEFAULT,
     }),
     auth: Object.freeze({ adapter, isProduction: true, jwt }),
+    // Cloudflare production ALWAYS projects every development/fallback capability
+    // as false — any "true" was already rejected above (fail-closed, not normalized).
     security: Object.freeze({
       externalActionsEnabled: externalActions,
-      allowLegacyIngestFallback: legacyIngest,
+      allowLegacyIngestFallback: false,
       allowDevSession: false,
       allowDevWorkspaceBootstrap: false,
       allowControlLessDevSession: false,
@@ -184,7 +207,7 @@ function resolveCloudflareConfig(raw: AppEnv): RequestRuntimeConfigResult {
       provider: provider.value,
       apiKey: apiKey.value,
       allowMock: false,
-      allowLegacyFallback: legacyIngest,
+      allowLegacyFallback: false,
       isProduction: true,
     }),
   }
@@ -258,11 +281,31 @@ function resolveLocalConfig(
 // ─── Public resolver ─────────────────────────────────────────────
 
 /**
+ * Pure projection of a raw env into a validated config. No ambient reads: the
+ * caller supplies both the raw env and the authority mode. Used by tests and by
+ * any explicit factory; production goes through
+ * `resolveValidatedRequestRuntimeConfig()`.
+ */
+export function resolveRuntimeConfigFromRawEnv(
+  rawEnv: AppEnv,
+  mode: "cloudflare" | "local",
+  processEnv: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): RequestRuntimeConfigResult {
+  return mode === "local" ? resolveLocalConfig(processEnv, rawEnv) : resolveCloudflareConfig(rawEnv)
+}
+
+/**
  * Resolve the authoritative request-scoped runtime configuration.
  *
- * Reads the raw runtime env exactly once. In production this is the Cloudflare
- * request context; in local dev it is `process.env` (+ optional local D1 test
- * injection). Options are for tests / explicit local callers only.
+ * Reads the raw runtime env exactly once. AUTHORITY ORDER:
+ *   1. explicit `rawEnv` override (test-specific / explicit factory only);
+ *   2. GENUINE OpenNext Cloudflare request context — always wins in production;
+ *   3. test injection — ONLY when no genuine Cloudflare context exists;
+ *   4. local Node development (`process.env`).
+ *
+ * A genuine Cloudflare context can therefore NEVER be shadowed by test injection,
+ * and production code never activates the injector (it is only ever entered by a
+ * test's `runWithInjectedRuntimeEnv`).
  */
 export function resolveValidatedRequestRuntimeConfig(
   options: {
@@ -273,24 +316,20 @@ export function resolveValidatedRequestRuntimeConfig(
 ): RequestRuntimeConfigResult {
   const processEnv = options.processEnv ?? (process.env as Record<string, string | undefined>)
 
-  // 1. Explicit override (tests / explicit local callers).
+  // 1. Explicit override (test-specific / explicit factory only).
   if (options.rawEnv !== undefined) {
-    return options.production === false
-      ? resolveLocalConfig(processEnv, options.rawEnv)
-      : resolveCloudflareConfig(options.rawEnv)
+    return resolveRuntimeConfigFromRawEnv(options.rawEnv, options.production === false ? "local" : "cloudflare", processEnv)
   }
 
-  // 2. Request-scoped test injection (never present in production).
-  const injected = peekInjectedRuntimeEnv()
-  if (injected) {
-    return injected.production
-      ? resolveCloudflareConfig(injected.env)
-      : resolveLocalConfig(processEnv, injected.env)
-  }
-
-  // 3. Genuine Cloudflare request context (production).
+  // 2. GENUINE Cloudflare request context (production) — outranks test injection.
   const cloudflareEnv = getRequestRuntimeEnv()
   if (cloudflareEnv) return resolveCloudflareConfig(cloudflareEnv)
+
+  // 3. Test injection — ONLY when no genuine Cloudflare context exists.
+  const injected = peekInjectedRuntimeEnv()
+  if (injected) {
+    return resolveRuntimeConfigFromRawEnv(injected.env, injected.production ? "cloudflare" : "local", processEnv)
+  }
 
   // 4. Local Node development — explicit process.env path, no injected D1.
   return resolveLocalConfig(processEnv)

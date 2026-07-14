@@ -100,3 +100,34 @@ test("process.env for auth/security/llm is confined to the config resolver's loc
   assert.match(src, /resolveLocalConfig/)
   assert.match(src, /source: "cloudflare"/)
 })
+
+// ─── Blocker 2: genuine Cloudflare context outranks test injection ──
+
+test("the resolver checks the genuine Cloudflare context before test injection", () => {
+  const src = read("app/lib/runtime/requestRuntimeConfig.ts")
+  const fnStart = src.indexOf("export function resolveValidatedRequestRuntimeConfig")
+  assert.ok(fnStart >= 0)
+  const body = src.slice(fnStart)
+  const genuine = body.indexOf("getRequestRuntimeEnv()")
+  const injected = body.indexOf("peekInjectedRuntimeEnv()")
+  assert.ok(genuine >= 0 && injected >= 0)
+  // Genuine context MUST be read before the injection seam is consulted.
+  assert.ok(genuine < injected, "genuine Cloudflare context must be checked before test injection")
+})
+
+// ─── Blocker 4: one runtime snapshot per route ──────────────────
+
+test("every route threads the runtime config into session and repositories (no no-arg combo)", () => {
+  const routeFiles = walk("app/api").filter((f) => f.endsWith("route.ts"))
+  assert.ok(routeFiles.length > 0)
+  for (const f of routeFiles) {
+    const src = read(f)
+    if (/requireSession\(/.test(src) || /resolveRouteRepositories\(/.test(src)) {
+      // A route that resolves config twice would call these with no runtime arg.
+      assert.doesNotMatch(src, /requireSession\(request\)/, `${f}: requireSession must receive the runtime config`)
+      assert.doesNotMatch(src, /resolveRouteRepositories\([^,)]*\)/, `${f}: resolveRouteRepositories must receive the runtime config`)
+      // And it must resolve the config once per request.
+      assert.match(src, /resolveValidatedRequestRuntimeConfig\(\)/, `${f}: must resolve the runtime config once`)
+    }
+  }
+})

@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { readFileSync, mkdtempSync, symlinkSync, rmSync } from "node:fs"
+import { readFileSync, mkdtempSync, symlinkSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
@@ -295,6 +295,54 @@ test("a config with real IDs at a subdirectory path fails full validation", () =
   })
   assert.equal(res.ok, false)
   assert.ok(res.failures.includes("generated_config_in_subdirectory"))
+})
+
+test("a repository-root FILE symlink to an outside file fails", () => {
+  // wrangler.deploy.json -> /tmp/outside.json : valid parent + basename, but the
+  // file is a symlink that escapes the repo → must be rejected.
+  const outside = mkdtempSync(resolve(tmpdir(), "cf-file-escape-"))
+  writeFileSync(resolve(outside, "outside.json"), "{}")
+  const linkPath = resolve(REPO_ROOT, `wrangler.deploy.symlinktest-${process.pid}.json`)
+  try {
+    symlinkSync(resolve(outside, "outside.json"), linkPath)
+  } catch {
+    return // platform without symlink support
+  }
+  try {
+    const r = validateGeneratedConfigLocation(linkPath, REPO_ROOT)
+    assert.equal(r.ok, false)
+    assert.equal(r.ok === false && r.failure, "generated_config_symlink_escape")
+  } finally {
+    rmSync(linkPath, { force: true })
+    rmSync(outside, { recursive: true, force: true })
+  }
+})
+
+test("a repository-root REGULAR file passes", () => {
+  const filePath = resolve(REPO_ROOT, `wrangler.deploy.regulartest-${process.pid}.json`)
+  writeFileSync(filePath, "{}")
+  try {
+    assert.equal(validateGeneratedConfigLocation(filePath, REPO_ROOT).ok, true)
+  } finally {
+    rmSync(filePath, { force: true })
+  }
+})
+
+test("a non-existing approved prepare path passes (prepare stage)", () => {
+  // The generated config does not exist yet during prepare — must be allowed.
+  assert.equal(validateGeneratedConfigLocation(resolve(REPO_ROOT, `wrangler.deploy.notyet-${process.pid}.json`), REPO_ROOT).ok, true)
+})
+
+// ─── Production auth provisioning documentation ─────────────────
+
+test("deployment docs document JWT secret provisioning via wrangler secret", () => {
+  const doc = readFileSync(resolve(REPO_ROOT, "docs/operations/CLOUDFLARE_RUNTIME_DEPLOYMENT.md"), "utf8")
+  // AUTH_ADAPTER=jwt is a non-secret Worker var; the secret is provisioned out of band.
+  assert.match(doc, /AUTH_ADAPTER=jwt/)
+  assert.match(doc, /wrangler secret put JWT_AUTH_SECRET/)
+  // Deploying only the base config leaves auth fail-closed; D1 records are prerequisite.
+  assert.match(doc, /fail-closed|fail closed/)
+  assert.match(doc, /auth_identities|membership/)
 })
 
 test("the exact .gitignore rule for generated deploy configs is present", () => {

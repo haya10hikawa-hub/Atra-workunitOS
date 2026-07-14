@@ -4,12 +4,18 @@ import { safeError } from "../../../lib/security/safeErrors.ts"
 import { resolveRouteRepositories } from "../../../lib/persistence/routeRepositories.ts"
 import type { TenantId } from "../../../lib/tenant/types.ts"
 import { canViewIntegrationStatus } from "../../../lib/security/tenantAccess.ts"
+import { resolveValidatedRequestRuntimeConfig } from "../../../lib/runtime/requestRuntimeConfig.ts"
 
 const ALL_PROVIDERS = ["github", "slack", "calendar"] as const
 
 export async function GET(request: Request): Promise<NextResponse> {
   const requestId = `integration-status:${Date.now()}`
-  const sessionResult = await requireSession(request)
+  const runtimeResult = resolveValidatedRequestRuntimeConfig()
+  if (!runtimeResult.ok) {
+    return NextResponse.json(safeError("status-na", "integration_missing" as Parameters<typeof safeError>[1]), { status: 503 })
+  }
+  const runtime = runtimeResult.runtime
+  const sessionResult = await requireSession(request, runtime)
   if (!sessionResult.ok) {
     return NextResponse.json(
       safeError("status-na", (sessionResult.reason === "forbidden" || sessionResult.reason === "invalid_tenant") ? "forbidden" : "unauthorized"),
@@ -20,7 +26,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.json(safeError("status-na", "forbidden" as Parameters<typeof safeError>[1]), { status: 403 })
   }
 
-  const repoResult = await resolveRouteRepositories(sessionResult.session.tenantId as TenantId)
+  const repoResult = await resolveRouteRepositories(sessionResult.session.tenantId as TenantId, runtime)
 
   // If repos available, read persisted connections
   if (repoResult.ok) {
