@@ -314,6 +314,8 @@ four_eyes_required: true is a policy declaration, not evidence that two reviews 
 
 Likewise, self_approval_blocked: true is a policy declaration, not an identity comparison, and human_reviewer_id is an attribution field — NOT an authorization identity. The Human Decision Record validator carries no identity-comparison semantics. Canonical identity derivation and requester / creator / reviewer / approver independence are enforced by the separate Phase 6 identity-independence gate (P6-FIX-010, Issue #143) defined in CANONICAL_IDENTITY_INDEPENDENCE_CONTRACT.md; identity independence verification is not ApprovalStore approval, not runtime authorization, and not execution permission.
 
+Binding one Validated Human Decision to its Review Evidence, ActionPreview, and approved Approval Record as one verifiable chain is the separate Phase 6 approval chain linkage module (P6-FIX-011, Issue #144) defined in APPROVAL_CHAIN_LINKAGE_CONTRACT.md. That module hashes a single-read snapshot of the Human Decision into the immutable ApprovalLinkageRecord; the linkage is immutable non-authorizing historical evidence — not ApprovalStore approval, not runtime authorization, and not execution permission. Runtime authorization remains Issue #145.
+
 ### 15.2 Decision Status / Outcome Semantic Matrix (P6-FIX-008)
 
 The allowed decision_status × decision_outcome matrix is:

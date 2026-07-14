@@ -223,7 +223,8 @@ NOT wired into the route in this patch.
 
 ## 12. Issue #144 / #145 Responsibility
 
-- **Issue #144:** binding Human Decision, Review Evidence, ActionPreview, and
+- **Issue #144 (implemented, P6-FIX-011,
+  [`APPROVAL_CHAIN_LINKAGE_CONTRACT.md`](./APPROVAL_CHAIN_LINKAGE_CONTRACT.md)):** binding Human Decision, Review Evidence, ActionPreview, and
   ApprovalStore records (canonical payload construction, record linkage).
 - **Issue #145:** the final runtime authorization gate with immediately-before-use
   identity re-checks, and the executor-separation decision (§8).
