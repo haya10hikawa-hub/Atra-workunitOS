@@ -90,7 +90,23 @@ export function envelopeHashFor(
   return { hdHash, envelopeHash: hashApprovalReviewEnvelope(envelope) }
 }
 
-export function evidenceWithId(hd: unknown, envelopeHash: string, reviewEvidenceId: string): FourEyesReviewEvidence {
+/**
+ * Flexible Four-Eyes Review Evidence builder. Overriding the review evidence
+ * id, reviewers, attestation ids, or the reviewed (envelope) hash produces a
+ * structurally-valid but content-DIFFERENT evidence artifact — useful for the
+ * same-ID-different-content substitution tests.
+ */
+export function buildEvidence(
+  hd: unknown,
+  envelopeHash: string,
+  opts: {
+    reviewEvidenceId?: string
+    firstReviewer?: string
+    secondReviewer?: string
+    firstAttId?: string
+    secondAttId?: string
+  } = {},
+): FourEyesReviewEvidence {
   const att = (id: string, u: string, t: string) => {
     const r = createReviewAttestation(
       { review_attestation_id: id, source_workunit_id: "wu-1", reviewed_payload_hash: envelopeHash, reviewed_at: t },
@@ -99,15 +115,19 @@ export function evidenceWithId(hd: unknown, envelopeHash: string, reviewEvidence
     return r.artifact
   }
   const r = createFourEyesReviewEvidence(
-    { review_evidence_id: reviewEvidenceId, review_completed_at: "2026-07-05T02:30:00Z", review_expires_at: "2026-07-05T05:30:00Z" },
-    att("att-1", "reviewer-one", "2026-07-05T01:00:00Z"),
-    att("att-2", "reviewer-two", "2026-07-05T02:00:00Z"), hd as never)
+    { review_evidence_id: opts.reviewEvidenceId ?? "rev-1", review_completed_at: "2026-07-05T02:30:00Z", review_expires_at: "2026-07-05T05:30:00Z" },
+    att(opts.firstAttId ?? "att-1", opts.firstReviewer ?? "reviewer-one", "2026-07-05T01:00:00Z"),
+    att(opts.secondAttId ?? "att-2", opts.secondReviewer ?? "reviewer-two", "2026-07-05T02:00:00Z"), hd as never)
   if (!r.ok) throw new Error("fixture evidence: " + JSON.stringify(r.issues))
   return r.artifact
 }
 
+export function evidenceWithId(hd: unknown, envelopeHash: string, reviewEvidenceId: string): FourEyesReviewEvidence {
+  return buildEvidence(hd, envelopeHash, { reviewEvidenceId })
+}
+
 export function evidence(hd: unknown, envelopeHash: string): FourEyesReviewEvidence {
-  return evidenceWithId(hd, envelopeHash, "rev-1")
+  return buildEvidence(hd, envelopeHash, {})
 }
 
 export function previewRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {

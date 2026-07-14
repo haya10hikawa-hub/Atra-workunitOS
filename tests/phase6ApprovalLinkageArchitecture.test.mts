@@ -11,7 +11,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync, readdirSync } from "node:fs"
 import { fileURLToPath } from "node:url"
-import { execSync } from "node:child_process"
+import { createHash } from "node:crypto"
 import * as approvalLinkageModule from "../app/lib/phase6/approvalLinkage/index.ts"
 
 const MODULE_DIR = fileURLToPath(new URL("../app/lib/phase6/approvalLinkage/", import.meta.url))
@@ -121,13 +121,45 @@ test("no live route, ApprovalStore, or binding imports the linkage module", () =
   }
 })
 
-test("the live Approval and ActionPreview routes are byte-identical to main", () => {
-  for (const rel of [
-    "app/api/workunit/[id]/approval/route.ts",
-    "app/api/workunit/[id]/action-preview/route.ts",
-    "app/lib/security/approvalStore.ts",
-  ]) {
-    const diff = execSync(`git -C "${REPO_ROOT}" diff origin/main -- "${rel}"`, { encoding: "utf8" })
-    assert.equal(diff.trim(), "", `${rel} must be unchanged vs origin/main`)
+test("the live Approval / ActionPreview routes and ApprovalStore are byte-identical to the P6-FIX-011 baseline", () => {
+  // CI-safe: compare content SHA-256 digests against digests pinned at the
+  // baseline commit 354fe0c5d0aabc43460c8065ff0c1bd67c548582. This uses no
+  // remote refs, no `origin/main`, no `git fetch`, and no network — so it
+  // passes identically in a normal checkout AND in the shallow
+  // `pull/162/merge` merge-ref checkout GitHub Actions uses.
+  const PINNED_BASELINE_DIGESTS: Readonly<Record<string, string>> = {
+    "app/api/workunit/[id]/approval/route.ts":
+      "7b893beba7c2e9cdcdb6c712d13aea6e5b9548e4b8bb571c28b14bf5fcedc61c",
+    "app/api/workunit/[id]/action-preview/route.ts":
+      "41ddc957aaa99d77ecc6257969a4475328239e0a20673f475831333231e6daab",
+    "app/lib/security/approvalStore.ts":
+      "05e0b159ef3a2d320caf11620a43c78e4cbd394fea2c86b598ae83d338ae4a29",
+  }
+  for (const [rel, pinned] of Object.entries(PINNED_BASELINE_DIGESTS)) {
+    const bytes = readFileSync(`${REPO_ROOT}${rel}`)
+    const digest = createHash("sha256").update(bytes).digest("hex")
+    assert.equal(digest, pinned, `${rel} must be unchanged from the P6-FIX-011 baseline (content digest)`)
+  }
+})
+
+test("source guard: the architecture suite uses no remote-ref or network-dependent command", () => {
+  // Prove this suite itself never reaches for a remote ref, git, or the
+  // network, so CI cannot regress to a shallow-checkout failure. The needles
+  // are assembled from fragments so this guard does not match its own literals.
+  const self = readFileSync(fileURLToPath(new URL("./phase6ApprovalLinkageArchitecture.test.mts", import.meta.url)), "utf8")
+  const code = stripComments(self)
+  // Needles are assembled from fragments and chosen to match only genuine
+  // command usage — never a bare token that a sibling forbidden-list literal
+  // (e.g. "child_process") would trip.
+  const forbidden = [
+    "origin" + "/main",
+    "git " + "fetch",
+    "git " + "diff",
+    "exec" + "Sync(",
+    'node:' + 'child_process',
+    "http" + "s://",
+  ]
+  for (const needle of forbidden) {
+    assert.ok(!code.includes(needle), `architecture suite must not use ${needle}`)
   }
 })

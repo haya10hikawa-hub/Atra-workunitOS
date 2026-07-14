@@ -88,16 +88,16 @@ export function verifyApprovalLinkage(
   context: unknown,
 ): ApprovalLinkageVerificationResult {
   try {
-    // 1. Revalidate the linkage record argument and snapshot it once.
-    const recordValidation = validateApprovalLinkageRecord(linkage)
+    // 1. Snapshot the linkage argument EXACTLY ONCE, then validate and use only
+    //    that plain snapshot. The hostile original is never read again, so a
+    //    getter/Proxy cannot validate as one value and be used as another.
     const record = snapshotRecordOrNull(linkage)
-    if (!recordValidation.ok || record === null) {
-      return resultOf(
-        "invalid",
-        recordValidation.ok
-          ? [approvalLinkageIssue("invalid_approval_linkage_input", "(linkage)")]
-          : recordValidation.issues,
-      )
+    if (record === null) {
+      return resultOf("invalid", [approvalLinkageIssue("invalid_approval_linkage_input", "(linkage)")])
+    }
+    const recordValidation = validateApprovalLinkageRecord(record)
+    if (!recordValidation.ok) {
+      return resultOf("invalid", recordValidation.issues)
     }
 
     const recordIssues: ApprovalLinkageIssue[] = []
@@ -140,9 +140,15 @@ export function verifyApprovalLinkage(
       recordIssues.push(approvalLinkageIssue("approval_linkage_hash_mismatch", "(linkage).linkage_hash"))
     }
 
-    // 3. Re-evaluate the current sources (snapshots the context once).
-    const ctxSnap = snapshotRecordOrNull(context)
-    const evaluation = evaluateApprovalChain(ctxSnap, record.linked_at as string)
+    // 3. Re-evaluate the current sources against the STORED linkage id — the
+    //    shared evaluation snapshots the context (including the six revoke/
+    //    consume collections) once and classifies linkage-level revoke/replay
+    //    itself, so the verifier never re-reads a raw context array.
+    const evaluation = evaluateApprovalChain(
+      context,
+      record.linked_at as string,
+      record.approval_linkage_id as string,
+    )
     const chainIssues: ApprovalLinkageIssue[] = [...evaluation.issues]
 
     // 4. Stale detection: every stored binding field must equal the
@@ -154,17 +160,6 @@ export function verifyApprovalLinkage(
           chainIssues.push(approvalLinkageIssue("approval_linkage_stale", `(linkage).${field}`))
         }
       }
-    }
-
-    // 5. Linkage-level revoke / replay from the current context snapshots.
-    const linkageId = record.approval_linkage_id
-    const consumedLink = ctxSnap?.consumed_approval_linkage_ids
-    const revokedLink = ctxSnap?.revoked_approval_linkage_ids
-    if (Array.isArray(consumedLink) && typeof linkageId === "string" && consumedLink.includes(linkageId)) {
-      chainIssues.push(approvalLinkageIssue("approval_linkage_replayed", "(linkage).approval_linkage_id"))
-    }
-    if (Array.isArray(revokedLink) && typeof linkageId === "string" && revokedLink.includes(linkageId)) {
-      chainIssues.push(approvalLinkageIssue("approval_linkage_revoked", "(linkage).approval_linkage_id"))
     }
 
     const allIssues = [...recordIssues, ...chainIssues]

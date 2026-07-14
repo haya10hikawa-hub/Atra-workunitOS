@@ -179,17 +179,58 @@ function minIso(a: string, b: string): string {
   return compareApprovalLinkageIsoUtc(a, b) <= 0 ? a : b
 }
 
+/**
+ * Snapshot a Human Decision once and defensively replace every own array-valued
+ * field with a frozen single-read copy (snapshot-depth hardening). The generic
+ * record snapshot is shallow, so HD array fields (`allowed_use`,
+ * `disallowed_use`, `future_gate_requirements`, `no_go_flags`) would otherwise
+ * remain LIVE references that validation reads once and hashing re-reads — a
+ * getter-backed array could return one set of values at validation time and a
+ * different set at hashing time. Each array is copied element-by-element ONCE
+ * and frozen so validation and hashing observe identical content.
+ *
+ * This is a bounded ONE-LEVEL array copy only: no recursive clone, no arbitrary
+ * prototype traversal, and no `toJSON` invocation. HD array elements are
+ * strings by schema; a hostile non-string element is captured once here and
+ * then rejected by `validateHumanDecisionRecord`.
+ */
+function snapshotHumanDecision(value: unknown): Record<string, unknown> | null {
+  const snapshot = snapshotRecordOrNull(value)
+  if (snapshot === null) return null
+  for (const key of Object.keys(snapshot)) {
+    const v = snapshot[key]
+    if (Array.isArray(v)) {
+      const copy: unknown[] = []
+      for (const el of v) copy.push(el)
+      snapshot[key] = Object.freeze(copy)
+    }
+  }
+  return snapshot
+}
+
 // ─── Core evaluation ────────────────────────────────────────────
 
 /**
  * Evaluate the five source objects and the state snapshots at `evaluatedAt`,
- * with `linkedAt` supplied for timeline validation. Returns the derived chain
- * (present whenever every binding field is structurally computable) plus every
- * consistency, state, and timeline issue found. The constructor requires zero
- * issues; the verifier uses `derived` for stale comparison and maps the issues
- * to a verification state.
+ * with `linkedAt` supplied for timeline validation and `approvalLinkageId`
+ * supplied for linkage-level revoke/replay classification. Returns the derived
+ * chain (present whenever every binding field is structurally computable) plus
+ * every consistency, state, and timeline issue found. The constructor requires
+ * zero issues; the verifier uses `derived` for stale comparison and maps the
+ * issues to a verification state.
+ *
+ * ONE state snapshot: the six revoke/consume collections are snapshotted once
+ * (frozen defensive copies) and ALL revoke/replay classification — including
+ * the linkage-level checks against `approvalLinkageId` — is performed here, so
+ * a getter-backed or mutating array cannot change between evaluation and
+ * classification. Neither the constructor nor the verifier re-reads the raw
+ * context arrays.
  */
-export function evaluateApprovalChain(context: unknown, linkedAt: string): SourceEvaluation {
+export function evaluateApprovalChain(
+  context: unknown,
+  linkedAt: string,
+  approvalLinkageId: string,
+): SourceEvaluation {
   const issues: ApprovalLinkageIssue[] = []
   const fail = (): SourceEvaluation => ({ derived: null, issues })
   try {
@@ -236,8 +277,21 @@ export function evaluateApprovalChain(context: unknown, linkedAt: string): Sourc
       }
     }
 
-    // ── Human Decision ────────────────────────────────────────
-    const hd = snapshotRecordOrNull(ctx.human_decision)
+    // ── Linkage-level revoke / replay (one immutable snapshot) ──
+    // Classified here from the frozen `revokedLink` / `consumedLink` snapshots
+    // so no consumer re-reads the raw context arrays. Replay precedes revoke in
+    // the verifier's precedence, but both are recorded here.
+    if (isApprovalLinkageNonEmptyString(approvalLinkageId)) {
+      if (consumedLink !== null && consumedLink.includes(approvalLinkageId)) {
+        issues.push(approvalLinkageIssue("approval_linkage_replayed", "(linkage).approval_linkage_id"))
+      }
+      if (revokedLink !== null && revokedLink.includes(approvalLinkageId)) {
+        issues.push(approvalLinkageIssue("approval_linkage_revoked", "(linkage).approval_linkage_id"))
+      }
+    }
+
+    // ── Human Decision (authoritative outer snapshot; deep arrays) ─
+    const hd = snapshotHumanDecision(ctx.human_decision)
     if (hd === null || !validateHumanDecisionRecord(hd).ok) {
       issues.push(approvalLinkageIssue("approval_linkage_human_decision_mismatch", "(human_decision)"))
       return fail()
@@ -445,17 +499,39 @@ export function evaluateApprovalChain(context: unknown, linkedAt: string): Sourc
         issues.push(approvalLinkageIssue("approval_linkage_identity_mismatch", `(identity_input).${key}`))
       }
     }
-    const iiHd = snapshotRecordOrNull(iiTop.human_decision)
+    // The nested Human Decision / Review Evidence must be the SAME CONTENT as
+    // the authoritative outer snapshots — an ID match is not sufficient. A
+    // same-ID, different-content nested artifact fails the content hash below.
+    const iiHd = snapshotHumanDecision(iiTop.human_decision)
     const iiRe = snapshotRecordOrNull(iiTop.review_evidence)
+    if (iiHd === null || hashHumanDecisionSnapshot(iiHd) !== humanDecisionHash) {
+      issues.push(approvalLinkageIssue("approval_linkage_human_decision_mismatch", "(identity_input).human_decision"))
+    }
+    if (iiRe === null || hashHumanDecisionSnapshot(iiRe) !== reviewEvidenceHash) {
+      issues.push(approvalLinkageIssue("approval_linkage_review_evidence_mismatch", "(identity_input).review_evidence"))
+    }
+    // One evaluation instant: the identity input must describe the same instant
+    // as the linkage context.
+    if (iiTop.evaluated_at !== evaluatedAt) {
+      issues.push(approvalLinkageIssue("approval_linkage_identity_mismatch", "(identity_input).evaluated_at"))
+    }
+
     const identitySnaps: Record<string, ReturnType<typeof snapshotIdentity>> = {}
-    let identityStructurallyOk = iiHd !== null && iiRe !== null
+    let identityStructurallyOk = true
     for (const pos of IDENTITY_POSITIONS) {
       const snap = snapshotIdentity(iiTop[pos])
       identitySnaps[pos] = snap
       if (snap === null) identityStructurallyOk = false
     }
-    const executorSnap =
-      iiTop.executor_identity === undefined ? null : snapshotIdentity(iiTop.executor_identity)
+    // Executor: distinguish ABSENT (undefined) from PRESENT-but-INVALID. A
+    // present-but-invalid executor is never silently omitted — it fails closed.
+    let executorSnap: ReturnType<typeof snapshotIdentity> = null
+    if (iiTop.executor_identity !== undefined) {
+      executorSnap = snapshotIdentity(iiTop.executor_identity)
+      if (executorSnap === null) {
+        issues.push(approvalLinkageIssue("approval_linkage_identity_mismatch", "(executor_identity)"))
+      }
+    }
     if (!identityStructurallyOk) {
       issues.push(approvalLinkageIssue("approval_linkage_identity_mismatch", "(identity_input)"))
       return fail()
@@ -467,10 +543,12 @@ export function evaluateApprovalChain(context: unknown, linkedAt: string): Sourc
     const secondReviewer = identitySnaps.second_reviewer_identity!
     const approver = identitySnaps.approver_identity!
 
-    // Assemble a plain II input from the single-read snapshots and verify.
+    // Verify Identity Independence over the AUTHORITATIVE OUTER Human Decision
+    // and Review Evidence snapshots (never the same-ID nested alternates), with
+    // the single-read identity snapshots.
     const iiForVerify: Record<string, unknown> = {
-      human_decision: iiHd,
-      review_evidence: iiRe,
+      human_decision: hd,
+      review_evidence: re,
       requester_identity: requester.snapshot,
       creator_identity: creator.snapshot,
       first_reviewer_identity: firstReviewer.snapshot,
@@ -500,12 +578,6 @@ export function evaluateApprovalChain(context: unknown, linkedAt: string): Sourc
     }
     if (iiTop.expected_action_preview_id !== previewId) {
       issues.push(approvalLinkageIssue("approval_linkage_action_preview_mismatch", "(identity_input).expected_action_preview_id"))
-    }
-    if (iiHd !== null && iiHd.human_decision_id !== humanDecisionId) {
-      issues.push(approvalLinkageIssue("approval_linkage_human_decision_mismatch", "(identity_input).human_decision"))
-    }
-    if (iiRe !== null && iiRe.review_evidence_id !== reviewEvidenceId) {
-      issues.push(approvalLinkageIssue("approval_linkage_review_evidence_mismatch", "(identity_input).review_evidence"))
     }
     if (creator.fields.user_id !== previewCreator) {
       issues.push(approvalLinkageIssue("approval_linkage_identity_mismatch", "(creator_identity).user_id"))

@@ -91,10 +91,14 @@ export function createApprovalLinkageRecord(
       issues.push(approvalLinkageIssue("invalid_approval_linkage_input", "(input).linked_at"))
     }
 
-    // Evaluate all five sources once; construction requires zero issues.
+    // Evaluate all five sources once, passing the PROPOSED linkage id so a
+    // revoked or already-consumed linkage id fails construction closed
+    // (revoked → `approval_linkage_revoked`; consumed → `approval_linkage_replayed`).
+    // Construction requires zero issues.
     const evaluation = evaluateApprovalChain(
       context,
       isIsoUtcTimestamp(linkedAt) ? linkedAt : "",
+      isApprovalLinkageNonEmptyString(approvalLinkageId) ? approvalLinkageId : "",
     )
     issues.push(...evaluation.issues)
     if (issues.length > 0 || evaluation.derived === null) {

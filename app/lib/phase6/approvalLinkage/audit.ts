@@ -123,8 +123,15 @@ export function createApprovalLinkageAuditEvent(
     const sanitized = sanitizeApprovalLinkageAuditIssueCodes(verification.issues)
     const ok = verification.ok === true && sanitized.all_canonical
     const state = sanitized.all_canonical ? verification.state : "invalid"
-    const eventKind = eventKindForState(state, ok)
 
+    // An `invalid` state means the linkage argument itself failed structural or
+    // self-hash validation, so NO value from it may be projected — return the
+    // fully redacted rejected event (every identifier and the timestamp are
+    // "(invalid)"). Identifiers are projected only after the record has passed
+    // structural + self-hash validation (i.e. any non-invalid state).
+    if (state === "invalid") return rejectedRedactedEvent()
+
+    const eventKind = eventKindForState(state, ok)
     const record = linkageSnap ?? {}
     const evaluatedAt = contextSnap ? contextSnap.evaluated_at : undefined
 
