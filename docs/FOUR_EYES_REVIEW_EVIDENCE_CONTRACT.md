@@ -126,8 +126,17 @@ is still defensively re-validated because a cast can lie.
 contract validates the format, binds the evidence to that hash, and compares it exactly
 with the current payload hash at verification. A changed payload hash invalidates prior
 Review Evidence (`review_payload_hash_mismatch`) without mutating or deleting the
-historical evidence artifact. Canonical ApprovalStore payload construction and
-cross-object canonicalization belong to Issue #144 and are not defined here.
+historical evidence artifact.
+
+Review Evidence remains **generic** evidence over one exact hash; this contract does not
+prescribe what that hash is over. For the P6-FIX-011 approval chain linkage (Issue #144,
+[`APPROVAL_CHAIN_LINKAGE_CONTRACT.md`](./APPROVAL_CHAIN_LINKAGE_CONTRACT.md)), the reviewed
+value is the canonical **Approval Review Envelope** — a domain-separated payload
+(`atra.approval-review-envelope`) that includes the Human Decision hash and the exact
+tenant / WorkUnit / ActionPreview / action-type / target-hash / payload-hash binding, not
+merely the action body or payload hash. For an approval linkage, `reviewed_payload_hash`
+must equal that review-envelope hash. Canonical ApprovalStore MAC payload construction
+(P7.1) remains a separate, unwired concern.
 
 ## 9. Verification Context
 

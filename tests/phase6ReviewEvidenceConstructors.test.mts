@@ -713,15 +713,17 @@ test("source guard: no serialized brand field in the constructor allowlists", ()
 
 test("source guard: no production file outside the module consumes the branded types", () => {
   // The two branded type names must appear in app/ only inside the module
-  // directory and the Phase 6 identity-independence gate (the P6-FIX-010
-  // sanctioned consumer, which re-validates the evidence through this
-  // module's own validator). Nothing else may treat them as authority yet.
+  // directory, the Phase 6 identity-independence gate (the P6-FIX-010
+  // sanctioned consumer), and the Phase 6 approval-chain linkage module (the
+  // P6-FIX-011 sanctioned consumer) — both re-validate the evidence through
+  // this module's own validator. Nothing else may treat them as authority yet.
   const appDir = fileURLToPath(new URL("../app", import.meta.url))
   const results: string[] = []
   walk(appDir, results)
   const offenders = results.filter((file) => {
     if (file.includes("/reviewEvidence/")) return false
     if (file.includes("/identityIndependence/")) return false
+    if (file.includes("/approvalLinkage/")) return false
     const text = readFileSync(file, "utf8")
     return text.includes("ReviewAttestation") || text.includes("FourEyesReviewEvidence")
   })
