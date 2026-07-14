@@ -1,80 +1,123 @@
 /**
  * Cloudflare Runtime Environment Bridge
  *
- * Provides a safe, testable way to access Cloudflare runtime environment
- * (including D1 bindings) from route handlers.
+ * Provides a safe, request-scoped way to access the Cloudflare runtime
+ * environment (D1 bindings + vars) from route handlers.
  *
- * LOCAL DEV / Next.js:
- *   - No Cloudflare runtime available → getRequestRuntimeEnv() returns null.
- *   - All persistence falls back to in-memory (if allowed) or disabled.
+ * PRODUCTION (Cloudflare Workers / OpenNext):
+ *   - The generated OpenNext worker (`.open-next/worker.js`) installs the
+ *     per-request Cloudflare context on the global scope for the duration of
+ *     each request. We read it through the officially supported accessor
+ *     `getCloudflareContext()` from `@opennextjs/cloudflare`.
+ *   - The bridge NEVER stores per-request bindings in mutable module/process
+ *     global state, so one request can never observe another request's env.
+ *   - A missing or malformed context fails closed (returns null); consumers
+ *     map that to a safe integration error.
  *
- * CLOUDFLARE PAGES:
- *   - Deployment adapter (next-on-pages etc.) provides context.env.
- *   - This module provides a hook to pass that env into routes.
+ * LOCAL DEV / Next.js (`next dev`) and unit tests:
+ *   - No Cloudflare worker context is present, so `getCloudflareContext()`
+ *     throws. We catch it and fall back to null (→ in-memory when explicitly
+ *     allowed, otherwise disabled).
+ *   - Tests inject a fake env through a clearly separated, request-scoped
+ *     mechanism (`runWithTestRuntimeEnv`, backed by AsyncLocalStorage) so
+ *     concurrent async "requests" stay isolated. A legacy sequential helper
+ *     (`setTestRuntimeEnvForRequest`) is retained for existing tests.
  *
- * TESTS:
- *   - setTestRuntimeEnvForRequest() injects fake env for testing.
- *   - resetTestRuntimeEnvForRequest() clears between tests.
+ * SAFETY INVARIANT:
+ *   A genuine Cloudflare request context ALWAYS takes precedence over any test
+ *   injection, so a test override can never leak into a production request.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks"
+import { getCloudflareContext } from "@opennextjs/cloudflare"
 import type { AppEnv } from "../../types/cloudflare-env.ts"
 
-// ─── Global Test State (NO production use) ──────────────────────
-
-let __testRuntimeEnv: AppEnv | null = null
+// ─── Production accessor (request-scoped, no global caching) ─────
 
 /**
- * Set a fake runtime env for the current test.
- * ONLY for test files. Never call in production routes.
+ * Read the request-scoped Cloudflare env from OpenNext.
+ *
+ * Returns null when:
+ *   - no worker context is active (local dev / SSG / tests), or
+ *   - the context is malformed (missing/invalid `env`).
+ *
+ * Never throws; never caches the result in module state.
  */
+function readCloudflareContextEnv(): AppEnv | null {
+  try {
+    // Sync mode: valid inside a request handler where OpenNext has installed
+    // the per-request context on the global scope. Throws otherwise.
+    const context = getCloudflareContext() as { env?: unknown } | undefined
+    const env = context?.env
+    if (env && typeof env === "object") return env as AppEnv
+    return null
+  } catch {
+    // No active request context / malformed context → fail closed.
+    return null
+  }
+}
+
+/**
+ * Production env provider. Swappable ONLY by tests that need to simulate a
+ * genuine Cloudflare request context (to prove test overrides cannot shadow a
+ * real request). Production code never swaps this.
+ */
+let productionEnvProvider: () => AppEnv | null = readCloudflareContextEnv
+
+/** Test seam: install/clear a fake production context provider. Test-only. */
+export function __setProductionRuntimeEnvProviderForTests(
+  provider: (() => AppEnv | null) | null,
+): void {
+  productionEnvProvider = provider ?? readCloudflareContextEnv
+}
+
+// ─── Request-scoped test injection (AsyncLocalStorage) ──────────
+
+const testEnvStore = new AsyncLocalStorage<AppEnv | null>()
+
+/**
+ * Run `fn` with a request-scoped fake runtime env. Concurrent invocations are
+ * isolated: each async execution observes only its own injected env. Test-only.
+ */
+export function runWithTestRuntimeEnv<T>(env: AppEnv | null, fn: () => T): T {
+  return testEnvStore.run(env, fn)
+}
+
+// ─── Legacy sequential test injection (test-only) ───────────────
+//
+// Retained for existing tests that set/reset synchronously around a single
+// call. This is a TEST-ONLY seam: it is consulted only AFTER the production
+// provider returns null, so it can never shadow a genuine Cloudflare request.
+
+let legacyTestEnv: AppEnv | null = null
+
+/** Set a fake runtime env for the current (sequential) test. Test-only. */
 export function setTestRuntimeEnvForRequest(env: AppEnv | null): void {
-  __testRuntimeEnv = env
+  legacyTestEnv = env
 }
 
-/**
- * Reset fake runtime env between tests.
- */
+/** Clear the fake runtime env between tests. Test-only. */
 export function resetTestRuntimeEnvForRequest(): void {
-  __testRuntimeEnv = null
+  legacyTestEnv = null
 }
 
-// ─── Runtime Env Access ─────────────────────────────────────────
+// ─── Public accessor ────────────────────────────────────────────
 
 /**
  * Get the Cloudflare runtime environment for the current request.
  *
- * Returns null when running locally (Next.js dev server) or when
- * no Cloudflare adapter has injected the env.
- *
- * In production on Cloudflare Pages, the deployment adapter
- * (next-on-pages, OpenNext, etc.) should call setRequestRuntimeEnvInProd
- * or provide env through request context.
+ * Resolution order (production always wins over test injection):
+ *   1. Genuine Cloudflare request context (production).
+ *   2. Request-scoped test injection (AsyncLocalStorage).
+ *   3. Legacy sequential test injection.
+ *   4. null (no runtime env available).
  */
 export function getRequestRuntimeEnv(): AppEnv | null {
-  // Test mode: return explicitly set fake env
-  if (__testRuntimeEnv !== null) return __testRuntimeEnv
+  const production = productionEnvProvider()
+  if (production) return production
 
-  // Cloudflare Pages: check for global env (injected by adapter)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const globalEnv = (globalThis as any).__CLOUDFLARE_RUNTIME_ENV__
-  if (globalEnv && typeof globalEnv === "object") return globalEnv as AppEnv
+  const scoped = testEnvStore.getStore()
+  if (scoped !== undefined) return scoped
 
-  // No runtime env available
-  return null
-}
-
-// ─── Production Adapter Hook ────────────────────────────────────
-
-/**
- * Store the Cloudflare runtime env for production request handling.
- *
- * Called once by the deployment adapter (next-on-pages, etc.) before
- * the Next.js app handles the request.
- *
- * The adapter should call this with context.env from the Cloudflare
- * Pages function handler.
- */
-export function setRequestRuntimeEnvInProd(env: AppEnv): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ;(globalThis as any).__CLOUDFLARE_RUNTIME_ENV__ = env
+  return legacyTestEnv
 }

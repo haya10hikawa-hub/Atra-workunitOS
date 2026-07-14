@@ -50,6 +50,15 @@ jobs:
       - name: Cloudflare build
         run: npm run cf:build
 
+      # Non-deploying Cloudflare deploy-config gates. These use only synthetic,
+      # non-production configuration: no real Cloudflare account, no API token,
+      # no D1 database creation, no Worker upload, no asset upload.
+      - name: Cloudflare deploy preflight (synthetic)
+        run: npm run cf:deploy:preflight
+
+      - name: Cloudflare deploy dry-run (synthetic, no upload)
+        run: npm run cf:deploy:dry-run
+
       - name: Electron build check
         run: npm run electron:build:check
 

@@ -38,6 +38,7 @@ import {
 } from "./inMemoryRepositories.ts"
 import { getCloudflareD1Bindings } from "./cloudflareBindings.ts"
 import { resolvePersistenceConfig } from "./persistenceConfig.ts"
+import { validateCloudflareRuntimeEnv } from "../runtime/validatedRuntimeEnv.ts"
 
 // ─── Bundle ──────────────────────────────────────────────────────
 
@@ -95,6 +96,38 @@ export async function resolveRepositories(
     runtimeEnv?: AppEnv
   } = {},
 ): Promise<RepositoryResolutionResult> {
+  // ── Request-scoped Cloudflare runtime env takes precedence ──
+  //
+  // When a Cloudflare runtime env is present (production / OpenNext worker), the
+  // persistence mode AND the D1 bindings come from the SAME validated snapshot.
+  // process.env can never override the active request env, and in-memory
+  // repositories are never returned here.
+  if (options.runtimeEnv) {
+    const validated = validateCloudflareRuntimeEnv(options.runtimeEnv)
+    if (!validated.ok) {
+      // Runtime env present but missing/malformed binding or var → fail closed.
+      return { ok: false, error: "d1_not_configured" }
+    }
+
+    // Mode is authoritatively "d1" from the validated snapshot.
+    if (options.resolver) {
+      try {
+        const ctx = await options.resolver.resolveTenantDb(tenantId)
+        const d1Store = (options.d1Binding ?? ctx.db) as D1DatabaseLike | null
+        if (!d1Store) return { ok: false, error: "d1_not_configured" }
+        return { ok: true, bundle: d1Bundle(tenantId, d1Store, ctx) }
+      } catch {
+        return { ok: false, error: "tenant_resolution_failed" }
+      }
+    }
+
+    // Preserve current TENANT_DB_DEFAULT behavior — Issue #130 still owns real
+    // per-tenant DB resolution — but the binding is now genuine and validated.
+    const d1Store = options.d1Binding ?? validated.env.TENANT_DB_DEFAULT
+    return { ok: true, bundle: d1Bundle(tenantId, d1Store) }
+  }
+
+  // ── No runtime env → local/dev config via process.env ──
   const config = resolvePersistenceConfig(options.env)
 
   switch (config.mode) {
