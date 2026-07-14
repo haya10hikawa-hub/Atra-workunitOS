@@ -14,9 +14,10 @@ exact Human Decision payload. Grounded in
 `four_eyes_required: true` on a Human Decision Record is a policy declaration, not
 evidence that two reviews occurred. This contract defines the separate, immutable
 evidence artifacts that record two independent human reviews of one exact payload,
-so future gates (Issue #143 identity enforcement, Issue #144 ApprovalStore linkage,
-Issue #145 runtime authorization) can consume verifiable review evidence instead of a
-bare policy flag.
+so downstream gates (Issue #143 identity enforcement — implemented by
+[`CANONICAL_IDENTITY_INDEPENDENCE_CONTRACT.md`](./CANONICAL_IDENTITY_INDEPENDENCE_CONTRACT.md) —
+Issue #144 ApprovalStore linkage, Issue #145 runtime authorization) can consume
+verifiable review evidence instead of a bare policy flag.
 
 ## 2. Definition of Review Attestation
 
@@ -54,9 +55,15 @@ permission. Verification success grants nothing.
 
 ## 5. Server-Owned Identity Boundary
 
-`tenant_id` and `reviewer_id` are server-owned: they come only from the server-owned
-construction context, and `source_human_decision_id` comes only from the validated Human
-Decision artifact.
+`tenant_id` and `reviewer_id` are server-owned: since P6-FIX-010 (Issue #143) they are
+derived only from a constructor-produced canonical reviewer identity with
+`actor_kind: "reviewer"`, `identity_source: "authenticated_session"`, the supported
+human subject type, and a tenant matching the validated Human Decision — see
+[`CANONICAL_IDENTITY_INDEPENDENCE_CONTRACT.md`](./CANONICAL_IDENTITY_INDEPENDENCE_CONTRACT.md).
+The former structural `ReviewAttestationServerContext` (`{ tenant_id, reviewer_id }`) is
+removed with no alternate constructor preserved, so arbitrary caller-supplied reviewer
+strings can no longer become attestation identity (`invalid_reviewer_identity`).
+`source_human_decision_id` comes only from the validated Human Decision artifact.
 
 The fail-closed policy is REJECT: untrusted input that carries any server-owned field
 fails with `client_owned_identity_field`, so attempted mass assignment stays observable.
@@ -65,10 +72,9 @@ The evidence constructor derives every binding field (tenant, source ids, hash, 
 ids, attestation ids, review timestamps) from the two attestation artifacts; untrusted
 evidence input carrying any of them is likewise rejected.
 
-This contract establishes the ownership boundary only. Issue #143 connects it to
-canonical server/session identities and enforces requester, creator, reviewer, and
-approver independence. A structural TypeScript object is not cryptographic proof of
-identity.
+Requester / creator / reviewer / approver independence over these artifacts is enforced
+by the Issue #143 identity-independence gate. A structural TypeScript object is not
+cryptographic proof of identity.
 
 ## 6. Trusted Type Boundary
 

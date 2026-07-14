@@ -30,6 +30,7 @@ export const REVIEW_EVIDENCE_ISSUE_CODES = [
   "unknown_field",
   "forbidden_grant_field_present",
   "client_owned_identity_field",
+  "invalid_reviewer_identity",
   "invalid_source_human_decision",
   "invalid_review_attestation",
   "duplicate_review_attestation",

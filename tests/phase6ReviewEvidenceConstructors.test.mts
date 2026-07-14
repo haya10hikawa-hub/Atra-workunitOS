@@ -20,6 +20,10 @@ import {
   type ValidatedHumanDecisionRecord,
 } from "../app/lib/phase6/artifacts/index.ts"
 import {
+  createCanonicalSessionIdentity,
+  type CanonicalIdentity,
+} from "../app/lib/phase6/canonicalIdentity/index.ts"
+import {
   createReviewAttestation,
   createFourEyesReviewEvidence,
   type ReviewAttestation,
@@ -31,6 +35,29 @@ import {
 
 const HASH = "a".repeat(64)
 const T = "2026-07-05T00:00:00Z"
+
+/**
+ * Canonical reviewer identity fixture (P6-FIX-010): the only way a reviewer
+ * identity may reach createReviewAttestation is through the canonical
+ * session-identity constructor.
+ */
+function reviewerIdentityOf(userId: string, tenantId = "tenant-1"): CanonicalIdentity {
+  const result = createCanonicalSessionIdentity(
+    {
+      userId,
+      tenantId,
+      role: "manager",
+      email: `${userId}@example.test`,
+      isDevSession: false,
+      sessionId: `sess-${userId}`,
+      createdAt: "2026-07-04T00:00:00Z",
+      expiresAt: "2026-07-06T00:00:00Z",
+    },
+    { actor_kind: "reviewer", expected_tenant_id: tenantId, observed_at: "2026-07-05T00:30:00Z" },
+  )
+  if (!result.ok) throw new Error("fixture reviewer identity must construct")
+  return result.identity
+}
 
 function humanDecisionInput(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -90,13 +117,10 @@ function attestationInput(overrides: Record<string, unknown> = {}): Record<strin
 
 function attestation(
   overrides: Record<string, unknown> = {},
-  serverContext: { tenant_id: string; reviewer_id: string } = {
-    tenant_id: "tenant-1",
-    reviewer_id: "reviewer-alpha",
-  },
+  reviewer: CanonicalIdentity = reviewerIdentityOf("reviewer-alpha"),
   decision: ValidatedHumanDecisionRecord = humanDecision(),
 ): ReviewAttestation {
-  const result = createReviewAttestation(attestationInput(overrides), serverContext, decision)
+  const result = createReviewAttestation(attestationInput(overrides), reviewer, decision)
   assert.equal(result.ok, true, JSON.stringify(result.ok ? [] : result.issues))
   if (!result.ok) throw new Error("unreachable")
   return result.artifact
@@ -115,7 +139,7 @@ function attestationPair(): readonly [ReviewAttestation, ReviewAttestation] {
   const first = attestation()
   const second = attestation(
     { review_attestation_id: "att-2", reviewed_at: "2026-07-05T02:00:00Z" },
-    { tenant_id: "tenant-1", reviewer_id: "reviewer-beta" },
+    reviewerIdentityOf("reviewer-beta"),
   )
   return [first, second]
 }
@@ -189,7 +213,7 @@ test("valid attestation constructs a frozen artifact with server-owned identity"
   const decision = humanDecision()
   const result = createReviewAttestation(
     attestationInput(),
-    { tenant_id: "tenant-1", reviewer_id: "reviewer-alpha" },
+    reviewerIdentityOf("reviewer-alpha"),
     decision,
   )
   assert.equal(result.ok, true, JSON.stringify(result.ok ? [] : result.issues))
@@ -223,7 +247,7 @@ test("attestation constructor drops unknown fields and never mutates input", () 
   const before = JSON.stringify(input)
   const result = createReviewAttestation(
     input,
-    { tenant_id: "tenant-1", reviewer_id: "reviewer-alpha" },
+    reviewerIdentityOf("reviewer-alpha"),
     humanDecision(),
   )
   assert.equal(result.ok, true)
@@ -240,7 +264,7 @@ test("client-owned identity fields on attestation input fail closed and observab
   for (const field of ["tenant_id", "reviewer_id", "source_human_decision_id"]) {
     const result = createReviewAttestation(
       attestationInput({ [field]: "attacker-controlled" }),
-      { tenant_id: "tenant-1", reviewer_id: "reviewer-alpha" },
+      reviewerIdentityOf("reviewer-alpha"),
       humanDecision(),
     )
     assert.equal(result.ok, false, field)
@@ -265,7 +289,7 @@ test("malformed attestation input fields fail closed", () => {
   for (const [override, expected] of cases) {
     const result = createReviewAttestation(
       attestationInput(override),
-      { tenant_id: "tenant-1", reviewer_id: "reviewer-alpha" },
+      reviewerIdentityOf("reviewer-alpha"),
       humanDecision(),
     )
     assert.equal(result.ok, false, JSON.stringify(override))
@@ -277,27 +301,42 @@ test("malformed attestation input fields fail closed", () => {
   }
 })
 
-test("missing or malformed server context fails closed (no default identity)", () => {
-  for (const badContext of [
+test("missing, malformed, or structural reviewer identity fails closed (no default identity)", () => {
+  // P6-FIX-010: the old structural `{ tenant_id, reviewer_id }` context — and
+  // every other non-constructor-produced value — is rejected fail-closed.
+  for (const badIdentity of [
     null,
     undefined,
     {},
+    { tenant_id: "tenant-1", reviewer_id: "reviewer-alpha" },
     { tenant_id: "tenant-1" },
     { reviewer_id: "reviewer-alpha" },
     { tenant_id: "", reviewer_id: "reviewer-alpha" },
     { tenant_id: "tenant-1", reviewer_id: 42 },
+    {
+      tenant_id: "tenant-1",
+      user_id: "reviewer-alpha",
+      actor_kind: "reviewer",
+      identity_source: "client_supplied",
+      source_record_id: "sess-x",
+      observed_at: "2026-07-05T00:30:00Z",
+      subject_type: "human_user",
+    },
   ]) {
     const result = createReviewAttestation(
       attestationInput(),
-      badContext as { tenant_id: string; reviewer_id: string },
+      badIdentity as unknown as CanonicalIdentity,
       humanDecision(),
     )
-    assert.equal(result.ok, false, JSON.stringify(badContext))
+    assert.equal(result.ok, false, JSON.stringify(badIdentity))
     if (result.ok) return
     assert.ok(
-      result.issues.some((i) => i.code === "review_evidence_state_missing"),
-      JSON.stringify(badContext),
+      result.issues.some((i) => i.code === "invalid_reviewer_identity"),
+      JSON.stringify(badIdentity),
     )
+    for (const issue of result.issues) {
+      assert.ok(!issue.message.includes("reviewer-alpha"), "no identity value is echoed")
+    }
   }
 })
 
@@ -305,7 +344,7 @@ test("a structurally invalid Human Decision fails attestation construction", () 
   const invalidDecision = { human_decision_id: "hdr-1", tenant_id: "tenant-1" }
   const result = createReviewAttestation(
     attestationInput(),
-    { tenant_id: "tenant-1", reviewer_id: "reviewer-alpha" },
+    reviewerIdentityOf("reviewer-alpha"),
     invalidDecision as unknown as ValidatedHumanDecisionRecord,
   )
   assert.equal(result.ok, false)
@@ -313,10 +352,10 @@ test("a structurally invalid Human Decision fails attestation construction", () 
   assert.ok(result.issues.some((i) => i.code === "invalid_source_human_decision"))
 })
 
-test("cross-tenant server context versus Human Decision fails closed", () => {
+test("cross-tenant reviewer identity versus Human Decision fails closed", () => {
   const result = createReviewAttestation(
     attestationInput(),
-    { tenant_id: "tenant-OTHER", reviewer_id: "reviewer-alpha" },
+    reviewerIdentityOf("reviewer-alpha", "tenant-OTHER"),
     humanDecision(),
   )
   assert.equal(result.ok, false)
@@ -338,7 +377,7 @@ test("attestation constructor reads untrusted input getters exactly once", () =>
   })
   const result = createReviewAttestation(
     input,
-    { tenant_id: "tenant-1", reviewer_id: "reviewer-alpha" },
+    reviewerIdentityOf("reviewer-alpha"),
     humanDecision(),
   )
   assert.equal(reads, 1, "reviewed_payload_hash read exactly once")
@@ -368,7 +407,7 @@ test("identical reviewer identities fail evidence construction", () => {
   const first = attestation()
   const sameReviewer = attestation(
     { review_attestation_id: "att-2", reviewed_at: "2026-07-05T02:00:00Z" },
-    { tenant_id: "tenant-1", reviewer_id: "reviewer-alpha" },
+    reviewerIdentityOf("reviewer-alpha"),
   )
   const result = createFourEyesReviewEvidence(evidenceInput(), first, sameReviewer, humanDecision())
   assert.equal(result.ok, false)
@@ -380,7 +419,7 @@ test("identical attestation ids fail evidence construction", () => {
   const first = attestation()
   const sameId = attestation(
     { review_attestation_id: "att-1", reviewed_at: "2026-07-05T02:00:00Z" },
-    { tenant_id: "tenant-1", reviewer_id: "reviewer-beta" },
+    reviewerIdentityOf("reviewer-beta"),
   )
   const result = createFourEyesReviewEvidence(evidenceInput(), first, sameId, humanDecision())
   assert.equal(result.ok, false)
@@ -397,7 +436,7 @@ test("tenant, Human Decision, WorkUnit, and payload-hash mismatches fail evidenc
   const tenant2Decision = humanDecision({ tenant_id: "tenant-2" })
   const otherTenant = attestation(
     { review_attestation_id: "att-2", reviewed_at: "2026-07-05T02:00:00Z" },
-    { tenant_id: "tenant-2", reviewer_id: "reviewer-beta" },
+    reviewerIdentityOf("reviewer-beta", "tenant-2"),
     tenant2Decision,
   )
   const tenantResult = createFourEyesReviewEvidence(evidenceInput(), first, otherTenant, decision)
@@ -409,7 +448,7 @@ test("tenant, Human Decision, WorkUnit, and payload-hash mismatches fail evidenc
   const otherDecision = humanDecision({ human_decision_id: "hdr-2" })
   const otherDecisionAttestation = attestation(
     { review_attestation_id: "att-2", reviewed_at: "2026-07-05T02:00:00Z" },
-    { tenant_id: "tenant-1", reviewer_id: "reviewer-beta" },
+    reviewerIdentityOf("reviewer-beta"),
     otherDecision,
   )
   const decisionResult = createFourEyesReviewEvidence(
@@ -431,7 +470,7 @@ test("tenant, Human Decision, WorkUnit, and payload-hash mismatches fail evidenc
       reviewed_at: "2026-07-05T02:00:00Z",
       source_workunit_id: "wu-OTHER",
     },
-    { tenant_id: "tenant-1", reviewer_id: "reviewer-beta" },
+    reviewerIdentityOf("reviewer-beta"),
     decision,
   )
   const workunitResult = createFourEyesReviewEvidence(evidenceInput(), first, otherWorkunit, decision)
@@ -446,7 +485,7 @@ test("tenant, Human Decision, WorkUnit, and payload-hash mismatches fail evidenc
       reviewed_at: "2026-07-05T02:00:00Z",
       reviewed_payload_hash: "b".repeat(64),
     },
-    { tenant_id: "tenant-1", reviewer_id: "reviewer-beta" },
+    reviewerIdentityOf("reviewer-beta"),
     decision,
   )
   const hashResult = createFourEyesReviewEvidence(evidenceInput(), first, otherHash, decision)
@@ -674,12 +713,15 @@ test("source guard: no serialized brand field in the constructor allowlists", ()
 
 test("source guard: no production file outside the module consumes the branded types", () => {
   // The two branded type names must appear in app/ only inside the module
-  // directory (the module is new; nothing else may treat it as authority yet).
+  // directory and the Phase 6 identity-independence gate (the P6-FIX-010
+  // sanctioned consumer, which re-validates the evidence through this
+  // module's own validator). Nothing else may treat them as authority yet.
   const appDir = fileURLToPath(new URL("../app", import.meta.url))
   const results: string[] = []
   walk(appDir, results)
   const offenders = results.filter((file) => {
     if (file.includes("/reviewEvidence/")) return false
+    if (file.includes("/identityIndependence/")) return false
     const text = readFileSync(file, "utf8")
     return text.includes("ReviewAttestation") || text.includes("FourEyesReviewEvidence")
   })

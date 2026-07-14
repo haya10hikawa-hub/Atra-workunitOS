@@ -10,19 +10,25 @@
  * execution permission, not persistence, and not Formal WorkUnit promotion.
  *
  * SERVER-OWNED IDENTITY BOUNDARY (fail-closed policy: REJECT). `tenant_id` and
- * `reviewer_id` are never mass-assignable from the untrusted input: they come
- * only from the server-owned construction context, and
- * `source_human_decision_id` comes only from the validated Human Decision
- * artifact. Untrusted input that carries any server-owned field is rejected
- * with `client_owned_identity_field` so attempted mass assignment stays
- * observable. Issue #143 connects this boundary to canonical server/session
- * identities; a structural TypeScript object is not cryptographic proof of
- * identity, and future runtime gates must re-check identity server-side.
+ * `reviewer_id` are never mass-assignable from the untrusted input: they are
+ * derived only from a constructor-produced canonical reviewer identity
+ * (P6-FIX-010, Issue #143 — `actor_kind: "reviewer"`, `identity_source:
+ * "authenticated_session"`, supported human subject type, tenant matching the
+ * Human Decision), and `source_human_decision_id` comes only from the
+ * validated Human Decision artifact. Untrusted input that carries any
+ * server-owned field is rejected with `client_owned_identity_field` so
+ * attempted mass assignment stays observable. The former structural
+ * `ReviewAttestationServerContext` (`{ tenant_id, reviewer_id }`) is removed:
+ * arbitrary caller-supplied reviewer strings can no longer enter. A
+ * TypeScript cast is still not cryptographic proof of identity — the
+ * canonical identity is defensively re-validated at runtime, and future
+ * runtime gates (Issue #145) must re-check identity server-side.
  *
  * The trusted Human Decision surface is imported ONLY through the artifacts
- * module public index. Because a TypeScript cast can lie, the Human Decision
- * argument is defensively re-validated at runtime even though its static type
- * is ValidatedHumanDecisionRecord.
+ * module public index, and the canonical identity surface ONLY through the
+ * canonicalIdentity module public index. Because a TypeScript cast can lie,
+ * the Human Decision and reviewer identity arguments are defensively
+ * re-validated at runtime even though their static types are trusted.
  *
  * No I/O, no clock (ids and timestamps are caller-supplied and validated), no
  * randomness, no mutation of any input.
@@ -32,6 +38,10 @@ import {
   validateHumanDecisionRecord,
   type ValidatedHumanDecisionRecord,
 } from "../artifacts/index.ts"
+import {
+  validateCanonicalIdentity,
+  type CanonicalIdentity,
+} from "../canonicalIdentity/index.ts"
 import {
   type ReviewEvidenceValidationIssue,
   reviewEvidenceIssue,
@@ -45,7 +55,6 @@ import {
 import type {
   ReviewAttestation,
   FourEyesReviewEvidence,
-  ReviewAttestationServerContext,
 } from "./types.ts"
 
 // ─── Construction result (frozen, non-authorizing) ──────────────
@@ -162,30 +171,49 @@ function copyAllowlisted(
   return artifact
 }
 
-/** Server context validation: missing/malformed server state fails closed. */
-function collectServerContextIssues(
-  context: unknown,
+/**
+ * Canonical reviewer identity boundary (P6-FIX-010, Issue #143). The reviewer
+ * argument must be a constructor-produced CanonicalIdentity; because a cast
+ * can lie, it is defensively re-validated through the canonical identity
+ * module's own validator, then constrained to exactly the reviewer position:
+ * `actor_kind === "reviewer"`, `identity_source === "authenticated_session"`,
+ * and the supported human subject type. A plain structural
+ * `{ tenant_id, reviewer_id }` object fails here — arbitrary caller-supplied
+ * reviewer strings can no longer become attestation identity. Underlying
+ * canonical-identity issue details are not echoed; the stable code
+ * `invalid_reviewer_identity` reports the failing aspect by field only.
+ */
+function collectReviewerIdentityIssues(
+  reviewerIdentity: unknown,
 ): { readonly issues: readonly ReviewEvidenceValidationIssue[]; readonly tenantId: string; readonly reviewerId: string } {
-  if (!isRecordObject(context)) {
+  const validation = validateCanonicalIdentity(reviewerIdentity)
+  if (!validation.ok || !isRecordObject(reviewerIdentity)) {
     return {
-      issues: [reviewEvidenceIssue("review_evidence_state_missing", "(server_context)")],
+      issues: [reviewEvidenceIssue("invalid_reviewer_identity", "(reviewer_identity)")],
       tenantId: "",
       reviewerId: "",
     }
   }
   const issues: ReviewEvidenceValidationIssue[] = []
-  const tenantId = context.tenant_id
-  const reviewerId = context.reviewer_id
-  if (!isNonEmptyString(tenantId)) {
-    issues.push(reviewEvidenceIssue("review_evidence_state_missing", "(server_context).tenant_id"))
+  if (reviewerIdentity.actor_kind !== "reviewer") {
+    issues.push(reviewEvidenceIssue("invalid_reviewer_identity", "(reviewer_identity).actor_kind"))
   }
-  if (!isNonEmptyString(reviewerId)) {
-    issues.push(reviewEvidenceIssue("review_evidence_state_missing", "(server_context).reviewer_id"))
+  if (reviewerIdentity.identity_source !== "authenticated_session") {
+    issues.push(
+      reviewEvidenceIssue("invalid_reviewer_identity", "(reviewer_identity).identity_source"),
+    )
   }
+  if (reviewerIdentity.subject_type !== "human_user") {
+    issues.push(
+      reviewEvidenceIssue("invalid_reviewer_identity", "(reviewer_identity).subject_type"),
+    )
+  }
+  const tenantId = reviewerIdentity.tenant_id
+  const reviewerId = reviewerIdentity.user_id
   return {
     issues,
-    tenantId: isNonEmptyString(tenantId) ? tenantId : "",
-    reviewerId: isNonEmptyString(reviewerId) ? reviewerId : "",
+    tenantId: issues.length === 0 && isNonEmptyString(tenantId) ? tenantId : "",
+    reviewerId: issues.length === 0 && isNonEmptyString(reviewerId) ? reviewerId : "",
   }
 }
 
@@ -221,14 +249,16 @@ function collectHumanDecisionIssues(
 
 /**
  * The only production function that returns a ReviewAttestation. `tenant_id`
- * and `reviewer_id` come exclusively from the server-owned context;
+ * and `reviewer_id` come exclusively from the constructor-produced canonical
+ * reviewer identity (`user_id` becomes the stored reviewer ID);
  * `source_human_decision_id` comes exclusively from the validated Human
- * Decision artifact. The raw reviewed payload is never accepted or stored —
- * only its 64-character lowercase hex hash. Success grants nothing.
+ * Decision artifact. No session token, email, role, or raw session data is
+ * stored. The raw reviewed payload is never accepted or stored — only its
+ * 64-character lowercase hex hash. Success grants nothing.
  */
 export function createReviewAttestation(
   input: unknown,
-  serverContext: ReviewAttestationServerContext,
+  reviewerIdentity: CanonicalIdentity,
   sourceHumanDecision: ValidatedHumanDecisionRecord,
 ): ReviewEvidenceConstructionResult<ReviewAttestation> {
   try {
@@ -238,26 +268,26 @@ export function createReviewAttestation(
     const issues: ReviewEvidenceValidationIssue[] = []
     issues.push(...collectClientOwnedIdentityIssues(snap.snapshot, ATTESTATION_SERVER_OWNED_FIELDS))
 
-    const context = collectServerContextIssues(serverContext)
-    issues.push(...context.issues)
+    const reviewer = collectReviewerIdentityIssues(reviewerIdentity)
+    issues.push(...reviewer.issues)
 
     const decision = collectHumanDecisionIssues(sourceHumanDecision)
     issues.push(...decision.issues)
 
     // Cross-tenant construction is a fail-closed mismatch, not a fallback.
     if (
-      context.issues.length === 0 &&
+      reviewer.issues.length === 0 &&
       decision.issues.length === 0 &&
-      context.tenantId !== decision.tenantId
+      reviewer.tenantId !== decision.tenantId
     ) {
-      issues.push(reviewEvidenceIssue("review_tenant_mismatch", "(server_context).tenant_id"))
+      issues.push(reviewEvidenceIssue("review_tenant_mismatch", "(reviewer_identity).tenant_id"))
     }
 
     if (issues.length > 0) return failConstruction(issues)
 
     const artifact = copyAllowlisted(snap.snapshot, ATTESTATION_INPUT_FIELDS)
-    artifact.tenant_id = context.tenantId
-    artifact.reviewer_id = context.reviewerId
+    artifact.tenant_id = reviewer.tenantId
+    artifact.reviewer_id = reviewer.reviewerId
     artifact.source_human_decision_id = decision.decisionId
 
     const validation = validateReviewAttestation(artifact)
