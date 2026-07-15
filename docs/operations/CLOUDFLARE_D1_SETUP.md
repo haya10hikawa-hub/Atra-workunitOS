@@ -37,9 +37,32 @@ remote `database_id`, so placeholders are fine for local development.
 
 ### Run migrations locally
 
+> **Do not hand-run individual migration files.** The canonical, machine-readable
+> lanes live in `migrations/manifest.json` (P0-PERSIST-015). Use the reproducible
+> commands — they apply **every** migration in the correct lane order:
+
+```bash
+npm run cf:d1:migrations:check       # validate manifest, paths, digests, lanes, SQL safety (no DB access)
+npm run cf:d1:migrations:plan        # print the ordered plan (no database IDs, no SQL)
+npm run cf:d1:bootstrap:local        # fresh isolated bootstrap + idempotence + local fixture
+npm run cf:d1:schema:verify:local    # verify both schemas against migrations/schema-contract.json
+```
+
+`cf:d1:bootstrap:local` creates **isolated temporary** SQLite databases (a private
+OS temp dir — never your normal local D1/Wrangler state), applies both lanes from
+an empty state, verifies the schema contract, proves idempotence by re-applying
+each lane, seeds the local-only fixture, and deletes the temporary state. It
+performs **no remote access**.
+
+To drive your own Wrangler-local state instead, apply the lanes in the exact
+manifest order (see [§6 Migration lanes](#6-migration-lanes)):
+
 ```bash
 wrangler d1 execute CONTROL_DB --local --file=migrations/0001_control_db.sql
+wrangler d1 execute CONTROL_DB --local --file=migrations/0004_control_auth_workspace.sql
 wrangler d1 execute TENANT_DB_DEFAULT --local --file=migrations/0002_tenant_core.sql
+wrangler d1 execute TENANT_DB_DEFAULT --local --file=migrations/0003_tenant_persistence_foundation.sql
+wrangler d1 execute TENANT_DB_DEFAULT --local --file=migrations/0005_tenant_scoped_indexes.sql
 ```
 
 ### Start dev server
@@ -68,12 +91,33 @@ export CLOUDFLARE_TENANT_DB_DEFAULT_ID=<tenant-db-uuid>
 `npm run cf:deploy` assembles these into an untracked `wrangler.deploy.json` and
 validates them via the deploy preflight before any upload.
 
-### Run migrations on production
+### Run migrations on production (OPERATOR-GATED)
+
+Migration execution is an **operator action**, never an implicit application-runtime
+action, and **never part of `cf:deploy`**. It is impossible to run accidentally —
+`cf:d1:migrations:apply` stops before Wrangler unless **all** of the following hold:
+
+| Gate | Requirement |
+|------|-------------|
+| Explicit remote mode | `--remote` |
+| Validated generated config | `--config wrangler.deploy.json` (real, non-placeholder D1 IDs; exactly the approved bindings) |
+| Execution flag | `CF_D1_MIGRATE_EXECUTE=1` |
+| Acknowledgement phrase | `CF_D1_MIGRATE_CONFIRM=APPLY_PRODUCTION_D1_MIGRATIONS` |
+| Manifest validation | `migrations/manifest.json` fully valid (paths, digests, lanes, SQL safety) |
 
 ```bash
-wrangler d1 execute CONTROL_DB --env production --file=migrations/0001_control_db.sql
-wrangler d1 execute TENANT_DB_DEFAULT --env production --file=migrations/0002_tenant_core.sql
+npm run cf:deploy:prepare            # assemble the untracked wrangler.deploy.json (0600)
+npm run cf:d1:migrations:check       # must pass first
+
+CF_D1_MIGRATE_EXECUTE=1 \
+CF_D1_MIGRATE_CONFIRM=APPLY_PRODUCTION_D1_MIGRATIONS \
+npm run cf:d1:migrations:apply -- --remote --config wrangler.deploy.json
 ```
+
+The apply walks each lane in manifest order and aborts on the first failure. It does
+**not** pass `--yes`: Wrangler's own confirmation stays visible to the operator. Only
+the **lane** migrations are applied — the deferred, non-idempotent `0006` is never
+auto-applied (see [§6](#6-migration-lanes)).
 
 ### Set environment variables
 
@@ -96,15 +140,52 @@ wrangler secret put DEEPSEEK_API_KEY
 
 Future: additional tenant databases for multi-tenant isolation.
 
-## 6. Migration Files
+## 6. Migration lanes
 
-| File | Contents |
-|------|----------|
-| `migrations/0001_control_db.sql` | Control DB: tenants, tenant_databases |
-| `migrations/0002_tenant_core.sql` | Preview and approval tables, indexes |
+The **complete** lanes. `migrations/manifest.json` is the canonical, machine-readable
+source of truth — logical sequence, target binding, relative path, pinned SHA-256
+digest, kind, and idempotence. Nothing applies a migration outside the manifest.
 
-Future migrations should be additive. Use `CREATE TABLE IF NOT EXISTS`
-for idempotency. Never drop tables without backup.
+```text
+CONTROL_DB
+  0001_control_db.sql
+  0004_control_auth_workspace.sql
+
+TENANT_DB_DEFAULT
+  0002_tenant_core.sql
+  0003_tenant_persistence_foundation.sql
+  0005_tenant_scoped_indexes.sql
+```
+
+| Lane | Seq | File | Kind | Idempotent | Contents |
+|------|-----|------|------|-----------|----------|
+| `CONTROL_DB` | 1 | `0001_control_db.sql` | schema | yes | `tenants`, `tenant_databases` |
+| `CONTROL_DB` | 2 | `0004_control_auth_workspace.sql` | schema | yes | `users`, `tenant_memberships`, `auth_identities`, auth/workspace indexes |
+| `TENANT_DB_DEFAULT` | 1 | `0002_tenant_core.sql` | schema | yes | `action_previews`, `approval_records` |
+| `TENANT_DB_DEFAULT` | 2 | `0003_tenant_persistence_foundation.sql` | schema | yes | `work_units`, `workunit_feedback`, `integration_connections`, `audit_logs`, `usage_events`, `usage_daily_summary` |
+| `TENANT_DB_DEFAULT` | 3 | `0005_tenant_scoped_indexes.sql` | index | yes | tenant-prefixed composite indexes |
+
+**Immutability + append-only.** Once pinned, an existing migration's bytes may never
+change — a changed digest fails `cf:d1:migrations:check`. New work is appended as a
+new migration + a new manifest entry; existing entries are never rewritten or
+renumbered.
+
+**Every lane migration is idempotent** (`CREATE ... IF NOT EXISTS`), so re-applying a
+complete lane succeeds and leaves the schema signature unchanged.
+
+### Deferred: `0006_action_preview_creator.sql`
+
+`0006` (`ALTER TABLE action_previews ADD COLUMN created_by_user_id`) is **not** in an
+idempotent lane: SQLite has no `ADD COLUMN IF NOT EXISTS`, so re-applying it fails.
+It is recorded in the manifest's `deferred` list — digest-pinned (the manifest stays
+canonical over *every* committed migration) but never auto-applied by
+`cf:d1:migrations:apply` and never part of the bootstrap lanes. An operator applies
+it **once**, separately. Folding it into an idempotent `CREATE` during a future
+schema rebuild is tracked under **Issue #155**.
+
+Migrations are pure DDL: `cf:d1:migrations:check` fails if any migration contains
+`INSERT`/`UPDATE`/`DELETE`/`REPLACE`/`ATTACH`, so **no migration ever seeds a default
+tenant, user, identity, membership, API key, or provider credential**.
 
 ## 7. Production Safety Checklist
 
@@ -325,11 +406,14 @@ or returns `integration_missing`.
    export CLOUDFLARE_TENANT_DB_DEFAULT_ID=<tenant-db-uuid>
    ```
 
-3. Run migrations:
+3. Run migrations (OPERATOR-GATED — see [§4](#run-migrations-on-production-operator-gated)):
    ```bash
-   wrangler d1 execute CONTROL_DB --file=migrations/0001_control_db.sql
-   wrangler d1 execute TENANT_DB_DEFAULT --file=migrations/0002_tenant_core.sql
+   npm run cf:d1:migrations:check
+   CF_D1_MIGRATE_EXECUTE=1 \
+   CF_D1_MIGRATE_CONFIRM=APPLY_PRODUCTION_D1_MIGRATIONS \
+   npm run cf:d1:migrations:apply -- --remote --config wrangler.deploy.json
    ```
+   This applies the **complete** lanes (§6), never just `0001`/`0002`.
 
 4. Set secrets:
    ```bash
@@ -346,3 +430,145 @@ Set `PERSISTENCE_MODE=d1` only for manual integration testing.
 
 In-memory persistence (`ALLOW_IN_MEMORY_PERSISTENCE=true`) is sufficient
 for all automated tests and local development.
+
+## 10. Reproducible D1 bootstrap & migration operations (P0-PERSIST-015, Issue #155)
+
+Everything below is **reproducible from this document**. The canonical sources are
+`migrations/manifest.json` (which migration runs, in which lane, in which order,
+with which pinned digest) and `migrations/schema-contract.json` (what the resulting
+schema must contain).
+
+### Command surface — inspection vs mutation
+
+| Command | Network | Mutates | Purpose |
+|---------|---------|---------|---------|
+| `cf:d1:migrations:check` | none | no | Validate manifest, paths, digests, lanes, SQL safety |
+| `cf:d1:migrations:plan` | none | no | Print the ordered plan (binding, filename, sequence, kind, idempotence) |
+| `cf:d1:bootstrap:local` | none | isolated temp only | Fresh bootstrap + schema verify + idempotence + local fixture |
+| `cf:d1:schema:verify:local` | none | no | Verify both schemas against the contract |
+| `cf:d1:evidence` | none | writes `.d1-evidence/` (untracked) | Safe operational evidence artifact |
+| `cf:d1:bootstrap:prepare` | none | writes `bootstrap.control.sql` (untracked, 0600) | Prepare operator bootstrap SQL — **does not apply** |
+| `cf:d1:migrations:apply` | **remote** | **yes** | Operator-gated production migration apply |
+| `cf:d1:schema:verify:remote` | **remote** | no (read-only) | Verify production schema without writing |
+
+Neither `plan` nor any verification prints a database ID, a secret, a seed value, or
+SQL contents. Validation failures are safe categories keyed by binding + migration
+basename.
+
+### Fresh local bootstrap
+
+```bash
+npm run cf:d1:bootstrap:local
+```
+
+Creates isolated temporary SQLite databases in a private OS temp dir (**never** your
+normal local D1/Wrangler state), applies both lanes from empty, verifies the schema
+contract, re-applies each lane to prove idempotence, seeds the local-only fixture,
+then deletes the temporary state. No remote access.
+
+### Idempotence verification
+
+The bootstrap applies each complete lane **twice** and compares a canonical schema
+*signature* (tables, columns, NOT NULL, primary keys, indexes, foreign keys) before
+and after. The signature must be identical. Every lane migration is
+`CREATE ... IF NOT EXISTS`; the non-idempotent `0006` is deliberately deferred (§6).
+
+### Local bootstrap fixture (LOCAL/TEST ONLY)
+
+`cf:d1:bootstrap:local` seeds one active tenant, one **complete active**
+`tenant_databases` registry row, one user, one active membership, and one JWT auth
+identity — **only after schema verification**, and idempotently (repeat seeding
+cannot corrupt). Every value is unmistakably local/test-only (`local-` prefixes, the
+reserved `.invalid` TLD, a synthetic all-zero-prefixed database id) and is **refused**
+if it ever looks production-shaped. These values are never used automatically in
+production. No production email, subject, tenant, database ID, or credential is
+committed, and no JWT secret exists in the repository.
+
+An integration test (`tests/d1schemaSessionBootstrap.test.mts`) proves a
+request-scoped **JWT session** resolves against the freshly bootstrapped Control DB
+and reaches the freshly migrated **tenant repository bundle** through the mandatory
+tenant-registry resolver.
+
+### Production bootstrap preparation (operator-gated)
+
+```bash
+CF_D1_BOOTSTRAP_TENANT_ID=... CF_D1_BOOTSTRAP_TENANT_NAME=... CF_D1_BOOTSTRAP_TENANT_SLUG=... \
+CF_D1_BOOTSTRAP_TENANT_STATUS=active \
+CF_D1_BOOTSTRAP_DATABASE_NAME=... CF_D1_BOOTSTRAP_DATABASE_ID=... CF_D1_BOOTSTRAP_SCHEMA_VERSION=1 \
+CF_D1_BOOTSTRAP_USER_ID=... CF_D1_BOOTSTRAP_USER_EMAIL=... \
+CF_D1_BOOTSTRAP_MEMBERSHIP_ID=... CF_D1_BOOTSTRAP_MEMBERSHIP_ROLE=owner CF_D1_BOOTSTRAP_MEMBERSHIP_STATUS=active \
+CF_D1_BOOTSTRAP_IDENTITY_ID=... CF_D1_BOOTSTRAP_IDENTITY_PROVIDER=jwt CF_D1_BOOTSTRAP_IDENTITY_SUBJECT=... \
+npm run cf:d1:bootstrap:prepare
+```
+
+Every value is **operator-provided with no implicit defaults**; a single missing
+variable fails closed. The role is allowlisted (`owner|manager|editor|viewer`),
+tenant and membership status must be **explicitly** `active`, and the database ID
+uses the **same UUID validation as the deployment config** (placeholders rejected).
+Output is written to the untracked repository-root `bootstrap.control.sql` with
+`0600` permissions and is removed after apply or failure. **No value is ever logged**
+(failures name only the field). The generated SQL uses plain `INSERT`s ordered
+tenant → registry → user → membership → identity, so a **missing parent** (foreign
+key) and a **duplicate identity** (`UNIQUE(provider, provider_subject)`) both fail
+closed. Applying it requires a **separate** explicit execution flag
+(`CF_D1_BOOTSTRAP_EXECUTE=1`) and an operator-run `wrangler d1 execute --remote`.
+Generated bootstrap SQL is git-ignored and must never be committed.
+
+### Read-only remote schema verification
+
+```bash
+npm run cf:d1:schema:verify:remote -- --remote --config wrangler.deploy.json
+```
+
+Requires the validated generated deploy config (real, non-placeholder IDs; exactly
+the approved bindings) **and** an explicit `--remote` flag. It issues **only**
+read-only introspection (`SELECT` on `sqlite_master`; read-only `PRAGMA`) — a
+non-read-only query is blocked before it can reach Wrangler. It never mutates,
+never seeds, never runs migrations, never prints database IDs, and never reads
+application row data. It reports safe object names and category-level failures:
+missing/incompatible table, column, index, constraint, unexpected object, or query
+failure.
+
+### Worker deploy ordering
+
+```text
+prepare deploy config
+  → validate deploy config
+  → build Worker
+  → verify Worker artifacts
+  → verify remote D1 schemas (READ-ONLY)     ← requires CF_DEPLOY_EXECUTE=1
+  → deploy Worker                            ← requires CF_DEPLOY_EXECUTE=1
+```
+
+`cf:deploy` **never applies migrations** — there is deliberately no migration step in
+the pipeline. A remote schema-verification failure **prevents** the deploy. Without
+`CF_DEPLOY_EXECUTE=1` the run stops before the first remote step, so preflight and
+dry-run stay fully **offline**. No step can be skipped or reordered.
+
+### Rollback limitations
+
+- **D1 data rollback is SEPARATE from Worker rollback.** Rolling the Worker back to a
+  previous version does **not** roll back applied migrations or data.
+- Migrations here are additive (`CREATE ... IF NOT EXISTS`, plus the deferred `0006`
+  `ADD COLUMN`); there are **no down-migrations**. A schema change cannot be undone by
+  re-deploying an older Worker.
+- Recovering D1 data requires Cloudflare **Time Travel** (`wrangler d1 time-travel`)
+  or a restore from an export — an operator action outside this pipeline, with its own
+  retention window.
+- Plan a Worker rollback and a D1 recovery as **two independent** procedures: deploy a
+  Worker that is compatible with the *already-applied* schema, rather than assuming the
+  schema will move backwards.
+
+### What is NOT proof
+
+FakeD1 tests and `cf:deploy:dry-run` are **not production-readiness proof**. FakeD1
+does not enforce PRIMARY KEY/UNIQUE/FK/CHECK constraints, and a dry-run never contacts
+Cloudflare. The local bootstrap proves reproducibility against **real SQLite**
+(`node:sqlite`) only.
+
+**Issue #155 remains open.** This patch delivers the reproducible tooling and the
+operator-gated workflow. Closing #155 additionally requires an **authorized remote
+execution** and a review of the resulting evidence (`npm run cf:d1:evidence` produces
+an artifact carrying the patch id, commit SHA, tool versions, manifest + schema-contract
+digests, migration filenames/versions, bootstrap + idempotence results, test counts, and
+a timestamp — and **no** database IDs, identities, secrets, SQL, or row data).

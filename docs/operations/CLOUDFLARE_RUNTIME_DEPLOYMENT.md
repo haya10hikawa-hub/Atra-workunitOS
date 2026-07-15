@@ -273,3 +273,68 @@ P7.1 MAC wiring is introduced.
   in this PR. This patch does not claim production readiness from passing FakeD1
   tests or a dry-run; FakeD1 does not enforce PRIMARY KEY constraints, so the
   global-ID contract is proven by a real SQLite-backed test, not by FakeD1.
+
+## 13. D1 migration operations & deploy ordering (P0-PERSIST-015, Issue #155)
+
+Migration execution is an **operator action**, never an implicit application-runtime
+action. **Worker deploy never silently applies database migrations** — there is
+deliberately no migration step in the `cf:deploy` pipeline.
+
+### Migration lanes (canonical: `migrations/manifest.json`)
+
+```text
+CONTROL_DB
+  0001_control_db.sql
+  0004_control_auth_workspace.sql
+
+TENANT_DB_DEFAULT
+  0002_tenant_core.sql
+  0003_tenant_persistence_foundation.sql
+  0005_tenant_scoped_indexes.sql
+```
+
+Existing migration SQL is immutable (SHA-256 pinned); changes are append-only. The
+non-idempotent `0006_action_preview_creator.sql` (`ADD COLUMN`) is **deferred**:
+digest-pinned but never part of an idempotent lane and never auto-applied. Full
+detail: [CLOUDFLARE_D1_SETUP.md §6 + §10](CLOUDFLARE_D1_SETUP.md).
+
+### Deploy ordering (`CF_DEPLOY_EXECUTE=1`)
+
+```text
+prepare deploy config
+  → validate deploy config
+  → build Worker
+  → verify Worker artifacts
+  → verify remote D1 schemas (READ-ONLY)
+  → deploy Worker
+```
+
+- A remote schema-verification **failure prevents the deploy**.
+- The remote verification is read-only: `SELECT` on `sqlite_master` + read-only
+  `PRAGMA` only; it never mutates, seeds, runs migrations, prints database IDs, or
+  reads application row data.
+- Without `CF_DEPLOY_EXECUTE=1` the pipeline stops **before** the first remote step —
+  preflight and dry-run remain fully offline and never contact Cloudflare.
+- No step can be skipped or reordered. `EXTERNAL_ACTIONS_ENABLED` remains `false`.
+
+### Production migration apply gates
+
+`cf:d1:migrations:apply` stops before Wrangler unless **all** hold: `--remote`, a
+validated generated `wrangler.deploy.json` (real, non-placeholder IDs; exactly the
+approved bindings), `CF_D1_MIGRATE_EXECUTE=1`,
+`CF_D1_MIGRATE_CONFIRM=APPLY_PRODUCTION_D1_MIGRATIONS`, and a fully valid manifest.
+
+### Rollback limitations
+
+**D1 data rollback is separate from Worker rollback.** Rolling the Worker back does
+**not** roll back applied migrations or data; there are no down-migrations. D1
+recovery is an independent operator procedure (Cloudflare Time Travel or an export
+restore) with its own retention window. Roll forward to a Worker compatible with the
+already-applied schema rather than assuming the schema moves backwards.
+
+### Proof status
+
+FakeD1 and `cf:deploy:dry-run` are **not production-readiness proof**. The local
+bootstrap proves reproducibility against real SQLite (`node:sqlite`) only.
+**Issue #155 remains open** until an authorized remote execution is performed and its
+evidence (`npm run cf:d1:evidence`) is reviewed.

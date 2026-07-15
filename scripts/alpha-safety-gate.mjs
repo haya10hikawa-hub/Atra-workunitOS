@@ -13,10 +13,25 @@
  */
 
 import { readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
+import { dirname, resolve } from "node:path"
 import { evaluateElectronDependencyPolicy } from "./electronDependencyPolicy.mjs"
+import { loadManifest, buildPlan } from "./lib/d1MigrationManifest.mjs"
 
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const failures = []
 const checks = []
+
+/**
+ * Resolve a migration path from the CANONICAL manifest (P0-PERSIST-015) rather
+ * than hardcoding it — the manifest is the single source of truth for which
+ * migration exists in which lane.
+ */
+function manifestMigrationPath(binding, kind) {
+  const loaded = loadManifest(REPO_ROOT)
+  if (!loaded.ok) return null
+  return buildPlan(loaded.manifest, binding).find((s) => s.kind === kind)?.path ?? null
+}
 
 function read(path) {
   try {
@@ -62,7 +77,9 @@ const store = read("app/lib/security/approvalStore.ts") ?? ""
 const previewRepo = read("app/lib/persistence/d1/actionPreviewRepository.ts") ?? ""
 const rowHelpers = read("app/lib/persistence/d1/rowHelpers.ts") ?? ""
 const hash = read("app/lib/security/hash.ts") ?? ""
-const migration = read("migrations/0005_tenant_scoped_indexes.sql") ?? ""
+// Tenant index-hardening migration, resolved via the canonical manifest.
+const indexMigrationPath = manifestMigrationPath("TENANT_DB_DEFAULT", "index")
+const migration = (indexMigrationPath ? read(indexMigrationPath) : null) ?? ""
 const workUnitRepo = read("app/lib/persistence/d1/workUnitRepository.ts") ?? ""
 const externalActions = read("app/lib/security/externalActions.ts") ?? ""
 const toolBackend = read("app/lib/toolBackend.ts") ?? ""

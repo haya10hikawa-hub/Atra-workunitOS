@@ -116,11 +116,45 @@ npm run cf:deploy:dry-run   # wrangler deploy --dry-run, no upload
 # Real deploy: supply IDs via env, then run the guarded orchestrator.
 export CLOUDFLARE_CONTROL_DB_ID=<uuid>
 export CLOUDFLARE_TENANT_DB_DEFAULT_ID=<uuid>
-CF_DEPLOY_EXECUTE=1 npm run cf:deploy   # prepare → preflight → build → verify → deploy
+# prepare → preflight → build → verify artifacts → verify remote D1 schema (read-only) → deploy
+CF_DEPLOY_EXECUTE=1 npm run cf:deploy
 ```
 
 Real D1 IDs are never committed: they are assembled at deploy time into an
 untracked, git-ignored `wrangler.deploy.json`.
+
+**Worker deploy never applies database migrations** — a real deploy first requires a
+successful *read-only* remote D1 schema verification.
+
+## D1 migrations & bootstrap
+
+`migrations/manifest.json` is the canonical source of truth for the two migration
+lanes (immutable, SHA-256 pinned, append-only). Full guide:
+[docs/operations/CLOUDFLARE_D1_SETUP.md §6 + §10](docs/operations/CLOUDFLARE_D1_SETUP.md).
+
+```text
+CONTROL_DB
+  0001_control_db.sql
+  0004_control_auth_workspace.sql
+
+TENANT_DB_DEFAULT
+  0002_tenant_core.sql
+  0003_tenant_persistence_foundation.sql
+  0005_tenant_scoped_indexes.sql
+```
+
+```bash
+npm run cf:d1:migrations:check     # manifest, paths, digests, lanes, SQL safety (offline)
+npm run cf:d1:migrations:plan      # ordered plan (no database IDs, no SQL)
+npm run cf:d1:bootstrap:local      # isolated fresh bootstrap + idempotence + local fixture
+npm run cf:d1:schema:verify:local  # verify both schemas against the schema contract
+```
+
+Production migration apply is **operator-gated** (`--remote` + a validated generated
+config + `CF_D1_MIGRATE_EXECUTE=1` + `CF_D1_MIGRATE_CONFIRM=APPLY_PRODUCTION_D1_MIGRATIONS`)
+and is never part of `cf:deploy`. D1 data rollback is **separate** from Worker
+rollback. FakeD1 and `cf:deploy:dry-run` are **not** production-readiness proof —
+Issue #155 remains open until authorized remote evidence is reviewed.
 
 After `cf:build`, clean generated artifacts before committing:
 

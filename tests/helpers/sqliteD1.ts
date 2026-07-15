@@ -76,6 +76,16 @@ export class SqliteD1Database implements D1DatabaseLike {
   }
 
   /** Direct read for byte-equivalence assertions (bypasses repository mapping). */
+  /**
+   * The underlying node:sqlite handle. Test-only: lets a caller seed/introspect
+   * with the node:sqlite API (e.g. the P0-PERSIST-015 bootstrap fixture and the
+   * schema-contract verifier) against the SAME real database this adapter serves
+   * to application code.
+   */
+  raw(): DatabaseSync {
+    return this.db
+  }
+
   rawRow(sql: string, ...params: unknown[]): Record<string, unknown> | null {
     return (this.db.prepare(sql).get(...(params.map(coerce) as never[])) ?? null) as Record<string, unknown> | null
   }

@@ -1,0 +1,202 @@
+{
+  "patchId": "P0-PERSIST-015",
+  "version": 1,
+  "description": "Deterministic schema contract for the two D1 databases after applying their manifest lanes. The verifier canonicalizes introspection so ordering never causes a false failure. This file contains NO database IDs, identities, secrets, seed values, or row data — only structural expectations.",
+  "notes": {
+    "globalIdContract": "Object tables use a GLOBAL single-column `id TEXT PRIMARY KEY`; IDs are globally unique across all tenants in the shared tenant D1.",
+    "tenantLocalRelationships": "Tenant-local child→parent relationships are APPLICATION-ENFORCED (relationshipEnforcedRepositories) where the current shared-D1 schema cannot express them; the schema declares only the FOREIGN KEYs that SQLite/D1 can enforce without an unsafe table rebuild.",
+    "migration0006": "action_previews.created_by_user_id (migration 0006) is a non-idempotent ALTER excluded from the idempotent bootstrap lanes; it is therefore NOT part of this contract."
+  },
+  "databases": {
+    "CONTROL_DB": {
+      "tables": {
+        "tenants": {
+          "primaryKey": ["id"],
+          "columns": [
+            { "name": "id", "pk": true },
+            { "name": "name", "notnull": true },
+            { "name": "slug", "notnull": true },
+            { "name": "status", "notnull": true },
+            { "name": "created_at", "notnull": true },
+            { "name": "updated_at", "notnull": true }
+          ],
+          "checks": ["status in ('active','suspended','deleted')", "slug text not null unique"],
+          "indexes": ["idx_tenants_slug"]
+        },
+        "tenant_databases": {
+          "primaryKey": ["tenant_id"],
+          "columns": [
+            { "name": "tenant_id", "pk": true },
+            { "name": "database_name", "notnull": true },
+            { "name": "database_id", "notnull": true },
+            { "name": "schema_version", "notnull": true },
+            { "name": "status", "notnull": true }
+          ],
+          "checks": ["status in ('active','migrating','failed')", "database_name text not null unique"],
+          "foreignKeys": [{ "column": "tenant_id", "references": "tenants", "to": "id" }]
+        },
+        "users": {
+          "primaryKey": ["id"],
+          "columns": [
+            { "name": "id", "pk": true },
+            { "name": "email", "notnull": true },
+            { "name": "created_at", "notnull": true },
+            { "name": "updated_at", "notnull": true }
+          ],
+          "checks": ["email text not null unique"]
+        },
+        "tenant_memberships": {
+          "primaryKey": ["id"],
+          "columns": [
+            { "name": "id", "pk": true },
+            { "name": "tenant_id", "notnull": true },
+            { "name": "user_id", "notnull": true },
+            { "name": "role", "notnull": true },
+            { "name": "status", "notnull": true }
+          ],
+          "checks": ["role in ('owner','manager','editor','viewer')", "status in ('active','invited','suspended')", "unique(tenant_id, user_id)"],
+          "foreignKeys": [
+            { "column": "tenant_id", "references": "tenants", "to": "id" },
+            { "column": "user_id", "references": "users", "to": "id" }
+          ],
+          "indexes": ["idx_memberships_tenant", "idx_memberships_user", "idx_memberships_role", "idx_memberships_status"]
+        },
+        "auth_identities": {
+          "primaryKey": ["id"],
+          "columns": [
+            { "name": "id", "pk": true },
+            { "name": "user_id", "notnull": true },
+            { "name": "provider", "notnull": true },
+            { "name": "provider_subject", "notnull": true }
+          ],
+          "checks": ["unique(provider, provider_subject)"],
+          "foreignKeys": [{ "column": "user_id", "references": "users", "to": "id" }],
+          "indexes": ["idx_auth_identities_user", "idx_auth_identities_provider_subject"]
+        }
+      }
+    },
+    "TENANT_DB_DEFAULT": {
+      "tables": {
+        "work_units": {
+          "primaryKey": ["id"],
+          "globalObjectId": true,
+          "columns": [
+            { "name": "id", "pk": true },
+            { "name": "tenant_id", "notnull": true },
+            { "name": "title", "notnull": true },
+            { "name": "kind", "notnull": true },
+            { "name": "priority", "notnull": true },
+            { "name": "source_provider", "notnull": true },
+            { "name": "reason", "notnull": true },
+            { "name": "evidence", "notnull": true },
+            { "name": "next_action", "notnull": true },
+            { "name": "status", "notnull": true },
+            { "name": "created_at", "notnull": true },
+            { "name": "updated_at", "notnull": true }
+          ],
+          "indexes": ["idx_work_units_tenant", "idx_work_units_tenant_id", "idx_work_units_tenant_created", "idx_work_units_tenant_source_provider"]
+        },
+        "action_previews": {
+          "primaryKey": ["id"],
+          "globalObjectId": true,
+          "columns": [
+            { "name": "id", "pk": true },
+            { "name": "tenant_id", "notnull": true },
+            { "name": "work_unit_id", "notnull": true },
+            { "name": "action_type", "notnull": true },
+            { "name": "target_preview", "notnull": true },
+            { "name": "payload_preview", "notnull": true },
+            { "name": "requires_approval", "notnull": true },
+            { "name": "status", "notnull": true },
+            { "name": "target_hash", "notnull": true },
+            { "name": "payload_hash", "notnull": true },
+            { "name": "created_at", "notnull": true }
+          ],
+          "checks": ["action_type in ('internal_task','slack_reply','gmail_reply','github_issue','calendar_event')"],
+          "indexes": ["idx_action_previews_work_unit", "idx_action_previews_tenant_id", "idx_action_previews_tenant_work_unit_created"]
+        },
+        "approval_records": {
+          "primaryKey": ["id"],
+          "globalObjectId": true,
+          "columns": [
+            { "name": "id", "pk": true },
+            { "name": "tenant_id", "notnull": true },
+            { "name": "work_unit_id", "notnull": true },
+            { "name": "action_preview_id", "notnull": true },
+            { "name": "action_type", "notnull": true },
+            { "name": "target_hash", "notnull": true },
+            { "name": "payload_hash", "notnull": true },
+            { "name": "status", "notnull": true },
+            { "name": "created_at", "notnull": true },
+            { "name": "expires_at", "notnull": true }
+          ],
+          "checks": ["status in ('pending','approved','rejected','expired','used')"],
+          "foreignKeys": [{ "column": "action_preview_id", "references": "action_previews", "to": "id" }],
+          "indexes": ["idx_approval_records_preview", "idx_approval_records_status", "idx_approval_records_expires", "idx_approval_records_tenant_id", "idx_approval_records_tenant_status_used_expires"]
+        },
+        "workunit_feedback": {
+          "primaryKey": ["id"],
+          "globalObjectId": true,
+          "columns": [
+            { "name": "id", "pk": true },
+            { "name": "tenant_id", "notnull": true },
+            { "name": "work_unit_id", "notnull": true },
+            { "name": "feedback", "notnull": true },
+            { "name": "created_at", "notnull": true }
+          ],
+          "foreignKeys": [{ "column": "work_unit_id", "references": "work_units", "to": "id" }],
+          "indexes": ["idx_feedback_work_unit", "idx_feedback_tenant"]
+        },
+        "integration_connections": {
+          "primaryKey": ["id"],
+          "globalObjectId": true,
+          "columns": [
+            { "name": "id", "pk": true },
+            { "name": "tenant_id", "notnull": true },
+            { "name": "provider", "notnull": true },
+            { "name": "status", "notnull": true },
+            { "name": "mode", "notnull": true },
+            { "name": "created_at", "notnull": true },
+            { "name": "updated_at", "notnull": true }
+          ],
+          "indexes": ["idx_connections_tenant", "idx_connections_provider"]
+        },
+        "audit_logs": {
+          "primaryKey": ["id"],
+          "globalObjectId": true,
+          "columns": [
+            { "name": "id", "pk": true },
+            { "name": "tenant_id", "notnull": true },
+            { "name": "event_type", "notnull": true },
+            { "name": "created_at", "notnull": true }
+          ],
+          "indexes": ["idx_audit_tenant", "idx_audit_created", "idx_audit_event_type"]
+        },
+        "usage_events": {
+          "primaryKey": ["id"],
+          "globalObjectId": true,
+          "columns": [
+            { "name": "id", "pk": true },
+            { "name": "tenant_id", "notnull": true },
+            { "name": "event_type", "notnull": true },
+            { "name": "quantity", "notnull": true },
+            { "name": "created_at", "notnull": true }
+          ],
+          "indexes": ["idx_usage_tenant", "idx_usage_date"]
+        },
+        "usage_daily_summary": {
+          "primaryKey": ["tenant_id", "date", "event_type"],
+          "globalObjectId": false,
+          "columns": [
+            { "name": "tenant_id", "notnull": true },
+            { "name": "date", "notnull": true },
+            { "name": "event_type", "notnull": true },
+            { "name": "quantity", "notnull": true },
+            { "name": "updated_at", "notnull": true }
+          ],
+          "indexes": ["idx_summary_date"]
+        }
+      }
+    }
+  }
+}
