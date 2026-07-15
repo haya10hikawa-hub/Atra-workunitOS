@@ -232,14 +232,27 @@ P7.1 MAC wiring is introduced.
 ## 12. Remaining dependencies
 
 - **Issue #130** (tenant DB resolver + tenant-isolated repository parity) is
-  addressed by **P0-PERSIST-014**: the control registry is validated before
-  repositories are returned, `TENANT_DB_DEFAULT` is returned via the resolver
-  (never the control DB), and in-memory / D1 repositories enforce the same
-  row-level tenant scoping. See
-  [CLOUDFLARE_D1_SETUP.md §9a](CLOUDFLARE_D1_SETUP.md). The chosen architecture is
-  a single **shared** tenant D1 (row-level isolation); physical per-tenant D1
-  routing is deferred.
+  addressed by **P0-PERSIST-014**. Persistence authority is now **structural**:
+  - a production D1 bundle is producible only through
+    `resolveProductionRepositories`, whose `resolver` is **required** — the
+    complete `tenant_databases` record (tenant_id / database_name / database_id /
+    schema_version / status) is validated before any repository is returned;
+  - direct binding lives only behind the explicitly named
+    `resolveLocalRepositories`; presence of `CONTROL_DB` / `TENANT_DB_DEFAULT`
+    alone never yields a direct production bundle;
+  - `TENANT_DB_DEFAULT` is returned via the resolver (never the control DB), and
+    in-memory / D1 repositories enforce the same row-level tenant scoping;
+  - a persistence failure returns fallback data **only** in explicit non-production
+    local development (central `canUseLocalPersistenceFallback` helper); both
+    Cloudflare **and** Node production return safe `503`s, never keyed on
+    `runtime.source` alone or `process.env.NODE_ENV`.
+  See [CLOUDFLARE_D1_SETUP.md §9a](CLOUDFLARE_D1_SETUP.md). The chosen architecture
+  is a single **shared** tenant D1 (row-level isolation) with a **global** object-ID
+  namespace enforced by the D1 PRIMARY KEY; physical per-tenant D1 routing is
+  deferred.
 - **Issue #155** still owns the broader reproducible production
   persistence/migration proof (migration ordering, idempotence, seeding,
-  operational setup). This patch does not claim production readiness from passing
-  FakeD1 tests or a dry-run.
+  operational setup) and remains **out of scope for remote migration execution**
+  in this PR. This patch does not claim production readiness from passing FakeD1
+  tests or a dry-run; FakeD1 does not enforce PRIMARY KEY constraints, so the
+  global-ID contract is proven by a real SQLite-backed test, not by FakeD1.

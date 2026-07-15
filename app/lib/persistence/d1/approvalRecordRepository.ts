@@ -9,6 +9,7 @@ import type { TenantDbContext, ApprovalRecordRow } from "../types.ts"
 import type { ApprovalRecordRepository, RuntimeApprovalClaimFields } from "../repositories.ts"
 import type { D1DatabaseLike } from "./types.ts"
 import { nowISO } from "./rowHelpers.ts"
+import { runInsertGuarded } from "./writeGuards.ts"
 import { isIsoUtcTimestamp } from "../../phase6/shared/isoUtcTimestamp.ts"
 
 // ─── SQL ────────────────────────────────────────────────────────
@@ -78,7 +79,9 @@ export class D1ApprovalRecordRepository implements ApprovalRecordRepository {
   }
 
   async create(ctx: TenantDbContext, row: ApprovalRecordRow): Promise<ApprovalRecordRow> {
-    await this.db.prepare(INSERT_SQL)
+    // Shared-D1 global object-ID namespace: a cross-tenant id collision fails
+    // closed (typed, no disclosure) and never overwrites the existing row.
+    await runInsertGuarded(this.db.prepare(INSERT_SQL)
       .bind(
         row.id,
         ctx.tenantId,
@@ -93,8 +96,7 @@ export class D1ApprovalRecordRepository implements ApprovalRecordRepository {
         row.approvedAt ?? null,
         row.expiresAt,
         row.usedAt ?? null,
-      )
-      .run()
+      ))
     // The INSERT binds ctx.tenantId; the returned row must reflect it too, so a
     // spoofed row.tenantId controls neither storage nor the return value.
     return { ...row, tenantId: ctx.tenantId }

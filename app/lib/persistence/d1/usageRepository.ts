@@ -6,15 +6,18 @@ import type { TenantDbContext, UsageEventRow, UsageDailySummaryRow } from "../ty
 import type { UsageRepository } from "../repositories.ts"
 import type { D1DatabaseLike } from "./types.ts"
 import { nowISO } from "./rowHelpers.ts"
+import { runInsertGuarded } from "./writeGuards.ts"
 
 export class D1UsageRepository implements UsageRepository {
   private db: D1DatabaseLike
   constructor(db: D1DatabaseLike) { this.db = db }
 
   async recordEvent(_ctx: TenantDbContext, row: UsageEventRow): Promise<UsageEventRow> {
-    await this.db.prepare(
+    // Shared-D1 global object-ID namespace: a cross-tenant usage-event id collision
+    // fails closed (typed, no disclosure) and never overwrites the existing row.
+    await runInsertGuarded(this.db.prepare(
       "INSERT INTO usage_events (id,tenant_id,event_type,quantity,resource_type,resource_id,metadata_json,created_at) VALUES (?,?,?,?,?,?,?,?)",
-    ).bind(row.id, _ctx.tenantId, row.eventType, row.quantity, row.resourceType ?? null, row.resourceId ?? null, row.metadataJson ?? null, row.createdAt).run()
+    ).bind(row.id, _ctx.tenantId, row.eventType, row.quantity, row.resourceType ?? null, row.resourceId ?? null, row.metadataJson ?? null, row.createdAt))
 
     // Upsert daily summary
     const date = row.createdAt.slice(0, 10)

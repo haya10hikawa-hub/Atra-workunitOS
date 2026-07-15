@@ -5,6 +5,7 @@ import { resolveRouteRepositories } from "../../../lib/persistence/routeReposito
 import type { TenantId } from "../../../lib/tenant/types.ts"
 import { canViewAudit } from "../../../lib/security/tenantAccess.ts"
 import { resolveValidatedRequestRuntimeConfig } from "../../../lib/runtime/requestRuntimeConfig.ts"
+import { canUseLocalPersistenceFallback } from "../../../lib/runtime/localFallbackAuthority.ts"
 
 const DEFAULT_LIMIT = 50
 const MAX_LIMIT = 100
@@ -26,10 +27,11 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   const repoResult = await resolveRouteRepositories(sessionResult.session.tenantId as TenantId, runtime)
   if (!repoResult.ok) {
-    // Cloudflare production NEVER returns an empty successful audit response on a
-    // persistence failure — surface the safe error. Local dev fallback only.
-    if (runtime.source === "cloudflare") return NextResponse.json(safeError(requestId, repoResult.error), { status: repoResult.status })
-    return NextResponse.json({ auditLogs: [] })
+    // Production (Cloudflare OR Node) NEVER returns an empty successful audit
+    // response on a persistence failure. The empty fallback is authorized ONLY by
+    // the central helper (explicit non-production local development).
+    if (canUseLocalPersistenceFallback(runtime)) return NextResponse.json({ auditLogs: [] })
+    return NextResponse.json(safeError(requestId, repoResult.error), { status: repoResult.status })
   }
 
   const auditLogs = (await repoResult.bundle.auditLogs.listRecent(repoResult.bundle.ctx, limit)).map((row) => ({

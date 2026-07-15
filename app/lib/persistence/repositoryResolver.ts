@@ -143,6 +143,93 @@ function d1Bundle(tenantId: TenantId, d1Store: D1DatabaseLike, ctx?: TenantDbCon
   }
 }
 
+// ─── Repository authority (structural production / local separation) ─
+//
+// Blocker 1 (P0-PERSIST-014): production and local repository resolution are
+// separated STRUCTURALLY, not by comment or call convention. A production D1
+// bundle is producible ONLY through `resolveProductionRepositories`, whose
+// `resolver` parameter is REQUIRED at the type level — a production call cannot
+// compile or succeed without one. Direct-binding (no registry validation) lives
+// ONLY behind the explicitly named `resolveLocalRepositories` API; authority is
+// never inferred from an omitted argument.
+
+export type RepositoryAuthority =
+  | {
+      readonly kind: "cloudflare_production"
+      readonly persistence: PersistenceRuntimeConfig
+      readonly resolver: TenantDbResolver
+    }
+  | {
+      readonly kind: "local_development"
+      readonly persistence: PersistenceRuntimeConfig
+      readonly allowDirectBinding: true
+      readonly resolver?: TenantDbResolver
+      readonly d1Binding?: D1DatabaseLike
+    }
+
+/** Dispatch by explicit authority. The ONLY entry point that both branches share. */
+export async function resolveRepositoriesForAuthority(
+  tenantId: TenantId,
+  authority: RepositoryAuthority,
+): Promise<RepositoryResolutionResult> {
+  return authority.kind === "cloudflare_production"
+    ? resolveProductionRepositories(tenantId, authority)
+    : resolveLocalRepositories(tenantId, authority)
+}
+
+/**
+ * PRODUCTION repository resolution. `resolver` is a REQUIRED parameter, so a
+ * production D1 bundle cannot be produced without registry validation. There is
+ * no direct-binding path here: `d1Binding` is not accepted, `TENANT_DB_DEFAULT`
+ * is never bundled directly, `ctx.db` is authoritative, the control DB is
+ * rejected as tenant storage, and a context-tenant mismatch fails closed.
+ */
+export async function resolveProductionRepositories(
+  tenantId: TenantId,
+  authority: { persistence: PersistenceRuntimeConfig; resolver: TenantDbResolver },
+): Promise<RepositoryResolutionResult> {
+  const p = authority.persistence
+  // Production persistence is always D1; anything else fails closed.
+  if (p.mode !== "d1") return { ok: false, error: "persistence_disabled" }
+  if (!p.CONTROL_DB || !p.TENANT_DB_DEFAULT) return { ok: false, error: "d1_not_configured" }
+  // MANDATORY registry validation via the resolver (strict). ctx.db is
+  // authoritative and can never be overridden by a caller-supplied binding.
+  const r = await resolveViaTenantResolver(authority.resolver, tenantId, { strict: true, controlDb: p.CONTROL_DB })
+  if (!r.ok) return { ok: false, error: r.error }
+  return { ok: true, bundle: d1Bundle(tenantId, r.store, r.ctx) }
+}
+
+/**
+ * LOCAL / TEST repository resolution — the ONLY explicitly named API that permits
+ * a direct binding (no registry validation). `allowDirectBinding: true` must be
+ * passed by the caller so local authority is a deliberate, named choice and is
+ * never inferred from an omitted resolver.
+ */
+export async function resolveLocalRepositories(
+  tenantId: TenantId,
+  authority: {
+    persistence: PersistenceRuntimeConfig
+    allowDirectBinding: true
+    resolver?: TenantDbResolver
+    d1Binding?: D1DatabaseLike
+  },
+): Promise<RepositoryResolutionResult> {
+  const p = authority.persistence
+  if (p.mode === "in_memory") return { ok: true, bundle: inMemoryBundle(tenantId) }
+  if (p.mode !== "d1") return { ok: false, error: "persistence_disabled" }
+  // A local resolver, when supplied, still validates the registry (non-strict:
+  // a supplied d1Binding may stand in for a null ctx.db).
+  if (authority.resolver) {
+    const r = await resolveViaTenantResolver(authority.resolver, tenantId, { strict: false, d1Binding: authority.d1Binding })
+    if (!r.ok) return { ok: false, error: r.error }
+    return { ok: true, bundle: d1Bundle(tenantId, r.store, r.ctx) }
+  }
+  // Explicit local direct binding.
+  const store = authority.d1Binding ?? p.TENANT_DB_DEFAULT
+  if (!store) return { ok: false, error: "d1_not_configured" }
+  return { ok: true, bundle: d1Bundle(tenantId, store) }
+}
+
 // ─── Resolver ────────────────────────────────────────────────────
 
 export async function resolveRepositories(
@@ -164,18 +251,13 @@ export async function resolveRepositories(
     const p = options.persistence
     if (p.mode === "d1") {
       if (!p.CONTROL_DB || !p.TENANT_DB_DEFAULT) return { ok: false, error: "d1_not_configured" }
-      if (options.resolver) {
-        // PRODUCTION path (P0-PERSIST-014): registry validation is MANDATORY.
-        // ctx.db is authoritative — a supplied d1Binding cannot override it, the
-        // control DB is never accepted as tenant storage, and the context tenant
-        // must equal the requested tenant.
-        const r = await resolveViaTenantResolver(options.resolver, tenantId, { strict: true, controlDb: p.CONTROL_DB })
-        if (!r.ok) return { ok: false, error: r.error }
-        return { ok: true, bundle: d1Bundle(tenantId, r.store, r.ctx) }
-      }
-      // No resolver supplied → local/test direct path only. The production route
-      // path always supplies a resolver, so production never reaches here.
-      return { ok: true, bundle: d1Bundle(tenantId, options.d1Binding ?? p.TENANT_DB_DEFAULT) }
+      // Blocker 1: a production-capable D1 bundle REQUIRES a resolver (mandatory
+      // registry validation). resolveRepositories never infers local authority
+      // from an omitted resolver and never returns a direct TENANT_DB_DEFAULT
+      // bundle here — local/test direct binding must go through the explicitly
+      // named resolveLocalRepositories() API.
+      if (!options.resolver) return { ok: false, error: "d1_not_configured" }
+      return resolveProductionRepositories(tenantId, { persistence: p, resolver: options.resolver })
     }
     if (p.mode === "in_memory") return { ok: true, bundle: inMemoryBundle(tenantId) }
     return { ok: false, error: "persistence_disabled" }

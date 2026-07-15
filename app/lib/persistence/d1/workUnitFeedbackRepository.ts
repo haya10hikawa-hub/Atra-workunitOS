@@ -5,15 +5,18 @@
 import type { TenantDbContext, WorkUnitFeedbackRow } from "../types.ts"
 import type { WorkUnitFeedbackRepository } from "../repositories.ts"
 import type { D1DatabaseLike } from "./types.ts"
+import { runInsertGuarded } from "./writeGuards.ts"
 
 export class D1WorkUnitFeedbackRepository implements WorkUnitFeedbackRepository {
   private db: D1DatabaseLike
   constructor(db: D1DatabaseLike) { this.db = db }
 
   async create(_ctx: TenantDbContext, row: WorkUnitFeedbackRow): Promise<WorkUnitFeedbackRow> {
-    await this.db.prepare(
+    // Shared-D1 global object-ID namespace: a cross-tenant id collision fails
+    // closed (typed, no disclosure) and never overwrites the existing row.
+    await runInsertGuarded(this.db.prepare(
       "INSERT INTO workunit_feedback (id,tenant_id,work_unit_id,feedback,actor_user_id,created_at) VALUES (?,?,?,?,?,?)",
-    ).bind(row.id, _ctx.tenantId, row.workUnitId, row.feedback, row.actorUserId ?? null, row.createdAt).run()
+    ).bind(row.id, _ctx.tenantId, row.workUnitId, row.feedback, row.actorUserId ?? null, row.createdAt))
     return { ...row, tenantId: _ctx.tenantId }
   }
 

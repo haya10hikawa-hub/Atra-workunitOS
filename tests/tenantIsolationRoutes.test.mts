@@ -15,6 +15,7 @@ import { GET as integrationsGet } from "../app/api/integrations/status/route.ts"
 import { runWithInjectedRuntimeEnv } from "../app/lib/runtime/requestRuntimeEnvInjection.ts"
 import { resolveControlRepositories } from "../app/lib/infrastructure/persistence/control/controlRepositoryResolver.ts"
 import { FakeD1Database } from "./helpers/fakeD1.ts"
+import { seedTenantDatabaseRow } from "./helpers/registrySeed.ts"
 import { signHs256Jwt } from "./helpers/jwt.ts"
 import type { AppEnv } from "../app/types/cloudflare-env.ts"
 import type { TenantId, UserId } from "../app/lib/tenant/types.ts"
@@ -34,7 +35,8 @@ async function seedSession(controlDb: FakeD1Database, tenantId: string, opts: { 
   await repos.bundle.memberships.create(repos.bundle.ctx, { id: "m-1", tenantId: tenantId as TenantId, userId: "user-1" as UserId, role: "owner", status: "active", createdAt: now, updatedAt: now })
   await repos.bundle.authIdentities.create(repos.bundle.ctx, { id: "id-1", userId: "user-1" as UserId, provider: "jwt", providerSubject: SUB, email: "u@x.local", createdAt: now, updatedAt: now })
   if (includeDbRow) {
-    await controlDb.prepare("INSERT INTO tenant_databases (tenant_id, status) VALUES (?, ?)").bind(tenantId, "active").run()
+    // Complete, active registry record (Blocker 3) so a valid tenant validates.
+    await seedTenantDatabaseRow(controlDb, tenantId, { status: "active" })
   }
 }
 

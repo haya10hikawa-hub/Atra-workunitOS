@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { D1TenantDbResolver, createFakeTenantDbResolver } from "../app/lib/persistence/tenantDbResolver.ts"
 import { resolveRepositories, resetInMemoryReposForTests } from "../app/lib/persistence/repositoryResolver.ts"
 import { FakeD1Database } from "./helpers/fakeD1.ts"
+import { seedTenantDatabaseRow, seedTenantRow } from "./helpers/registrySeed.ts"
 import type { TenantId } from "../app/lib/tenant/types.ts"
 import type { TenantDbResolver, TenantDbResolution } from "../app/lib/persistence/repositories.ts"
 import type { D1DatabaseLike } from "../app/lib/persistence/d1/types.ts"
@@ -16,10 +17,11 @@ async function seedRegistry(
 ) {
   const { tenantStatus = "active", dbStatus = "active" } = opts
   if (tenantStatus !== null) {
-    await controlDb.prepare("INSERT INTO tenants (id, status) VALUES (?, ?)").bind(tenantId, tenantStatus).run()
+    await seedTenantRow(controlDb, tenantId, tenantStatus)
   }
   if (dbStatus !== null) {
-    await controlDb.prepare("INSERT INTO tenant_databases (tenant_id, status) VALUES (?, ?)").bind(tenantId, dbStatus).run()
+    // Seed a COMPLETE registry record (Blocker 3); only the status varies here.
+    await seedTenantDatabaseRow(controlDb, tenantId, { status: dbStatus })
   }
 }
 

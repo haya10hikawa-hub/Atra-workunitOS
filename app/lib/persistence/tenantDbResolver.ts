@@ -16,13 +16,75 @@
  */
 
 import type { TenantId } from "../tenant/types.ts"
-import type { TenantDbResolver, TenantDbResolution } from "./repositories.ts"
+import type { TenantDbResolver, TenantDbResolution, TenantDbResolutionReason } from "./repositories.ts"
 import type { D1DatabaseLike } from "./d1/types.ts"
 
-// ─── SQL (registry validation only; reads status, not secrets) ──
+// ─── SQL (registry validation only; reads routing metadata, not secrets) ──
 
 const FIND_TENANT_SQL = `SELECT status FROM tenants WHERE id = ?`
-const FIND_TENANT_DB_SQL = `SELECT status FROM tenant_databases WHERE tenant_id = ?`
+// Blocker 3: project the COMPLETE routing record so the resolver can validate
+// every field declared by the registry contract — not just status.
+const FIND_TENANT_DB_SQL = `SELECT tenant_id, database_name, database_id, schema_version, status FROM tenant_databases WHERE tenant_id = ?`
+
+// ─── Registry record shape + validation ─────────────────────────
+//
+// The raw registry row is untrusted `unknown` until every field is validated.
+// None of these values (tenant id, database id/name, schema version) is ever
+// returned or logged — a malformed record maps to the opaque `database_invalid`
+// reason, which higher layers surface as a safe 503 with no disclosure.
+
+export type TenantDatabaseRegistryRow = {
+  tenant_id?: unknown
+  database_name?: unknown
+  database_id?: unknown
+  schema_version?: unknown
+  status?: unknown
+}
+
+const MAX_DB_NAME_LENGTH = 128
+const MAX_DB_ID_LENGTH = 64
+const MAX_SCHEMA_VERSION_LENGTH = 32
+// A D1 database id is a UUID (8-4-4-4-12 hex). Bounded + shape-checked so a
+// malformed/oversized routing value can never flow downstream.
+const D1_DATABASE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+// Supported schema-version form: a bounded positive integer string (migration
+// default is "1"). Anything else is treated as an unsupported/malformed record.
+const SCHEMA_VERSION_PATTERN = /^[0-9]{1,10}$/
+
+function isNonEmptyBoundedString(value: unknown, max: number): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= max
+}
+
+/**
+ * Validate the COMPLETE registry record against the requested tenant. Returns a
+ * typed, disclosure-free reason on any problem:
+ *   - `database_invalid` — the row's tenant_id does not match, or a required
+ *     field (database_name / database_id / schema_version) is missing, malformed,
+ *     or out of bounds;
+ *   - `database_inactive` — the record is well-formed but not exactly "active".
+ */
+function validateRegistryRecord(
+  tenantId: TenantId,
+  row: TenantDatabaseRegistryRow,
+): { ok: true } | { ok: false; reason: TenantDbResolutionReason } {
+  // The stored routing tenant must be exactly the requested tenant (defense in
+  // depth even though the query filters on tenant_id).
+  if (typeof row.tenant_id !== "string" || row.tenant_id !== tenantId) {
+    return { ok: false, reason: "database_invalid" }
+  }
+  if (!isNonEmptyBoundedString(row.database_name, MAX_DB_NAME_LENGTH)) {
+    return { ok: false, reason: "database_invalid" }
+  }
+  if (!isNonEmptyBoundedString(row.database_id, MAX_DB_ID_LENGTH) || !D1_DATABASE_ID_PATTERN.test(row.database_id)) {
+    return { ok: false, reason: "database_invalid" }
+  }
+  if (!isNonEmptyBoundedString(row.schema_version, MAX_SCHEMA_VERSION_LENGTH) || !SCHEMA_VERSION_PATTERN.test(row.schema_version)) {
+    return { ok: false, reason: "database_invalid" }
+  }
+  // Reject migrating / failed / unknown / any non-active registry state.
+  if (row.status !== "active") return { ok: false, reason: "database_inactive" }
+  return { ok: true }
+}
 
 // ─── D1 Implementation ──────────────────────────────────────────
 
@@ -52,14 +114,16 @@ export class D1TenantDbResolver implements TenantDbResolver {
       if (!tenant) return { ok: false, reason: "tenant_not_found" }
       if (tenant.status !== "active") return { ok: false, reason: "tenant_inactive" }
 
-      // 2. An active `tenant_databases` registry row must exist for this tenant.
+      // 2. A COMPLETE, well-formed, ACTIVE `tenant_databases` record must exist
+      //    for this tenant. Every field is validated; a malformed record maps to
+      //    `database_invalid` (surfaced as a safe 503 with no disclosure).
       const dbRef = await this.controlDb
         .prepare(FIND_TENANT_DB_SQL)
         .bind(tenantId)
-        .first<{ status?: unknown }>()
+        .first<TenantDatabaseRegistryRow>()
       if (!dbRef) return { ok: false, reason: "database_not_found" }
-      // Reject migrating / failed / any non-active registry state.
-      if (dbRef.status !== "active") return { ok: false, reason: "database_inactive" }
+      const validation = validateRegistryRecord(tenantId, dbRef)
+      if (!validation.ok) return { ok: false, reason: validation.reason }
 
       // 3. Return the statically bound shared tenant DB — NEVER the control DB.
       return { ok: true, ctx: { tenantId, db: this.tenantDb } }

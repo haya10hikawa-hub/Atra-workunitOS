@@ -44,6 +44,7 @@ export type TenantDbResolutionReason =
   | "tenant_inactive"
   | "database_not_found"
   | "database_inactive"
+  | "database_invalid"
   | "resolution_failed"
 
 export type TenantDbResolution =
@@ -56,7 +57,10 @@ export interface TenantDbResolver {
    *
    * Contract (P0-PERSIST-014):
    *   - validates an ACTIVE tenant in CONTROL_DB;
-   *   - validates an ACTIVE `tenant_databases` registry row;
+   *   - validates the COMPLETE `tenant_databases` registry record: the row's
+   *     tenant_id must match the requested tenant, database_name / database_id /
+   *     schema_version must be present, bounded, and well-formed, and status must
+   *     be exactly "active" (`database_invalid` for a malformed record);
    *   - returns the statically bound TENANT_DB_DEFAULT — NEVER the control DB;
    *   - returns a typed reason on any failure (no throw for expected failures);
    *   - never returns another tenant's context.

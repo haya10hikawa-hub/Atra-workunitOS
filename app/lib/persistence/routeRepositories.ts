@@ -12,9 +12,12 @@
  */
 
 import type { TenantId } from "../tenant/types.ts"
-import { resolveRepositories } from "./repositoryResolver.ts"
-import type { TenantRepositoryBundle } from "./repositoryResolver.ts"
-import type { TenantDbResolver } from "./repositories.ts"
+import {
+  resolveProductionRepositories,
+  resolveLocalRepositories,
+  type RepositoryResolutionResult,
+  type TenantRepositoryBundle,
+} from "./repositoryResolver.ts"
 import { D1TenantDbResolver } from "./tenantDbResolver.ts"
 import type { SafeErrorCode } from "../security/safeErrors.ts"
 import {
@@ -49,21 +52,27 @@ export async function resolveRouteRepositories(
     rt = resolved.runtime
   }
 
-  // In genuine Cloudflare production, D1 access MUST go through the tenant DB
-  // resolver: it validates the control registry (active tenant + active
-  // tenant_databases row) and returns the statically bound TENANT_DB_DEFAULT —
-  // never the control DB. The resolver is built from the SAME frozen runtime
-  // snapshot, never from ambient process.env. Local dev/test keeps the direct
-  // binding path (no resolver) for convenience.
-  let resolver: TenantDbResolver | undefined
-  if (rt.source === "cloudflare" && rt.persistence.mode === "d1" && rt.persistence.CONTROL_DB && rt.persistence.TENANT_DB_DEFAULT) {
-    resolver = new D1TenantDbResolver({
+  // Authority is chosen STRUCTURALLY from the frozen runtime source (Blocker 1):
+  //   - Cloudflare production → resolveProductionRepositories with a MANDATORY
+  //     tenant DB resolver. The resolver validates the control registry (active
+  //     tenant + complete active tenant_databases record) and returns the
+  //     statically bound TENANT_DB_DEFAULT — never the control DB, never a direct
+  //     binding. It is built from the SAME frozen snapshot, never process.env.
+  //   - Local development → resolveLocalRepositories (explicitly named), the only
+  //     API that permits a direct binding.
+  let result: RepositoryResolutionResult
+  if (rt.source === "cloudflare") {
+    if (rt.persistence.mode !== "d1" || !rt.persistence.CONTROL_DB || !rt.persistence.TENANT_DB_DEFAULT) {
+      return { ok: false, error: "integration_missing", status: 503 }
+    }
+    const resolver = new D1TenantDbResolver({
       controlDb: rt.persistence.CONTROL_DB,
       tenantDb: rt.persistence.TENANT_DB_DEFAULT,
     })
+    result = await resolveProductionRepositories(tenantId, { persistence: rt.persistence, resolver })
+  } else {
+    result = await resolveLocalRepositories(tenantId, { persistence: rt.persistence, allowDirectBinding: true })
   }
-
-  const result = await resolveRepositories(tenantId, { persistence: rt.persistence, resolver })
 
   if (!result.ok) {
     // Inactive/invalid tenant authorization → forbidden; unavailable/failed
