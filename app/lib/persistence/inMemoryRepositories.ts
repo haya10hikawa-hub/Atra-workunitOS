@@ -30,8 +30,20 @@ export function createInMemoryWorkUnitRepository(): WorkUnitRepository {
   const store = new Map<string, InboxWorkUnitRow>()
   const keyFor = (tenantId: string, id: string) => `${tenantId}:${id}`
   return {
-    async create(_ctx, row) { store.set(keyFor(row.tenantId, row.id), { ...row }); return row },
-    async upsert(_ctx, row) { store.set(keyFor(row.tenantId, row.id), { ...row }); return row },
+    // tenantId is derived from ctx, NEVER trusted from row.tenantId (parity with
+    // the D1 repo, which binds ctx.tenantId on INSERT). A spoofed row.tenantId
+    // cannot control storage or the return value; duplicate IDs across tenants
+    // stay isolated by the composite (tenantId, id) key.
+    async create(_ctx, row) {
+      const stored = { ...row, tenantId: _ctx.tenantId }
+      store.set(keyFor(_ctx.tenantId, stored.id), stored)
+      return { ...stored }
+    },
+    async upsert(_ctx, row) {
+      const stored = { ...row, tenantId: _ctx.tenantId }
+      store.set(keyFor(_ctx.tenantId, stored.id), stored)
+      return { ...stored }
+    },
     async findById(_ctx, id) { return store.get(keyFor(_ctx.tenantId, id)) ?? null },
     async updateStatus(_ctx, id, status) {
       const key = keyFor(_ctx.tenantId, id)
@@ -47,8 +59,15 @@ export function createInMemoryWorkUnitRepository(): WorkUnitRepository {
 
 export function createInMemoryWorkUnitFeedbackRepository(): WorkUnitFeedbackRepository {
   const store = new Map<string, WorkUnitFeedbackRow>()
+  // Key by (tenantId, id) so identical feedback IDs across tenants stay isolated,
+  // and derive the stored tenant from ctx (never the caller-supplied row.tenantId).
+  const keyFor = (tenantId: string, id: string) => `${tenantId}:${id}`
   return {
-    async create(_ctx, row) { store.set(row.id, { ...row }); return row },
+    async create(_ctx, row) {
+      const stored = { ...row, tenantId: _ctx.tenantId }
+      store.set(keyFor(_ctx.tenantId, stored.id), stored)
+      return { ...stored }
+    },
     async findByWorkUnitId(_ctx, wuId) {
       return Array.from(store.values()).filter((r) => r.workUnitId === wuId && r.tenantId === _ctx.tenantId)
     },
@@ -60,7 +79,13 @@ export function createInMemoryWorkUnitFeedbackRepository(): WorkUnitFeedbackRepo
 export function createInMemoryIntegrationConnectionRepository(): IntegrationConnectionRepository {
   const store = new Map<string, IntegrationConnectionRow>()
   return {
-    async upsert(_ctx, row) { store.set(`${row.tenantId}:${row.provider}`, { ...row }); return row },
+    // Key and store by ctx.tenantId — a spoofed row.tenantId must not overwrite
+    // another tenant's provider connection (parity with the D1 owner-check upsert).
+    async upsert(_ctx, row) {
+      const stored = { ...row, tenantId: _ctx.tenantId }
+      store.set(`${_ctx.tenantId}:${stored.provider}`, stored)
+      return { ...stored }
+    },
     async findByProvider(_ctx, provider) { return store.get(`${_ctx.tenantId}:${provider}`) ?? null },
     async listByTenant(_ctx) { return Array.from(store.values()).filter((row) => row.tenantId === _ctx.tenantId) },
     async updateStatus(_ctx, provider, status, err) {
@@ -76,7 +101,13 @@ export function createInMemoryIntegrationConnectionRepository(): IntegrationConn
 export function createInMemoryAuditLogRepository(): AuditLogRepository {
   const store: AuditLogRow[] = []
   return {
-    async append(_ctx: TenantDbContext, row: AuditLogRow) { void _ctx; store.push(row); return row },
+    // Derive the stored tenant from ctx — never trust row.tenantId (parity with
+    // the D1 repo, which binds ctx.tenantId on INSERT).
+    async append(_ctx: TenantDbContext, row: AuditLogRow) {
+      const stored = { ...row, tenantId: _ctx.tenantId }
+      store.push(stored)
+      return { ...stored }
+    },
     async listRecent(_ctx: TenantDbContext, limit = 50) { return store.filter((row) => row.tenantId === _ctx.tenantId).slice(-limit).reverse() },
     async findByWorkUnitId(_ctx, wuId) {
       return store.filter((r) => r.tenantId === _ctx.tenantId && (r.requestId === wuId || r.workUnitId === wuId)).reverse()
@@ -90,20 +121,27 @@ export function createInMemoryUsageRepository(): UsageRepository {
   const events: UsageEventRow[] = []
   const summary = new Map<string, UsageDailySummaryRow>()
   return {
+    // tenant is derived from ctx — never trusted from row.tenantId. Summary keys
+    // use the context tenant (parity with the D1 repo binding ctx.tenantId).
     async recordEvent(_ctx, row) {
-      events.push(row)
-      const date = row.createdAt.slice(0, 10)
-      const key = `${row.tenantId}:${date}:${row.eventType}`
+      const stored = { ...row, tenantId: _ctx.tenantId }
+      events.push(stored)
+      const date = stored.createdAt.slice(0, 10)
+      const key = `${_ctx.tenantId}:${date}:${stored.eventType}`
       const existing = summary.get(key)
-      const qty = (existing?.quantity ?? 0) + row.quantity
-      summary.set(key, { tenantId: row.tenantId, date, eventType: row.eventType, quantity: qty, updatedAt: new Date().toISOString() })
-      return row
+      const qty = (existing?.quantity ?? 0) + stored.quantity
+      summary.set(key, { tenantId: _ctx.tenantId, date, eventType: stored.eventType, quantity: qty, updatedAt: new Date().toISOString() })
+      return { ...stored }
     },
-    async getDailySummary(_ctx, _tenantId, date) {
-      return Array.from(summary.values()).filter((s) => s.date === date && s.tenantId === _tenantId)
+    // The redundant tenant argument must equal ctx.tenantId, else fail closed —
+    // a caller must not read another tenant's usage by changing the argument.
+    async getDailySummary(_ctx, tenantId, date) {
+      if (tenantId !== _ctx.tenantId) return []
+      return Array.from(summary.values()).filter((s) => s.date === date && s.tenantId === _ctx.tenantId)
     },
     async getCurrentUsage(_ctx, tenantId, eventType) {
-      return events.filter((e) => e.tenantId === tenantId && e.eventType === eventType).reduce((sum, e) => sum + e.quantity, 0)
+      if (tenantId !== _ctx.tenantId) return 0
+      return events.filter((e) => e.tenantId === _ctx.tenantId && e.eventType === eventType).reduce((sum, e) => sum + e.quantity, 0)
     },
   }
 }
@@ -142,7 +180,13 @@ export function createInMemoryApprovalRecordRepository(): ApprovalRecordReposito
         .map((r) => ({ ...r }))
     },
     async updateStatus(_ctx, id, status) {
-      const r = records.get(id); if (!r) return null; const u = { ...r, status }; records.set(id, u); return { ...u }
+      // Tenant-scope the mutation (parity with the D1 `WHERE tenant_id = ? AND
+      // id = ?`): a wrong-tenant call returns null and leaves the row unchanged.
+      const r = records.get(id)
+      if (!r || r.tenantId !== _ctx.tenantId) return null
+      const u = { ...r, status }
+      records.set(id, u)
+      return { ...u }
     },
     async markUsed(ctx, id, usedAt) {
       // Phase 5B: atomic compare-and-set parity with the D1 repository. Only an

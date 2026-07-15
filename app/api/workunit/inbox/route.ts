@@ -16,6 +16,7 @@ import { resolveRouteRepositories } from "../../../lib/persistence/routeReposito
 import type { WorkUnitRepository } from "../../../lib/persistence/repositories.ts"
 import type { TenantId } from "../../../lib/tenant/types.ts"
 import { canViewInbox } from "../../../lib/security/tenantAccess.ts"
+import { canUseLocalPersistenceFallback } from "../../../lib/runtime/localFallbackAuthority.ts"
 
 const VALID_SOURCES = new Set(["mock", "github", "slack", "calendar", "all"])
 
@@ -59,10 +60,13 @@ export async function GET(request: Request): Promise<NextResponse> {
   const generatedWorkUnits = transformSignalsToInboxWorkUnits(signals)
   const repoResult = await resolveRouteRepositories(tenantId as TenantId, runtime)
   if (!repoResult.ok) {
-    if (process.env.NODE_ENV === "production") {
-      return NextResponse.json(safeError(requestId, repoResult.error), { status: repoResult.status })
+    // Production (Cloudflare OR Node) NEVER returns generated fallback data on a
+    // persistence failure. The generated fallback is authorized ONLY by the
+    // central helper (explicit non-production local development).
+    if (canUseLocalPersistenceFallback(runtime)) {
+      return NextResponse.json({ workUnits: generatedWorkUnits })
     }
-    return NextResponse.json({ workUnits: generatedWorkUnits })
+    return NextResponse.json(safeError(requestId, repoResult.error), { status: repoResult.status })
   }
 
   const { workUnits, usage, auditLogs, ctx } = repoResult.bundle

@@ -34,19 +34,38 @@ import type { TenantId, UserId } from "../tenant/types.ts"
 
 // ─── Tenant DB Resolver ─────────────────────────────────────────
 
-export type TenantDbResolutionError = {
-  kind: "tenant_not_found" | "tenant_inactive" | "database_not_found" | "resolution_failed"
-  tenantId: TenantId
-  message: string
-}
+/**
+ * Deterministic, client-safe failure reasons. These are enum values only — they
+ * never carry the raw tenantId, database id/name, SQL, or binding objects, so a
+ * reason can be surfaced (mapped to a safe HTTP error) without disclosure.
+ */
+export type TenantDbResolutionReason =
+  | "tenant_not_found"
+  | "tenant_inactive"
+  | "database_not_found"
+  | "database_inactive"
+  | "database_invalid"
+  | "resolution_failed"
+
+export type TenantDbResolution =
+  | { ok: true; ctx: TenantDbContext }
+  | { ok: false; reason: TenantDbResolutionReason }
 
 export interface TenantDbResolver {
   /**
-   * Resolve the D1 database for a given tenant.
-   * Must never return another tenant's database.
-   * Returns an error if the tenant is inactive, suspended, or has no database.
+   * Resolve the tenant-data D1 database for a given tenant.
+   *
+   * Contract (P0-PERSIST-014):
+   *   - validates an ACTIVE tenant in CONTROL_DB;
+   *   - validates the COMPLETE `tenant_databases` registry record: the row's
+   *     tenant_id must match the requested tenant, database_name / database_id /
+   *     schema_version must be present, bounded, and well-formed, and status must
+   *     be exactly "active" (`database_invalid` for a malformed record);
+   *   - returns the statically bound TENANT_DB_DEFAULT — NEVER the control DB;
+   *   - returns a typed reason on any failure (no throw for expected failures);
+   *   - never returns another tenant's context.
    */
-  resolveTenantDb(tenantId: TenantId): Promise<TenantDbContext>
+  resolveTenantDb(tenantId: TenantId): Promise<TenantDbResolution>
 }
 
 // ─── WorkUnit Repository ────────────────────────────────────────

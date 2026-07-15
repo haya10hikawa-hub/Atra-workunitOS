@@ -9,6 +9,7 @@ import type { TenantDbContext, ActionPreviewRow } from "../types.ts"
 import type { ActionPreviewRepository } from "../repositories.ts"
 import type { D1DatabaseLike } from "./types.ts"
 import { toJsonColumn, readJsonColumn, nowISO } from "./rowHelpers.ts"
+import { runInsertGuarded } from "./writeGuards.ts"
 
 // ─── SQL ────────────────────────────────────────────────────────
 
@@ -37,7 +38,9 @@ export class D1ActionPreviewRepository implements ActionPreviewRepository {
   }
 
   async create(ctx: TenantDbContext, row: ActionPreviewRow): Promise<ActionPreviewRow> {
-    await this.db.prepare(INSERT_SQL)
+    // Shared-D1 global object-ID namespace: a cross-tenant id collision fails
+    // closed (typed, no disclosure) and never overwrites the existing row.
+    await runInsertGuarded(this.db.prepare(INSERT_SQL)
       .bind(
         row.id,
         ctx.tenantId,
@@ -54,9 +57,10 @@ export class D1ActionPreviewRepository implements ActionPreviewRepository {
         row.expiresAt ?? null,
         // Security P1: server-set creator for four-eyes enforcement.
         row.creatorUserId ?? null,
-      )
-      .run()
-    return row
+      ))
+    // The INSERT binds ctx.tenantId; the returned row must reflect it too, so a
+    // spoofed row.tenantId controls neither storage nor the return value.
+    return { ...row, tenantId: ctx.tenantId }
   }
 
   async findById(ctx: TenantDbContext, id: string): Promise<ActionPreviewRow | null> {

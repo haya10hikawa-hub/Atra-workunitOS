@@ -42,6 +42,11 @@ test("P0: in-memory action previews are isolated by tenant", async () => {
   if (!tenantA.ok || !tenantB.ok) return
 
   const now = new Date().toISOString()
+  // A preview must reference a same-tenant WorkUnit (enforced at the bundle boundary).
+  await tenantA.bundle.workUnits.upsert(tenantA.bundle.ctx, {
+    id: "wu:shared-id", tenantId: "tenant-a" as TenantId, title: "t", kind: "task", priority: "medium",
+    sourceProvider: "mock", reason: "r", evidence: "e", nextAction: "n", status: "open", createdAt: now, updatedAt: now,
+  })
   await tenantA.bundle.actionPreviews.create(tenantA.bundle.ctx, {
     id: "preview:shared-id",
     tenantId: "tenant-a" as TenantId,

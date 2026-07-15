@@ -5,15 +5,18 @@
 import type { TenantDbContext, AuditLogRow } from "../types.ts"
 import type { AuditLogRepository } from "../repositories.ts"
 import type { D1DatabaseLike } from "./types.ts"
+import { runInsertGuarded } from "./writeGuards.ts"
 
 export class D1AuditLogRepository implements AuditLogRepository {
   private db: D1DatabaseLike
   constructor(db: D1DatabaseLike) { this.db = db }
 
   async append(_ctx: TenantDbContext, row: AuditLogRow): Promise<AuditLogRow> {
-    await this.db.prepare(
+    // Shared-D1 global object-ID namespace: a cross-tenant id collision fails
+    // closed (typed, no disclosure) and never overwrites the existing row.
+    await runInsertGuarded(this.db.prepare(
       "INSERT INTO audit_logs (id,tenant_id,actor_user_id,event_type,resource_type,resource_id,status,metadata_json,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-    ).bind(row.id, _ctx.tenantId, row.actorId ?? null, row.eventKind, row.workUnitId ? "work_unit" : null, row.workUnitId ?? row.requestId ?? null, row.reason ?? null, row.metadata ?? null, row.occurredAt).run()
+    ).bind(row.id, _ctx.tenantId, row.actorId ?? null, row.eventKind, row.workUnitId ? "work_unit" : null, row.workUnitId ?? row.requestId ?? null, row.reason ?? null, row.metadata ?? null, row.occurredAt))
     return { ...row, tenantId: _ctx.tenantId }
   }
 

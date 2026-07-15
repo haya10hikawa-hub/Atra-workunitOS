@@ -231,11 +231,45 @@ P7.1 MAC wiring is introduced.
 
 ## 12. Remaining dependencies
 
-- **Issue #130** still owns the tenant DB resolver and per-tenant repository
-  isolation (control-DB tenant registry lookup, per-tenant DB resolution,
-  shared-vs-per-tenant architecture, in-memory/D1 tenant-isolation parity). This
-  patch preserves the current `TENANT_DB_DEFAULT` behavior and only ensures the
-  request-scoped binding is genuine and validated.
+- **Issue #130** (tenant DB resolver + tenant-isolated repository parity) is
+  addressed by **P0-PERSIST-014**. Persistence authority is now **structural**:
+  - a production D1 bundle is producible only through
+    `resolveProductionRepositories`, whose `resolver` is **required** — the
+    complete `tenant_databases` record (tenant_id / database_name / database_id /
+    schema_version / status) is validated before any repository is returned;
+  - direct binding lives only behind the explicitly named
+    `resolveLocalRepositories`; presence of `CONTROL_DB` / `TENANT_DB_DEFAULT`
+    alone never yields a direct production bundle;
+  - `TENANT_DB_DEFAULT` is returned via the resolver (never the control DB), and
+    in-memory / D1 repositories enforce the same row-level tenant scoping;
+  - a persistence failure returns fallback data **only** in explicit non-production
+    local development (central `canUseLocalPersistenceFallback` helper); both
+    Cloudflare **and** Node production return safe `503`s, never keyed on
+    `runtime.source` alone or `process.env.NODE_ENV`;
+  - the legacy `resolveRepositories({ runtimeEnv })` direct path is **closed** — a
+    validated Cloudflare D1 env requires a resolver and fails closed without one;
+  - the legacy `env`/`process.env` seam is **local/test-only**: a `config.isProduction`
+    check fails closed **before** any mode dispatch, so **Node production can never use
+    the legacy env/direct-binding seam** (`options.d1Binding`, `process.env`, an omitted
+    resolver, `resolveLocalRepositories`, or an inferred authority). Node production D1
+    requires an explicit production persistence projection + tenant resolver via
+    `resolveProductionRepositories` / `resolveRepositoriesForAuthority({ kind:
+    "cloudflare_production" })`. **Every production-capable repository path requires
+    registry validation; no production path can infer local authority.** Cloudflare
+    production uses request-scoped production authority (one frozen snapshot per request);
+  - tenant-scoped children (Action Preview / Approval / WorkUnit Feedback) may
+    reference only **same-tenant** parents; a foreign-tenant or missing parent fails
+    closed IDENTICALLY as an opaque `parent_boundary_violation`. Object IDs are
+    globally unique, but child→parent edges are tenant-local. Constraint failures are
+    classified precisely: only UNIQUE/PRIMARY KEY → `object_id_conflict`; FK/CHECK/
+    NOT NULL/unknown → `write_failed`.
+  See [CLOUDFLARE_D1_SETUP.md §9a](CLOUDFLARE_D1_SETUP.md). The chosen architecture
+  is a single **shared** tenant D1 (row-level isolation) with a **global** object-ID
+  namespace enforced by the D1 PRIMARY KEY; physical per-tenant D1 routing is
+  deferred.
 - **Issue #155** still owns the broader reproducible production
-  persistence/migration proof. This patch does not claim production readiness
-  from a passing dry-run.
+  persistence/migration proof (migration ordering, idempotence, seeding,
+  operational setup) and remains **out of scope for remote migration execution**
+  in this PR. This patch does not claim production readiness from passing FakeD1
+  tests or a dry-run; FakeD1 does not enforce PRIMARY KEY constraints, so the
+  global-ID contract is proven by a real SQLite-backed test, not by FakeD1.

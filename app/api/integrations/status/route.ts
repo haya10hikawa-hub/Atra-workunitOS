@@ -5,6 +5,7 @@ import { resolveRouteRepositories } from "../../../lib/persistence/routeReposito
 import type { TenantId } from "../../../lib/tenant/types.ts"
 import { canViewIntegrationStatus } from "../../../lib/security/tenantAccess.ts"
 import { resolveValidatedRequestRuntimeConfig } from "../../../lib/runtime/requestRuntimeConfig.ts"
+import { canUseLocalPersistenceFallback } from "../../../lib/runtime/localFallbackAuthority.ts"
 
 const ALL_PROVIDERS = ["github", "slack", "calendar"] as const
 
@@ -47,10 +48,16 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.json({ providers })
   }
 
-  // Fallback: return defaults
-  return NextResponse.json({
-    providers: ALL_PROVIDERS.map(defaultStatus),
-  })
+  // Production (Cloudflare OR Node) NEVER returns "fake" default provider status
+  // to mask a persistence failure. The default-status fallback is authorized ONLY
+  // by the central helper (explicit non-production local development).
+  if (canUseLocalPersistenceFallback(runtime)) {
+    return NextResponse.json({
+      providers: ALL_PROVIDERS.map(defaultStatus),
+    })
+  }
+
+  return NextResponse.json(safeError("status-na", repoResult.error), { status: repoResult.status })
 }
 
 function safeProviderStatus(conn: { provider: string; status: string; mode: string; scopesJson?: string; lastSyncAt?: string; lastErrorCode?: string }) {

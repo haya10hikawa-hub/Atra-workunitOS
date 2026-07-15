@@ -85,6 +85,11 @@ test("feedback repo create + findByWorkUnitId", async () => {
     assert.equal(result.ok, true)
     if (!result.ok) return
 
+    // Feedback must reference a same-tenant WorkUnit (enforced at the bundle boundary).
+    await result.bundle.workUnits.upsert(ctx, {
+      id: "wu-test", tenantId, title: "t", kind: "task", priority: "medium", sourceProvider: "mock",
+      reason: "r", evidence: "e", nextAction: "n", status: "open", createdAt: now, updatedAt: now,
+    })
     const fb: WorkUnitFeedbackRow = {
       id: "fb-1", tenantId, workUnitId: "wu-test", feedback: "useful",
       actorUserId: "user-1", createdAt: now,

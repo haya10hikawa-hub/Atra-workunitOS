@@ -36,7 +36,11 @@ import {
   createInMemoryAuditLogRepository,
   createInMemoryUsageRepository,
 } from "./inMemoryRepositories.ts"
-import { getCloudflareD1Bindings } from "./cloudflareBindings.ts"
+import {
+  enforceActionPreviewParent,
+  enforceApprovalParents,
+  enforceFeedbackParent,
+} from "./relationshipEnforcedRepositories.ts"
 import { resolvePersistenceConfig } from "./persistenceConfig.ts"
 import { validateCloudflareRuntimeEnv } from "../runtime/validatedRuntimeEnv.ts"
 import type { PersistenceRuntimeConfig } from "../runtime/requestRuntimeConfig.ts"
@@ -54,18 +58,80 @@ export type TenantRepositoryBundle = {
   ctx: TenantDbContext
 }
 
+export type RepositoryResolutionError =
+  | "persistence_disabled"
+  | "tenant_resolution_failed"
+  | "tenant_forbidden"
+  | "d1_not_configured"
+
 export type RepositoryResolutionResult =
   | { ok: true; bundle: TenantRepositoryBundle }
-  | { ok: false; error: "persistence_disabled" | "tenant_resolution_failed" | "d1_not_configured" }
+  | { ok: false; error: RepositoryResolutionError }
+
+// ─── Tenant resolver consumption ─────────────────────────────────
+
+function isD1Like(value: unknown): value is D1DatabaseLike {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "prepare" in value &&
+    typeof (value as { prepare?: unknown }).prepare === "function"
+  )
+}
+
+/**
+ * Run the tenant DB resolver and validate its context.
+ *
+ * - `tenant_not_found` / `tenant_inactive` → `tenant_forbidden` (do not disclose
+ *   whether another tenant exists; both map to the same safe outcome).
+ * - any other reason / thrown error / mismatched context → `tenant_resolution_failed`.
+ * - `strict` (production): `ctx.db` is authoritative — it must be a valid D1-like
+ *   object and NEVER the control DB, and `options.d1Binding` cannot override it.
+ * - non-strict (local/test): a supplied `d1Binding` may stand in for a null `ctx.db`.
+ */
+async function resolveViaTenantResolver(
+  resolver: TenantDbResolver,
+  tenantId: TenantId,
+  opts: { strict: boolean; controlDb?: D1DatabaseLike; d1Binding?: D1DatabaseLike },
+): Promise<{ ok: true; store: D1DatabaseLike; ctx: TenantDbContext } | { ok: false; error: RepositoryResolutionError }> {
+  let resolution
+  try {
+    resolution = await resolver.resolveTenantDb(tenantId)
+  } catch {
+    return { ok: false, error: "tenant_resolution_failed" }
+  }
+  if (!resolution.ok) {
+    const forbidden = resolution.reason === "tenant_not_found" || resolution.reason === "tenant_inactive"
+    return { ok: false, error: forbidden ? "tenant_forbidden" : "tenant_resolution_failed" }
+  }
+  const ctx = resolution.ctx
+  // The resolved context must be for exactly the requested authenticated tenant.
+  if (ctx.tenantId !== tenantId) return { ok: false, error: "tenant_resolution_failed" }
+
+  if (opts.strict) {
+    const store = ctx.db
+    if (!isD1Like(store)) return { ok: false, error: "tenant_resolution_failed" }
+    if (opts.controlDb && store === opts.controlDb) return { ok: false, error: "tenant_resolution_failed" }
+    return { ok: true, store, ctx }
+  }
+  const store = (opts.d1Binding ?? ctx.db) as D1DatabaseLike | null
+  if (!isD1Like(store)) return { ok: false, error: "tenant_resolution_failed" }
+  return { ok: true, store, ctx }
+}
 
 // ─── Helpers ────────────────────────────────────────────────────
 
 function inMemoryBundle(tenantId: TenantId): TenantRepositoryBundle {
+  // Parent-ownership is enforced at this bundle boundary using the SAME sibling
+  // repositories (tenant-scoped findById), so the in-memory implementation never
+  // accepts a relationship the D1 implementation would reject.
+  const workUnits = createInMemoryWorkUnitRepository()
+  const actionPreviews = enforceActionPreviewParent(createInMemoryActionPreviewRepo(), { workUnits })
   return {
-    actionPreviews: createInMemoryActionPreviewRepo(),
-    approvalRecords: createInMemoryApprovalRecordRepository(),
-    workUnits: createInMemoryWorkUnitRepository(),
-    workUnitFeedback: createInMemoryWorkUnitFeedbackRepository(),
+    actionPreviews,
+    approvalRecords: enforceApprovalParents(createInMemoryApprovalRecordRepository(), { actionPreviews, workUnits }),
+    workUnits,
+    workUnitFeedback: enforceFeedbackParent(createInMemoryWorkUnitFeedbackRepository(), { workUnits }),
     integrationConnections: createInMemoryIntegrationConnectionRepository(),
     auditLogs: createInMemoryAuditLogRepository(),
     usage: createInMemoryUsageRepository(),
@@ -74,16 +140,107 @@ function inMemoryBundle(tenantId: TenantId): TenantRepositoryBundle {
 }
 
 function d1Bundle(tenantId: TenantId, d1Store: D1DatabaseLike, ctx?: TenantDbContext): TenantRepositoryBundle {
+  // Same tenant-local parent enforcement as the in-memory bundle: children may
+  // only reference parents owned by ctx.tenantId, checked via the shared store.
+  const workUnits = new D1WorkUnitRepository(d1Store)
+  const actionPreviews = enforceActionPreviewParent(new D1ActionPreviewRepository(d1Store), { workUnits })
   return {
-    actionPreviews: new D1ActionPreviewRepository(d1Store),
-    approvalRecords: new D1ApprovalRecordRepository(d1Store),
-    workUnits: new D1WorkUnitRepository(d1Store),
-    workUnitFeedback: new D1WorkUnitFeedbackRepository(d1Store),
+    actionPreviews,
+    approvalRecords: enforceApprovalParents(new D1ApprovalRecordRepository(d1Store), { actionPreviews, workUnits }),
+    workUnits,
+    workUnitFeedback: enforceFeedbackParent(new D1WorkUnitFeedbackRepository(d1Store), { workUnits }),
     integrationConnections: new D1IntegrationConnectionRepository(d1Store),
     auditLogs: new D1AuditLogRepository(d1Store),
     usage: new D1UsageRepository(d1Store),
     ctx: ctx ?? { tenantId, db: null },
   }
+}
+
+// ─── Repository authority (structural production / local separation) ─
+//
+// Blocker 1 (P0-PERSIST-014): production and local repository resolution are
+// separated STRUCTURALLY, not by comment or call convention. A production D1
+// bundle is producible ONLY through `resolveProductionRepositories`, whose
+// `resolver` parameter is REQUIRED at the type level — a production call cannot
+// compile or succeed without one. Direct-binding (no registry validation) lives
+// ONLY behind the explicitly named `resolveLocalRepositories` API; authority is
+// never inferred from an omitted argument.
+
+export type RepositoryAuthority =
+  | {
+      readonly kind: "cloudflare_production"
+      readonly persistence: PersistenceRuntimeConfig
+      readonly resolver: TenantDbResolver
+    }
+  | {
+      readonly kind: "local_development"
+      readonly persistence: PersistenceRuntimeConfig
+      readonly allowDirectBinding: true
+      readonly resolver?: TenantDbResolver
+      readonly d1Binding?: D1DatabaseLike
+    }
+
+/** Dispatch by explicit authority. The ONLY entry point that both branches share. */
+export async function resolveRepositoriesForAuthority(
+  tenantId: TenantId,
+  authority: RepositoryAuthority,
+): Promise<RepositoryResolutionResult> {
+  return authority.kind === "cloudflare_production"
+    ? resolveProductionRepositories(tenantId, authority)
+    : resolveLocalRepositories(tenantId, authority)
+}
+
+/**
+ * PRODUCTION repository resolution. `resolver` is a REQUIRED parameter, so a
+ * production D1 bundle cannot be produced without registry validation. There is
+ * no direct-binding path here: `d1Binding` is not accepted, `TENANT_DB_DEFAULT`
+ * is never bundled directly, `ctx.db` is authoritative, the control DB is
+ * rejected as tenant storage, and a context-tenant mismatch fails closed.
+ */
+export async function resolveProductionRepositories(
+  tenantId: TenantId,
+  authority: { persistence: PersistenceRuntimeConfig; resolver: TenantDbResolver },
+): Promise<RepositoryResolutionResult> {
+  const p = authority.persistence
+  // Production persistence is always D1; anything else fails closed.
+  if (p.mode !== "d1") return { ok: false, error: "persistence_disabled" }
+  if (!p.CONTROL_DB || !p.TENANT_DB_DEFAULT) return { ok: false, error: "d1_not_configured" }
+  // MANDATORY registry validation via the resolver (strict). ctx.db is
+  // authoritative and can never be overridden by a caller-supplied binding.
+  const r = await resolveViaTenantResolver(authority.resolver, tenantId, { strict: true, controlDb: p.CONTROL_DB })
+  if (!r.ok) return { ok: false, error: r.error }
+  return { ok: true, bundle: d1Bundle(tenantId, r.store, r.ctx) }
+}
+
+/**
+ * LOCAL / TEST repository resolution — the ONLY explicitly named API that permits
+ * a direct binding (no registry validation). `allowDirectBinding: true` must be
+ * passed by the caller so local authority is a deliberate, named choice and is
+ * never inferred from an omitted resolver.
+ */
+export async function resolveLocalRepositories(
+  tenantId: TenantId,
+  authority: {
+    persistence: PersistenceRuntimeConfig
+    allowDirectBinding: true
+    resolver?: TenantDbResolver
+    d1Binding?: D1DatabaseLike
+  },
+): Promise<RepositoryResolutionResult> {
+  const p = authority.persistence
+  if (p.mode === "in_memory") return { ok: true, bundle: inMemoryBundle(tenantId) }
+  if (p.mode !== "d1") return { ok: false, error: "persistence_disabled" }
+  // A local resolver, when supplied, still validates the registry (non-strict:
+  // a supplied d1Binding may stand in for a null ctx.db).
+  if (authority.resolver) {
+    const r = await resolveViaTenantResolver(authority.resolver, tenantId, { strict: false, d1Binding: authority.d1Binding })
+    if (!r.ok) return { ok: false, error: r.error }
+    return { ok: true, bundle: d1Bundle(tenantId, r.store, r.ctx) }
+  }
+  // Explicit local direct binding.
+  const store = authority.d1Binding ?? p.TENANT_DB_DEFAULT
+  if (!store) return { ok: false, error: "d1_not_configured" }
+  return { ok: true, bundle: d1Bundle(tenantId, store) }
 }
 
 // ─── Resolver ────────────────────────────────────────────────────
@@ -107,89 +264,73 @@ export async function resolveRepositories(
     const p = options.persistence
     if (p.mode === "d1") {
       if (!p.CONTROL_DB || !p.TENANT_DB_DEFAULT) return { ok: false, error: "d1_not_configured" }
-      if (options.resolver) {
-        try {
-          const ctx = await options.resolver.resolveTenantDb(tenantId)
-          const d1Store = (options.d1Binding ?? ctx.db) as D1DatabaseLike | null
-          if (!d1Store) return { ok: false, error: "d1_not_configured" }
-          return { ok: true, bundle: d1Bundle(tenantId, d1Store, ctx) }
-        } catch {
-          return { ok: false, error: "tenant_resolution_failed" }
-        }
-      }
-      // Preserve current TENANT_DB_DEFAULT behavior — Issue #130 still owns real
-      // per-tenant DB resolution — but the binding is genuine and validated.
-      return { ok: true, bundle: d1Bundle(tenantId, options.d1Binding ?? p.TENANT_DB_DEFAULT) }
+      // Blocker 1: a production-capable D1 bundle REQUIRES a resolver (mandatory
+      // registry validation). resolveRepositories never infers local authority
+      // from an omitted resolver and never returns a direct TENANT_DB_DEFAULT
+      // bundle here — local/test direct binding must go through the explicitly
+      // named resolveLocalRepositories() API.
+      if (!options.resolver) return { ok: false, error: "d1_not_configured" }
+      return resolveProductionRepositories(tenantId, { persistence: p, resolver: options.resolver })
     }
     if (p.mode === "in_memory") return { ok: true, bundle: inMemoryBundle(tenantId) }
     return { ok: false, error: "persistence_disabled" }
   }
 
-  // ── Request-scoped Cloudflare runtime env takes precedence ──
+  // ── Cloudflare runtime env is PRODUCTION-CAPABLE → resolver MANDATORY ──
   //
-  // When a Cloudflare runtime env is present (production / OpenNext worker), the
-  // persistence mode AND the D1 bindings come from the SAME validated snapshot.
-  // process.env can never override the active request env, and in-memory
-  // repositories are never returned here.
+  // Blocker 1: a validated Cloudflare D1 runtime env can never be converted
+  // directly into a repository bundle. Registry validation is mandatory, so this
+  // path routes through resolveProductionRepositories with a REQUIRED resolver.
+  // No resolver → fail closed (no direct TENANT_DB_DEFAULT bundle, no d1Binding
+  // override); ctx.db stays authoritative and the control DB is rejected.
   if (options.runtimeEnv) {
     const validated = validateCloudflareRuntimeEnv(options.runtimeEnv)
     if (!validated.ok) {
       // Runtime env present but missing/malformed binding or var → fail closed.
       return { ok: false, error: "d1_not_configured" }
     }
-
-    // Mode is authoritatively "d1" from the validated snapshot.
-    if (options.resolver) {
-      try {
-        const ctx = await options.resolver.resolveTenantDb(tenantId)
-        const d1Store = (options.d1Binding ?? ctx.db) as D1DatabaseLike | null
-        if (!d1Store) return { ok: false, error: "d1_not_configured" }
-        return { ok: true, bundle: d1Bundle(tenantId, d1Store, ctx) }
-      } catch {
-        return { ok: false, error: "tenant_resolution_failed" }
-      }
-    }
-
-    // Preserve current TENANT_DB_DEFAULT behavior — Issue #130 still owns real
-    // per-tenant DB resolution — but the binding is now genuine and validated.
-    const d1Store = options.d1Binding ?? validated.env.TENANT_DB_DEFAULT
-    return { ok: true, bundle: d1Bundle(tenantId, d1Store) }
+    if (!options.resolver) return { ok: false, error: "d1_not_configured" }
+    return resolveProductionRepositories(tenantId, {
+      persistence: { mode: "d1", CONTROL_DB: validated.env.CONTROL_DB, TENANT_DB_DEFAULT: validated.env.TENANT_DB_DEFAULT },
+      resolver: options.resolver,
+    })
   }
 
-  // ── No runtime env → local/dev config via process.env ──
+  // ── No runtime env → LOCAL/TEST config via process.env (never production) ──
+  //
+  // This branch derives its authority from process.env (the local development
+  // seam). It is LOCAL/TEST ONLY.
   const config = resolvePersistenceConfig(options.env)
 
-  switch (config.mode) {
-    case "in_memory": {
-      if (config.isProduction) return { ok: false, error: "persistence_disabled" }
-      return { ok: true, bundle: inMemoryBundle(tenantId) }
-    }
+  // Round 3 (P0): a PRODUCTION config must NEVER produce a repository bundle
+  // through this legacy seam. This fail-closed check runs BEFORE any mode
+  // handling, so Node production can never reach resolveLocalRepositories, consume
+  // options.d1Binding, or infer authority from an omitted/supplied resolver. Node
+  // production D1 must use resolveProductionRepositories() with a tenant resolver
+  // (registry validation mandatory). A supplied resolver here is NOT sufficient to
+  // promote the legacy env seam to production authority.
+  if (config.isProduction) {
+    return { ok: false, error: config.mode === "d1" ? "d1_not_configured" : "persistence_disabled" }
+  }
 
-    case "d1": {
-      if (options.resolver) {
-        try {
-          const ctx = await options.resolver.resolveTenantDb(tenantId)
-          const d1Store = (options.d1Binding ?? ctx.db) as D1DatabaseLike | null
-          if (!d1Store) return { ok: false, error: "d1_not_configured" }
-          return { ok: true, bundle: d1Bundle(tenantId, d1Store, ctx) }
-        } catch {
-          return { ok: false, error: "tenant_resolution_failed" }
-        }
-      }
-      const d1Store = options.d1Binding ?? resolveRuntimeBinding(options)
-      if (!d1Store) return { ok: false, error: "d1_not_configured" }
-      return { ok: true, bundle: d1Bundle(tenantId, d1Store) }
-    }
+  switch (config.mode) {
+    case "in_memory":
+      return { ok: true, bundle: inMemoryBundle(tenantId) }
+
+    case "d1":
+      // Local/test D1 ONLY (non-production): a direct binding is permitted through
+      // the explicit local API; a supplied resolver still validates the registry.
+      return resolveLocalRepositories(tenantId, {
+        persistence: { mode: "d1" },
+        allowDirectBinding: true,
+        resolver: options.resolver,
+        d1Binding: options.d1Binding,
+      })
 
     case "disabled":
     default:
       return { ok: false, error: "persistence_disabled" }
   }
-}
-
-function resolveRuntimeBinding(options: { runtimeEnv?: AppEnv }): D1DatabaseLike | null {
-  if (!options.runtimeEnv) return null
-  return getCloudflareD1Bindings(options.runtimeEnv).tenantDefaultDb ?? null
 }
 
 // ─── In-Memory ActionPreview (legacy helper) ────────────────────
