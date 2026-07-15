@@ -186,6 +186,37 @@ Cloudflare → production (mandatory resolver, built from the same snapshot, nev
 `process.env`); local → the named local API. The presence of `CONTROL_DB` /
 `TENANT_DB_DEFAULT` alone can never create a direct production bundle.
 
+**Legacy `runtimeEnv` direct path CLOSED.** The legacy public `resolveRepositories()`
+no longer converts a validated Cloudflare runtime env directly into a bundle: a
+validated Cloudflare D1 `runtimeEnv` now REQUIRES a resolver and routes through
+`resolveProductionRepositories` (registry validation mandatory). Without a
+resolver it fails closed — no direct `TENANT_DB_DEFAULT` bundle and no `d1Binding`
+override. **Every production-capable repository path requires registry validation;**
+the `env`/`process.env` branch is local/test-only and flows through the explicit
+`resolveLocalRepositories`. An architecture guard fails if the `runtimeEnv` branch
+ever calls `d1Bundle(...)` directly or passes `validated.env.TENANT_DB_DEFAULT` to
+`d1Bundle` without a preceding resolver.
+
+### Tenant-local parent relationships (global IDs, tenant-scoped edges)
+
+Object IDs are **globally unique** across the shared tenant D1, but a tenant-scoped
+child may reference ONLY parents owned by the same `ctx.tenantId`. Enforcement lives
+at the persistence-SERVICE boundary (the repository bundle every route consumes),
+for BOTH the D1 and in-memory implementations — **not** only in API routes:
+
+- **Action Preview create** verifies the referenced WorkUnit is owned by the tenant.
+- **Approval create** verifies the Preview and WorkUnit are owned by the tenant, that
+  the Preview's stored `work_unit_id` matches the supplied WorkUnit id, and that the
+  Preview's action type / target hash / payload hash match the approval input (a
+  substituted Preview↔WorkUnit relationship fails closed). The final runtime
+  exact-binding claim is unchanged.
+- **WorkUnit Feedback create** verifies the referenced WorkUnit is owned by the tenant.
+
+A violation fails closed with ONE opaque `parent_boundary_violation`
+(`D1RepositoryError`). A **foreign-tenant parent and a missing parent are
+indistinguishable** — the error discloses neither whether the parent exists, which
+tenant owns it, the parent row, its title/payload, raw SQL, nor any binding.
+
 ### Mandatory full-record registry validation (Blocker 3)
 
 The resolver validates the **complete** `tenant_databases` record, not just status:
@@ -230,6 +261,12 @@ multiple tenants share one physical D1. Under this schema:
 - a cross-tenant global-ID collision **fails closed** with a typed repository
   failure — it never overwrites, updates, reveals, or deletes the existing
   tenant's row, and never discloses which tenant owns the ID.
+
+**Precise constraint classification.** Only a genuine UNIQUE / PRIMARY KEY
+collision maps to `object_id_conflict`. FOREIGN KEY, CHECK, NOT NULL, and unknown
+driver errors map to the generic `write_failed`; the bare "constraint failed"
+phrase is never treated as a global-ID collision. No typed error carries the raw
+driver message, table/column names, SQL, tenant id, or row content.
 
 **FakeD1 limitation.** `FakeD1Database` is a Map-per-table simulation that does
 **not** enforce PRIMARY KEY / UNIQUE constraints (a duplicate id silently

@@ -26,9 +26,8 @@ import { D1IntegrationConnectionRepository } from "../app/lib/persistence/d1/int
 import { D1AuditLogRepository } from "../app/lib/persistence/d1/auditLogRepository.ts"
 import { D1UsageRepository } from "../app/lib/persistence/d1/usageRepository.ts"
 import { D1ApprovalRecordRepository } from "../app/lib/persistence/d1/approvalRecordRepository.ts"
-import { D1ActionPreviewRepository } from "../app/lib/persistence/d1/actionPreviewRepository.ts"
-import { resolveRepositories, resetInMemoryReposForTests } from "../app/lib/persistence/repositoryResolver.ts"
-import type { ActionPreviewRepository } from "../app/lib/persistence/repositories.ts"
+import { resolveRepositories, resolveLocalRepositories, resetInMemoryReposForTests } from "../app/lib/persistence/repositoryResolver.ts"
+import type { ActionPreviewRepository, WorkUnitRepository } from "../app/lib/persistence/repositories.ts"
 import { FakeD1Database } from "./helpers/fakeD1.ts"
 import type { TenantDbContext } from "../app/lib/persistence/types.ts"
 import type { TenantId, UserId } from "../app/lib/tenant/types.ts"
@@ -208,12 +207,20 @@ for (const kind of KINDS) {
 
 // ─── Action Preview ─────────────────────────────────────────────
 
-async function actionPreviewRepo(kind: (typeof KINDS)[number]): Promise<ActionPreviewRepository> {
-  if (kind === "d1") return new D1ActionPreviewRepository(new FakeD1Database())
+// Both kinds go through the ENFORCING bundle (parents are tenant-scoped), so the
+// parity assertions include parent-ownership. A shared store lets us seed the
+// parent WorkUnit that the preview must reference.
+async function actionPreviewSetup(kind: (typeof KINDS)[number]): Promise<{ previews: ActionPreviewRepository; workUnits: WorkUnitRepository }> {
+  if (kind === "d1") {
+    const db = new FakeD1Database()
+    const result = await resolveLocalRepositories(A, { persistence: { mode: "d1", TENANT_DB_DEFAULT: db }, allowDirectBinding: true })
+    if (!result.ok) throw new Error("d1 bundle failed")
+    return { previews: result.bundle.actionPreviews, workUnits: result.bundle.workUnits }
+  }
   resetInMemoryReposForTests()
   const result = await resolveRepositories(A, { persistence: { mode: "in_memory" } })
   if (!result.ok) throw new Error("in-memory bundle failed")
-  return result.bundle.actionPreviews
+  return { previews: result.bundle.actionPreviews, workUnits: result.bundle.workUnits }
 }
 const pvRow = (id: string, tenantId: TenantId, wu: string) => ({
   id, tenantId, workUnitId: wu, actionType: "slack_reply", targetPreview: "{}", payloadPreview: "{}",
@@ -222,12 +229,15 @@ const pvRow = (id: string, tenantId: TenantId, wu: string) => ({
 
 for (const kind of KINDS) {
   test(`[${kind}] ActionPreview: spoofed-tenant create + wrong-tenant find/list isolation`, async () => {
-    const repo = await actionPreviewRepo(kind)
-    const created = await repo.create(ctx(A), pvRow("pv", B, "wuP"))
+    const { previews, workUnits } = await actionPreviewSetup(kind)
+    // Seed the parent WorkUnit under tenant A — a preview must reference a
+    // same-tenant WorkUnit (enforced at the persistence-service boundary).
+    await workUnits.create(ctx(A), wuRow("wuP", A))
+    const created = await previews.create(ctx(A), pvRow("pv", B, "wuP"))
     assert.equal(created.tenantId, A)
-    assert.equal((await repo.findById(ctx(A), "pv"))?.tenantId, A)
-    assert.equal(await repo.findById(ctx(B), "pv"), null)
-    assert.equal((await repo.findByWorkUnitId(ctx(A), "wuP")).length, 1)
-    assert.equal((await repo.findByWorkUnitId(ctx(B), "wuP")).length, 0)
+    assert.equal((await previews.findById(ctx(A), "pv"))?.tenantId, A)
+    assert.equal(await previews.findById(ctx(B), "pv"), null)
+    assert.equal((await previews.findByWorkUnitId(ctx(A), "wuP")).length, 1)
+    assert.equal((await previews.findByWorkUnitId(ctx(B), "wuP")).length, 0)
   })
 }

@@ -167,6 +167,11 @@ test("7. in-memory action-preview creator round-trips + tenant-scoped", async ()
     const a = await resolveRepositories("tenant-a" as TenantId)
     assert.equal(a.ok, true)
     if (!a.ok) return
+    // A preview must reference a same-tenant WorkUnit (enforced at the bundle boundary).
+    await a.bundle.workUnits.upsert(a.bundle.ctx, {
+      id: "wu", tenantId: "tenant-a" as TenantId, title: "t", kind: "task", priority: "medium", sourceProvider: "mock",
+      reason: "r", evidence: "e", nextAction: "n", status: "open", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    })
     await a.bundle.actionPreviews.create(a.bundle.ctx, {
       id: "p:mem", tenantId: "tenant-a" as TenantId, workUnitId: "wu", actionType: "internal_task",
       targetPreview: "{}", payloadPreview: "{}", requiresApproval: 1, status: "preview",
@@ -191,6 +196,11 @@ test("7. in-memory action-preview creator round-trips + tenant-scoped", async ()
 test("8. D1 action-preview creator round-trips (FakeD1)", async () => {
   await withPersistence(async () => {
     const b = await bundle()
+    // A preview must reference a same-tenant WorkUnit (enforced at the bundle boundary).
+    await b.workUnits.upsert(b.ctx, {
+      id: workUnitId, tenantId, title: "t", kind: "task", priority: "medium", sourceProvider: "mock",
+      reason: "r", evidence: "e", nextAction: "n", status: "open", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    })
     await b.actionPreviews.create(b.ctx, {
       id: "p:d1", tenantId, workUnitId, actionType: "internal_task",
       targetPreview: "{}", payloadPreview: "{}", requiresApproval: 1, status: "preview",

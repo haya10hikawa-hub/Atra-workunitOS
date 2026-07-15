@@ -80,7 +80,14 @@ test("D1 lifecycle: create preview + approve + verify through resolver (explicit
   })
   assert.equal(repoResult.ok, true)
   if (!repoResult.ok) return
-  const { actionPreviews: previewRepo, approvalRecords: approvalRepo, ctx } = repoResult.bundle
+  const { actionPreviews: previewRepo, approvalRecords: approvalRepo, workUnits, ctx } = repoResult.bundle
+
+  // Persist the parent WorkUnit (a preview must reference a same-tenant WorkUnit).
+  await workUnits.upsert(ctx, {
+    id: "wu-d1", tenantId, title: "t", kind: "task", priority: "medium", sourceProvider: "mock",
+    reason: "r", evidence: "e", nextAction: "n", status: "open",
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  })
 
   // Create preview
   const target = { channel: "#ops" }

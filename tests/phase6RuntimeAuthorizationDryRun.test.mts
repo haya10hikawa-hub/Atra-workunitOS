@@ -119,11 +119,13 @@ async function withJwtPersistence(
 async function seedApproval(tenant: TenantId = tenantId, status: ApprovalRecordRow["status"] = "approved") {
   const repoResult = await resolveRouteRepositories(tenant)
   if (!repoResult.ok) throw new Error("repo failed")
-  const { approvalRecords: repo, actionPreviews: previewRepo, ctx } = repoResult.bundle
+  const { approvalRecords: repo, actionPreviews: previewRepo, workUnits, ctx } = repoResult.bundle
   const now = new Date().toISOString()
   const future = new Date(Date.now() + 60 * 60_000).toISOString()
-  await repo.create(ctx, { id: approvalId, tenantId: tenant, workUnitId, actionPreviewId: previewId, actionType, targetHash: "t-hash", payloadHash: "p-hash", status, createdAt: now, approvedAt: status === "approved" ? now : undefined, expiresAt: future })
+  // Parent-ownership order (enforcing bundle): WorkUnit → matching Preview → Approval.
+  await workUnits.upsert(ctx, { id: workUnitId, tenantId: tenant, title: "t", kind: "task", priority: "medium", sourceProvider: "mock", reason: "r", evidence: "e", nextAction: "n", status: "open", createdAt: now, updatedAt: now })
   await previewRepo.create(ctx, { id: previewId, tenantId: tenant, workUnitId, actionType, targetPreview: "{}", payloadPreview: "{}", requiresApproval: 1, status: "preview", targetHash: "t-hash", payloadHash: "p-hash", createdAt: now, expiresAt: future })
+  await repo.create(ctx, { id: approvalId, tenantId: tenant, workUnitId, actionPreviewId: previewId, actionType, targetHash: "t-hash", payloadHash: "p-hash", status, createdAt: now, approvedAt: status === "approved" ? now : undefined, expiresAt: future })
   return { repo, ctx }
 }
 

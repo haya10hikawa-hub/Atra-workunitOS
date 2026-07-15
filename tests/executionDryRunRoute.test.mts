@@ -56,7 +56,7 @@ async function seedApproval(
   const repoResult = await resolveRouteRepositories(overrides.tenantId as TenantId)
   assert.equal(repoResult.ok, true)
   if (!repoResult.ok) throw new Error("repo failed")
-  const { approvalRecords: repo, actionPreviews: previewRepo, ctx } = repoResult.bundle
+  const { approvalRecords: repo, actionPreviews: previewRepo, workUnits, ctx } = repoResult.bundle
 
   const now = new Date().toISOString()
   const futureExpiry = new Date(Date.now() + 30 * 60_000).toISOString()
@@ -78,9 +78,14 @@ async function seedApproval(
     usedAt: overrides.usedAt ?? undefined,
   }
 
-  await repo.create(ctx, row)
+  // Parent-ownership order (enforcing bundle): WorkUnit → matching Preview → Approval.
+  await workUnits.upsert(ctx, {
+    id: row.workUnitId, tenantId: row.tenantId, title: "t", kind: "task", priority: "medium",
+    sourceProvider: "mock", reason: "r", evidence: "e", nextAction: "n", status: "open",
+    createdAt: now, updatedAt: now,
+  })
 
-  // Seed a matching preview record so hash verification passes
+  // A matching preview (same work unit / action type / hashes) so approval create passes.
   const previewRow = {
     id: row.actionPreviewId,
     tenantId: row.tenantId,
@@ -96,6 +101,8 @@ async function seedApproval(
     expiresAt: futureExpiry,
   }
   await previewRepo.create(ctx, previewRow)
+
+  await repo.create(ctx, row)
 
   return { row, previewRow }
 }

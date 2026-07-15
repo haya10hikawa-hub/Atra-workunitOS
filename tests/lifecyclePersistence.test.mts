@@ -79,7 +79,14 @@ test("full lifecycle with in-memory persistence: preview → approve → verify 
   })
   assert.equal(repoResult.ok, true)
   if (!repoResult.ok) return
-  const { actionPreviews: previewRepo, approvalRecords: approvalRepo, ctx } = repoResult.bundle
+  const { actionPreviews: previewRepo, approvalRecords: approvalRepo, workUnits, ctx } = repoResult.bundle
+
+  // 1b. Persist the parent WorkUnit (a preview must reference a same-tenant WorkUnit).
+  await workUnits.upsert(ctx, {
+    id: "wu-1", tenantId, title: "t", kind: "task", priority: "medium", sourceProvider: "mock",
+    reason: "r", evidence: "e", nextAction: "n", status: "open",
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  })
 
   // 2. Create preview (simulating POST /api/workunit/:id/action-preview)
   const target = { channel: "#general" }

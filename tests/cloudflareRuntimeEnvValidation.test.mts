@@ -3,7 +3,8 @@ import assert from "node:assert/strict"
 import { validateCloudflareRuntimeEnv } from "../app/lib/runtime/validatedRuntimeEnv.ts"
 import { resolveRepositories } from "../app/lib/persistence/repositoryResolver.ts"
 import { resetInMemoryReposForTests } from "../app/lib/persistence/repositoryResolver.ts"
-import { D1ApprovalRecordRepository } from "../app/lib/persistence/d1/approvalRecordRepository.ts"
+import { D1WorkUnitRepository } from "../app/lib/persistence/d1/workUnitRepository.ts"
+import { createFakeTenantDbResolver } from "../app/lib/persistence/tenantDbResolver.ts"
 import { FakeD1Database } from "./helpers/fakeD1.ts"
 import type { AppEnv } from "../app/types/cloudflare-env.ts"
 import type { TenantId } from "../app/lib/tenant/types.ts"
@@ -94,27 +95,52 @@ test("snapshot is immutable after later source mutation", () => {
 
 // ─── Repository resolution coherence (mode + binding from one snapshot) ──
 
-test("runtime env with valid D1 yields d1 repositories", async () => {
+function activeResolver(env: AppEnv) {
+  // A fake resolver mirroring the D1 resolver: returns the runtime's TENANT_DB_DEFAULT.
+  return createFakeTenantDbResolver(
+    new Map([[tenantId, { tenant: { status: "active" }, dbRef: { status: "active" } }]]),
+    env.TENANT_DB_DEFAULT,
+  )
+}
+
+test("Blocker 1: a valid Cloudflare runtime env WITHOUT a resolver fails closed (no bundle)", async () => {
   resetInMemoryReposForTests()
   const result = await resolveRepositories(tenantId, { runtimeEnv: fullEnv() })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.error, "d1_not_configured")
+})
+
+test("Blocker 1: a valid Cloudflare runtime env plus a hostile d1Binding still requires the resolver", async () => {
+  resetInMemoryReposForTests()
+  const result = await resolveRepositories(tenantId, { runtimeEnv: fullEnv(), d1Binding: new FakeD1Database() })
+  // No resolver → fail closed; the hostile binding can never mint a bundle.
+  assert.equal(result.ok, false)
+})
+
+test("runtime env with valid D1 + a valid resolver yields registry-validated d1 repositories", async () => {
+  resetInMemoryReposForTests()
+  const env = fullEnv()
+  const result = await resolveRepositories(tenantId, { runtimeEnv: env, resolver: activeResolver(env) })
   assert.equal(result.ok, true)
+  if (result.ok) assert.ok(result.bundle.workUnits instanceof D1WorkUnitRepository)
 })
 
 test("process.env cannot override the request-scoped persistence mode", async () => {
   resetInMemoryReposForTests()
   // Hostile config source that tries to force in-memory. Because a runtime env
   // is present, this must be ignored entirely (never even consulted).
+  const env = fullEnv()
   const hostileEnv = {
     NODE_ENV: "development",
     PERSISTENCE_MODE: "in_memory",
     ALLOW_IN_MEMORY_PERSISTENCE: "true",
   }
-  const result = await resolveRepositories(tenantId, { runtimeEnv: fullEnv(), env: hostileEnv })
+  const result = await resolveRepositories(tenantId, { runtimeEnv: env, env: hostileEnv, resolver: activeResolver(env) })
   assert.equal(result.ok, true)
   // If the hostile config had won we'd get in-memory repos; assert the genuine
-  // D1-backed repository type was selected instead.
+  // D1-backed repository type was selected instead (workUnits is the unwrapped D1 repo).
   if (result.ok) {
-    assert.ok(result.bundle.approvalRecords instanceof D1ApprovalRecordRepository)
+    assert.ok(result.bundle.workUnits instanceof D1WorkUnitRepository)
     assert.equal(result.bundle.ctx.tenantId, tenantId)
   }
 })

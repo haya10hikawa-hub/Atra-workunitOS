@@ -16,7 +16,12 @@ test("approval status route does not expose approvalId or hashes", async () => {
     const repoResult = await resolveRouteRepositories(tenantId)
     assert.equal(repoResult.ok, true)
     if (!repoResult.ok) return
-    await repoResult.bundle.approvalRecords.create(repoResult.bundle.ctx, approvalRow())
+    const { workUnits, actionPreviews, approvalRecords, ctx } = repoResult.bundle
+    const ar = approvalRow()
+    // Parent-ownership order (enforcing bundle): WorkUnit → matching Preview → Approval.
+    await workUnits.upsert(ctx, { id: ar.workUnitId, tenantId, title: "t", kind: "task", priority: "medium", sourceProvider: "mock", reason: "r", evidence: "e", nextAction: "n", status: "open", createdAt: ar.createdAt, updatedAt: ar.createdAt })
+    await actionPreviews.create(ctx, { id: ar.actionPreviewId, tenantId, workUnitId: ar.workUnitId, actionType: ar.actionType, targetPreview: "{}", payloadPreview: "{}", requiresApproval: 1, status: "preview", targetHash: ar.targetHash, payloadHash: ar.payloadHash, createdAt: ar.createdAt, expiresAt: testSafeFutureExpiresAt })
+    await approvalRecords.create(ctx, ar)
 
     const response = await GET(new Request("http://localhost/api/workunit/wu:status/approval/status"), {
       params: Promise.resolve({ id: "wu:status" }),

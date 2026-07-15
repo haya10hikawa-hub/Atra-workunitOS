@@ -36,7 +36,11 @@ import {
   createInMemoryAuditLogRepository,
   createInMemoryUsageRepository,
 } from "./inMemoryRepositories.ts"
-import { getCloudflareD1Bindings } from "./cloudflareBindings.ts"
+import {
+  enforceActionPreviewParent,
+  enforceApprovalParents,
+  enforceFeedbackParent,
+} from "./relationshipEnforcedRepositories.ts"
 import { resolvePersistenceConfig } from "./persistenceConfig.ts"
 import { validateCloudflareRuntimeEnv } from "../runtime/validatedRuntimeEnv.ts"
 import type { PersistenceRuntimeConfig } from "../runtime/requestRuntimeConfig.ts"
@@ -118,11 +122,16 @@ async function resolveViaTenantResolver(
 // ─── Helpers ────────────────────────────────────────────────────
 
 function inMemoryBundle(tenantId: TenantId): TenantRepositoryBundle {
+  // Parent-ownership is enforced at this bundle boundary using the SAME sibling
+  // repositories (tenant-scoped findById), so the in-memory implementation never
+  // accepts a relationship the D1 implementation would reject.
+  const workUnits = createInMemoryWorkUnitRepository()
+  const actionPreviews = enforceActionPreviewParent(createInMemoryActionPreviewRepo(), { workUnits })
   return {
-    actionPreviews: createInMemoryActionPreviewRepo(),
-    approvalRecords: createInMemoryApprovalRecordRepository(),
-    workUnits: createInMemoryWorkUnitRepository(),
-    workUnitFeedback: createInMemoryWorkUnitFeedbackRepository(),
+    actionPreviews,
+    approvalRecords: enforceApprovalParents(createInMemoryApprovalRecordRepository(), { actionPreviews, workUnits }),
+    workUnits,
+    workUnitFeedback: enforceFeedbackParent(createInMemoryWorkUnitFeedbackRepository(), { workUnits }),
     integrationConnections: createInMemoryIntegrationConnectionRepository(),
     auditLogs: createInMemoryAuditLogRepository(),
     usage: createInMemoryUsageRepository(),
@@ -131,11 +140,15 @@ function inMemoryBundle(tenantId: TenantId): TenantRepositoryBundle {
 }
 
 function d1Bundle(tenantId: TenantId, d1Store: D1DatabaseLike, ctx?: TenantDbContext): TenantRepositoryBundle {
+  // Same tenant-local parent enforcement as the in-memory bundle: children may
+  // only reference parents owned by ctx.tenantId, checked via the shared store.
+  const workUnits = new D1WorkUnitRepository(d1Store)
+  const actionPreviews = enforceActionPreviewParent(new D1ActionPreviewRepository(d1Store), { workUnits })
   return {
-    actionPreviews: new D1ActionPreviewRepository(d1Store),
-    approvalRecords: new D1ApprovalRecordRepository(d1Store),
-    workUnits: new D1WorkUnitRepository(d1Store),
-    workUnitFeedback: new D1WorkUnitFeedbackRepository(d1Store),
+    actionPreviews,
+    approvalRecords: enforceApprovalParents(new D1ApprovalRecordRepository(d1Store), { actionPreviews, workUnits }),
+    workUnits,
+    workUnitFeedback: enforceFeedbackParent(new D1WorkUnitFeedbackRepository(d1Store), { workUnits }),
     integrationConnections: new D1IntegrationConnectionRepository(d1Store),
     auditLogs: new D1AuditLogRepository(d1Store),
     usage: new D1UsageRepository(d1Store),
@@ -263,32 +276,30 @@ export async function resolveRepositories(
     return { ok: false, error: "persistence_disabled" }
   }
 
-  // ── Request-scoped Cloudflare runtime env takes precedence ──
+  // ── Cloudflare runtime env is PRODUCTION-CAPABLE → resolver MANDATORY ──
   //
-  // When a Cloudflare runtime env is present (production / OpenNext worker), the
-  // persistence mode AND the D1 bindings come from the SAME validated snapshot.
-  // process.env can never override the active request env, and in-memory
-  // repositories are never returned here.
+  // Blocker 1: a validated Cloudflare D1 runtime env can never be converted
+  // directly into a repository bundle. Registry validation is mandatory, so this
+  // path routes through resolveProductionRepositories with a REQUIRED resolver.
+  // No resolver → fail closed (no direct TENANT_DB_DEFAULT bundle, no d1Binding
+  // override); ctx.db stays authoritative and the control DB is rejected.
   if (options.runtimeEnv) {
     const validated = validateCloudflareRuntimeEnv(options.runtimeEnv)
     if (!validated.ok) {
       // Runtime env present but missing/malformed binding or var → fail closed.
       return { ok: false, error: "d1_not_configured" }
     }
-
-    // Mode is authoritatively "d1" from the validated snapshot.
-    if (options.resolver) {
-      const r = await resolveViaTenantResolver(options.resolver, tenantId, { strict: false, d1Binding: options.d1Binding })
-      if (!r.ok) return { ok: false, error: r.error }
-      return { ok: true, bundle: d1Bundle(tenantId, r.store, r.ctx) }
-    }
-
-    // Legacy/test path without a resolver — validated binding, no registry check.
-    const d1Store = options.d1Binding ?? validated.env.TENANT_DB_DEFAULT
-    return { ok: true, bundle: d1Bundle(tenantId, d1Store) }
+    if (!options.resolver) return { ok: false, error: "d1_not_configured" }
+    return resolveProductionRepositories(tenantId, {
+      persistence: { mode: "d1", CONTROL_DB: validated.env.CONTROL_DB, TENANT_DB_DEFAULT: validated.env.TENANT_DB_DEFAULT },
+      resolver: options.resolver,
+    })
   }
 
-  // ── No runtime env → local/dev config via process.env ──
+  // ── No runtime env → LOCAL/TEST config via process.env (never production) ──
+  //
+  // This branch derives its authority from process.env (the local development
+  // seam) and is routed through the explicitly named resolveLocalRepositories.
   const config = resolvePersistenceConfig(options.env)
 
   switch (config.mode) {
@@ -297,26 +308,20 @@ export async function resolveRepositories(
       return { ok: true, bundle: inMemoryBundle(tenantId) }
     }
 
-    case "d1": {
-      if (options.resolver) {
-        const r = await resolveViaTenantResolver(options.resolver, tenantId, { strict: false, d1Binding: options.d1Binding })
-        if (!r.ok) return { ok: false, error: r.error }
-        return { ok: true, bundle: d1Bundle(tenantId, r.store, r.ctx) }
-      }
-      const d1Store = options.d1Binding ?? resolveRuntimeBinding(options)
-      if (!d1Store) return { ok: false, error: "d1_not_configured" }
-      return { ok: true, bundle: d1Bundle(tenantId, d1Store) }
-    }
+    case "d1":
+      // Local/test D1: a direct binding is permitted ONLY through the explicit
+      // local API; a supplied resolver still validates the registry (non-strict).
+      return resolveLocalRepositories(tenantId, {
+        persistence: { mode: "d1" },
+        allowDirectBinding: true,
+        resolver: options.resolver,
+        d1Binding: options.d1Binding,
+      })
 
     case "disabled":
     default:
       return { ok: false, error: "persistence_disabled" }
   }
-}
-
-function resolveRuntimeBinding(options: { runtimeEnv?: AppEnv }): D1DatabaseLike | null {
-  if (!options.runtimeEnv) return null
-  return getCloudflareD1Bindings(options.runtimeEnv).tenantDefaultDb ?? null
 }
 
 // ─── In-Memory ActionPreview (legacy helper) ────────────────────

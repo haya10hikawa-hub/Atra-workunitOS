@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
 import { SqliteD1Database, TENANT_DB_MIGRATIONS } from "./helpers/sqliteD1.ts"
 import { D1WorkUnitRepository } from "../app/lib/persistence/d1/workUnitRepository.ts"
-import { D1WorkUnitFeedbackRepository } from "../app/lib/persistence/d1/workUnitFeedbackRepository.ts"
+import { resolveLocalRepositories } from "../app/lib/persistence/repositoryResolver.ts"
 import { createInMemoryWorkUnitRepository } from "../app/lib/persistence/inMemoryRepositories.ts"
 import { D1RepositoryError } from "../app/lib/persistence/d1/types.ts"
 import type { TenantId } from "../app/lib/tenant/types.ts"
@@ -115,26 +115,27 @@ test("7. the in-memory dev store isolates identical IDs by composite key (DOCUME
   db.close()
 })
 
-// ─── 8. foreign references cannot create a cross-tenant relationship ─
+// ─── 8. foreign references CANNOT create a cross-tenant relationship ─
+//
+// (Replaces the earlier test that accepted cross-tenant feedback.) Full
+// parent-ownership matrix lives in tests/tenantParentRelationship.test.mts.
 
-test("8. FK-referencing another tenant's row creates no observable cross-tenant relationship", async () => {
+test("8. tenant B cannot create feedback referencing tenant A's WorkUnit (enforcing bundle)", async () => {
   const db = new SqliteD1Database({ migrations: TENANT_DB_MIGRATIONS, foreignKeys: true })
-  const workUnits = new D1WorkUnitRepository(db)
-  const feedback = new D1WorkUnitFeedbackRepository(db)
+  const a = await resolveLocalRepositories(A, { persistence: { mode: "d1", TENANT_DB_DEFAULT: db }, allowDirectBinding: true })
+  const b = await resolveLocalRepositories(B, { persistence: { mode: "d1", TENANT_DB_DEFAULT: db }, allowDirectBinding: true })
+  if (!a.ok || !b.ok) throw new Error("bundle failed")
 
-  // Tenant A owns work unit "wu-shared".
-  await workUnits.create(ctx(A), wuRow("wu-shared", A, "A-wu"))
-  // Both tenants attach feedback referencing that (globally unique) work-unit id.
-  await feedback.create(ctx(A), { id: "fb-a", tenantId: A, workUnitId: "wu-shared", feedback: "a", actorUserId: "ua", createdAt: "2026-01-01T00:00:00Z" })
-  await feedback.create(ctx(B), { id: "fb-b", tenantId: B, workUnitId: "wu-shared", feedback: "b", actorUserId: "ub", createdAt: "2026-01-01T00:00:00Z" })
-
-  // Each tenant sees ONLY its own feedback for the shared id — no cross-tenant read.
-  const aFb = await feedback.findByWorkUnitId(ctx(A), "wu-shared")
-  const bFb = await feedback.findByWorkUnitId(ctx(B), "wu-shared")
-  assert.deepEqual(aFb.map((f) => f.id), ["fb-a"])
-  assert.deepEqual(bFb.map((f) => f.id), ["fb-b"])
-  // Tenant B cannot read tenant A's work unit even though B references its id.
-  assert.equal(await workUnits.findById(ctx(B), "wu-shared"), null)
+  await a.bundle.workUnits.create(a.bundle.ctx, wuRow("wu-shared", A, "A-wu"))
+  // Tenant B referencing tenant A's WorkUnit fails closed (parent boundary).
+  await assert.rejects(
+    () => b.bundle.workUnitFeedback.create(b.bundle.ctx, { id: "fb-b", tenantId: B, workUnitId: "wu-shared", feedback: "b", actorUserId: "ub", createdAt: "2026-01-01T00:00:00Z" }),
+    (e: unknown) => e instanceof D1RepositoryError && (e as Error).message === "parent_boundary_violation",
+  )
+  // Tenant A can attach feedback to its own WorkUnit.
+  await a.bundle.workUnitFeedback.create(a.bundle.ctx, { id: "fb-a", tenantId: A, workUnitId: "wu-shared", feedback: "a", actorUserId: "ua", createdAt: "2026-01-01T00:00:00Z" })
+  assert.deepEqual((await a.bundle.workUnitFeedback.findByWorkUnitId(a.bundle.ctx, "wu-shared")).map((f) => f.id), ["fb-a"])
+  assert.deepEqual(await b.bundle.workUnitFeedback.findByWorkUnitId(b.bundle.ctx, "wu-shared"), [])
   db.close()
 })
 

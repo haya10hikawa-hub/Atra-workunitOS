@@ -5,7 +5,7 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { readFileSync } from "node:fs"
+import { readFileSync, readdirSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
 
@@ -22,6 +22,8 @@ const RESOLVER = "app/lib/persistence/tenantDbResolver.ts"
 const REPO_RESOLVER = "app/lib/persistence/repositoryResolver.ts"
 const ROUTE_REPOS = "app/lib/persistence/routeRepositories.ts"
 const INMEM = "app/lib/persistence/inMemoryRepositories.ts"
+const ENFORCED = "app/lib/persistence/relationshipEnforcedRepositories.ts"
+const WRITE_GUARDS = "app/lib/persistence/d1/writeGuards.ts"
 const ROUTES = ["app/api/audit/recent/route.ts", "app/api/workunit/inbox/route.ts", "app/api/integrations/status/route.ts"]
 
 test("D1TenantDbResolver returns the tenant DB, never the control DB", () => {
@@ -144,4 +146,114 @@ test("the resolver failure reason type carries no tenantId / disclosure field", 
   // The failure arm is `{ ok: false; reason: ... }` — no tenantId / message field.
   assert.doesNotMatch(block, /tenantId/)
   assert.doesNotMatch(block, /message/)
+})
+
+// ─── Round 2 guards: runtimeEnv bypass, resolver-mandatory, relationships ─
+
+function runtimeEnvBlock(src: string): string {
+  const start = src.indexOf("if (options.runtimeEnv)")
+  assert.ok(start >= 0, "runtimeEnv branch must exist")
+  // Up to the next branch (the local process.env config section).
+  const end = src.indexOf("const config = resolvePersistenceConfig", start)
+  return src.slice(start, end > start ? end : start + 800)
+}
+
+test("Blocker 1 GUARD: the runtimeEnv branch never creates a D1 bundle directly", () => {
+  const src = read(REPO_RESOLVER)
+  const block = runtimeEnvBlock(src)
+  // No direct d1Bundle(...) and no direct TENANT_DB_DEFAULT bundling in this branch.
+  assert.doesNotMatch(block, /d1Bundle\(/)
+  assert.doesNotMatch(block, /options\.d1Binding\s*\?\?\s*validated\.env/)
+  // It fails closed without a resolver and routes through the mandatory-resolver API.
+  assert.match(block, /if \(!options\.resolver\) return \{ ok: false/)
+  assert.match(block, /resolveProductionRepositories/)
+})
+
+test("Blocker 1 GUARD: validated.env.TENANT_DB_DEFAULT is never passed to d1Bundle", () => {
+  const src = read(REPO_RESOLVER)
+  assert.doesNotMatch(src, /d1Bundle\([^)]*validated\.env/)
+  // No legacy helper that pulls a raw binding out of the runtime env.
+  assert.doesNotMatch(src, /resolveRuntimeBinding/)
+  assert.doesNotMatch(src, /getCloudflareD1Bindings/)
+})
+
+test("Blocker 1 GUARD: no production-capable API accepts an OPTIONAL tenant resolver", () => {
+  const src = read(REPO_RESOLVER)
+  const prodStart = src.indexOf("export async function resolveProductionRepositories")
+  assert.ok(prodStart >= 0)
+  const sig = src.slice(prodStart, src.indexOf("{", src.indexOf("Promise<RepositoryResolutionResult>", prodStart)))
+  assert.match(sig, /resolver:\s*TenantDbResolver/)   // required
+  assert.doesNotMatch(sig, /resolver\?:/)             // never optional
+})
+
+test("Blocker 2 GUARD: Feedback create verifies parent WorkUnit ownership", () => {
+  const src = read(ENFORCED)
+  const start = src.indexOf("export function enforceFeedbackParent")
+  const block = src.slice(start, src.indexOf("export function", start + 10) > start ? src.indexOf("export function", start + 10) : src.length)
+  assert.match(block, /async create/)
+  assert.match(block, /assertWorkUnitOwned\(deps\.workUnits/)
+})
+
+test("Blocker 2 GUARD: ActionPreview create verifies parent WorkUnit ownership", () => {
+  const src = read(ENFORCED)
+  const start = src.indexOf("export function enforceActionPreviewParent")
+  const block = src.slice(start, src.indexOf("export function", start + 10))
+  assert.match(block, /async create/)
+  assert.match(block, /assertWorkUnitOwned\(deps\.workUnits/)
+})
+
+test("Blocker 2 GUARD: Approval create verifies parent Preview AND WorkUnit ownership", () => {
+  const src = read(ENFORCED)
+  const start = src.indexOf("export function enforceApprovalParents")
+  const block = src.slice(start, src.indexOf("export function", start + 10))
+  assert.match(block, /async create/)
+  assert.match(block, /deps\.actionPreviews\.findById/)
+  assert.match(block, /assertWorkUnitOwned\(deps\.workUnits/)
+  assert.match(block, /preview\.workUnitId !== row\.workUnitId/)
+  // The single opaque failure is used, never a disclosing message.
+  assert.match(block, /parentBoundaryViolation\(\)/)
+})
+
+test("Blocker 2 GUARD: both bundles wire the relationship-enforcing wrappers", () => {
+  const src = read(REPO_RESOLVER)
+  for (const w of ["enforceActionPreviewParent", "enforceApprovalParents", "enforceFeedbackParent"]) {
+    // Used in BOTH d1Bundle and inMemoryBundle (≥2 call sites each).
+    const count = src.split(w).length - 1
+    assert.ok(count >= 2, `${w} must wrap both the D1 and in-memory bundles (found ${count})`)
+  }
+})
+
+test("Blocker 2 GUARD: the opaque parent failure discloses nothing", () => {
+  const src = read(ENFORCED)
+  // The single failure throws exactly the opaque code, with no interpolation.
+  assert.match(src, /new D1RepositoryError\("parent_boundary_violation"\)/)
+  assert.doesNotMatch(src, /parent_boundary_violation.*\$\{/)
+})
+
+test("Blocker 3 GUARD: isUniqueConstraintViolation has NO generic 'constraint failed' alternative", () => {
+  const src = read(WRITE_GUARDS)
+  // Only qualified UNIQUE / PRIMARY KEY forms — never a bare `|constraint failed`.
+  assert.match(src, /unique constraint failed\|primary key constraint failed/)
+  assert.doesNotMatch(src, /\|\s*constraint failed/i)
+})
+
+test("Blocker 3 GUARD: non-UNIQUE driver failures map to write_failed (not object_id_conflict)", () => {
+  const src = read(WRITE_GUARDS)
+  // runInsertGuarded: unique → object_id_conflict; everything else → write_failed.
+  assert.match(src, /if \(isUniqueConstraintViolation\(error\)\) throw new D1RepositoryError\("object_id_conflict"\)/)
+  assert.match(src, /throw new D1RepositoryError\("write_failed"\)/)
+})
+
+test("Blocker 2 GUARD: no test positively asserts a cross-tenant parent reference SUCCEEDS", () => {
+  const dir = resolve(REPO_ROOT, "tests")
+  // Exclude THIS guard file, whose assertions necessarily contain the forbidden
+  // phrases as regex literals.
+  const files = readdirSync(dir).filter((f) => f.endsWith(".test.mts") && f !== "tenantIsolationArchitecture.test.mts")
+  for (const f of files) {
+    const src = read(resolve(dir, f))
+    // The removed accepting pattern must not return: both tenants attaching feedback
+    // to the same (foreign) WorkUnit and treating it as a success.
+    assert.doesNotMatch(src, /both tenants attach feedback referencing that/i, `${f} must not accept cross-tenant feedback`)
+    assert.doesNotMatch(src, /creates no observable cross-tenant relationship/i, `${f} must not keep the old accepting test`)
+  }
 })

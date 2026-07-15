@@ -245,7 +245,16 @@ P7.1 MAC wiring is introduced.
   - a persistence failure returns fallback data **only** in explicit non-production
     local development (central `canUseLocalPersistenceFallback` helper); both
     Cloudflare **and** Node production return safe `503`s, never keyed on
-    `runtime.source` alone or `process.env.NODE_ENV`.
+    `runtime.source` alone or `process.env.NODE_ENV`;
+  - the legacy `resolveRepositories({ runtimeEnv })` direct path is **closed** — a
+    validated Cloudflare D1 env requires a resolver and fails closed without one, so
+    **every production-capable repository path requires registry validation**;
+  - tenant-scoped children (Action Preview / Approval / WorkUnit Feedback) may
+    reference only **same-tenant** parents; a foreign-tenant or missing parent fails
+    closed IDENTICALLY as an opaque `parent_boundary_violation`. Object IDs are
+    globally unique, but child→parent edges are tenant-local. Constraint failures are
+    classified precisely: only UNIQUE/PRIMARY KEY → `object_id_conflict`; FK/CHECK/
+    NOT NULL/unknown → `write_failed`.
   See [CLOUDFLARE_D1_SETUP.md §9a](CLOUDFLARE_D1_SETUP.md). The chosen architecture
   is a single **shared** tenant D1 (row-level isolation) with a **global** object-ID
   namespace enforced by the D1 PRIMARY KEY; physical per-tenant D1 routing is
