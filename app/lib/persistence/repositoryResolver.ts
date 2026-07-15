@@ -299,18 +299,27 @@ export async function resolveRepositories(
   // ── No runtime env → LOCAL/TEST config via process.env (never production) ──
   //
   // This branch derives its authority from process.env (the local development
-  // seam) and is routed through the explicitly named resolveLocalRepositories.
+  // seam). It is LOCAL/TEST ONLY.
   const config = resolvePersistenceConfig(options.env)
 
+  // Round 3 (P0): a PRODUCTION config must NEVER produce a repository bundle
+  // through this legacy seam. This fail-closed check runs BEFORE any mode
+  // handling, so Node production can never reach resolveLocalRepositories, consume
+  // options.d1Binding, or infer authority from an omitted/supplied resolver. Node
+  // production D1 must use resolveProductionRepositories() with a tenant resolver
+  // (registry validation mandatory). A supplied resolver here is NOT sufficient to
+  // promote the legacy env seam to production authority.
+  if (config.isProduction) {
+    return { ok: false, error: config.mode === "d1" ? "d1_not_configured" : "persistence_disabled" }
+  }
+
   switch (config.mode) {
-    case "in_memory": {
-      if (config.isProduction) return { ok: false, error: "persistence_disabled" }
+    case "in_memory":
       return { ok: true, bundle: inMemoryBundle(tenantId) }
-    }
 
     case "d1":
-      // Local/test D1: a direct binding is permitted ONLY through the explicit
-      // local API; a supplied resolver still validates the registry (non-strict).
+      // Local/test D1 ONLY (non-production): a direct binding is permitted through
+      // the explicit local API; a supplied resolver still validates the registry.
       return resolveLocalRepositories(tenantId, {
         persistence: { mode: "d1" },
         allowDirectBinding: true,

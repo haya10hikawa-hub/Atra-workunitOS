@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { resolveRepositories, resetInMemoryReposForTests } from "../app/lib/persistence/repositoryResolver.ts"
+import { resolveRepositories, resolveProductionRepositories, resetInMemoryReposForTests } from "../app/lib/persistence/repositoryResolver.ts"
 import { createFakeTenantDbResolver } from "../app/lib/persistence/tenantDbResolver.ts"
 import { FakeD1Database } from "./helpers/fakeD1.ts"
 import {
@@ -152,7 +152,7 @@ test("production: in-memory still blocked with D1 mode available", async () => {
   if (!result.ok) assert.equal(result.error, "persistence_disabled")
 })
 
-test("production: D1 works with PERSISTENCE_MODE=d1 and explicit bindings", async () => {
+test("production: the legacy env API fails closed for D1 even WITH a resolver + d1Binding (round 3)", async () => {
   resetInMemoryReposForTests()
   const fakeDb = new FakeD1Database()
   const tenants = new Map()
@@ -160,15 +160,37 @@ test("production: D1 works with PERSISTENCE_MODE=d1 and explicit bindings", asyn
     tenant: { id: tenantId, status: "active" },
     dbRef: { tenant_id: tenantId, database_name: "prod-db", status: "active" },
   })
-  const resolver = createFakeTenantDbResolver(tenants)
+  const resolver = createFakeTenantDbResolver(tenants, fakeDb)
 
+  // A supplied resolver + d1Binding is NOT sufficient to promote the legacy
+  // env/process.env seam to production authority — it fails closed.
   const result = await resolveRepositories(tenantId, {
     env: { NODE_ENV: "production", PERSISTENCE_MODE: "d1" },
     resolver,
     d1Binding: fakeDb,
   })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.error, "d1_not_configured")
+})
+
+test("production: Node production D1 succeeds ONLY through resolveProductionRepositories", async () => {
+  resetInMemoryReposForTests()
+  const control = new FakeD1Database()
+  const tenantDb = new FakeD1Database()
+  const tenants = new Map()
+  tenants.set(tenantId, {
+    tenant: { id: tenantId, status: "active" },
+    dbRef: { tenant_id: tenantId, database_name: "prod-db", status: "active" },
+  })
+  const resolver = createFakeTenantDbResolver(tenants, tenantDb)
+
+  const result = await resolveProductionRepositories(tenantId, {
+    persistence: { mode: "d1", CONTROL_DB: control, TENANT_DB_DEFAULT: tenantDb },
+    resolver,
+  })
   assert.equal(result.ok, true)
   if (result.ok) {
+    assert.equal(result.bundle.ctx.db, tenantDb) // ctx.db is authoritative
     assert.ok(result.bundle.actionPreviews)
     assert.ok(result.bundle.approvalRecords)
   }

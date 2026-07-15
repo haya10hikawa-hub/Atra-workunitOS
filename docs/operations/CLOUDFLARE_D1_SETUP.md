@@ -191,11 +191,26 @@ no longer converts a validated Cloudflare runtime env directly into a bundle: a
 validated Cloudflare D1 `runtimeEnv` now REQUIRES a resolver and routes through
 `resolveProductionRepositories` (registry validation mandatory). Without a
 resolver it fails closed — no direct `TENANT_DB_DEFAULT` bundle and no `d1Binding`
-override. **Every production-capable repository path requires registry validation;**
-the `env`/`process.env` branch is local/test-only and flows through the explicit
-`resolveLocalRepositories`. An architecture guard fails if the `runtimeEnv` branch
-ever calls `d1Bundle(...)` directly or passes `validated.env.TENANT_DB_DEFAULT` to
-`d1Bundle` without a preceding resolver.
+override. An architecture guard fails if the `runtimeEnv` branch ever calls
+`d1Bundle(...)` directly or passes `validated.env.TENANT_DB_DEFAULT` to `d1Bundle`
+without a preceding resolver.
+
+**Legacy `env` / `process.env` seam is LOCAL/TEST ONLY (Node production fails
+closed).** In `resolveRepositories()`, a `config.isProduction` fail-closed check
+runs **before** any mode dispatch, so a Node production config
+(`NODE_ENV=production`) can **never** reach `resolveLocalRepositories`, consume
+`options.d1Binding`, or infer authority from a supplied/omitted resolver — it
+returns `d1_not_configured` (D1) or `persistence_disabled` (otherwise). A supplied
+resolver does **not** promote the legacy env seam to production authority.
+**Every production-capable repository path requires registry validation.** Node
+production that needs D1 must use the explicit production API —
+`resolveProductionRepositories(tenantId, { persistence, resolver })` (or
+`resolveRepositoriesForAuthority(tenantId, { kind: "cloudflare_production", … })`)
+with a request-scoped persistence projection and tenant resolver. **No production
+path can infer local authority.** Architecture guards fail if the production
+fail-closed check does not precede the switch, if a production config can consume
+`d1Binding`, if the legacy env block calls `d1Bundle` directly, or if any non-test
+app file other than `routeRepositories.ts` imports `resolveLocalRepositories`.
 
 ### Tenant-local parent relationships (global IDs, tenant-scoped edges)
 

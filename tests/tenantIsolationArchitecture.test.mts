@@ -257,3 +257,63 @@ test("Blocker 2 GUARD: no test positively asserts a cross-tenant parent referenc
     assert.doesNotMatch(src, /creates no observable cross-tenant relationship/i, `${f} must not keep the old accepting test`)
   }
 })
+
+// ─── Round 3 guards: legacy env seam is local/test-only (Node prod fails closed) ─
+
+function legacyEnvBlock(src: string): string {
+  const start = src.indexOf("const config = resolvePersistenceConfig(options.env)")
+  assert.ok(start >= 0, "legacy env block must exist")
+  const end = src.indexOf("let inMemoryActionPreviewRepo", start)
+  return src.slice(start, end > start ? end : src.length)
+}
+
+test("Round 3 GUARD: the production fail-closed check precedes any mode dispatch", () => {
+  const block = legacyEnvBlock(read(REPO_RESOLVER))
+  const prodCheck = block.indexOf("if (config.isProduction)")
+  const switchIdx = block.indexOf("switch (config.mode)")
+  const localDispatch = block.indexOf("resolveLocalRepositories")
+  assert.ok(prodCheck >= 0, "must have an isProduction fail-closed check")
+  assert.ok(switchIdx > prodCheck, "the switch must come AFTER the production check")
+  assert.ok(localDispatch > prodCheck, "resolveLocalRepositories must be reachable only AFTER the production check")
+  // The production check returns fail-closed (never a bundle).
+  assert.match(block, /if \(config\.isProduction\) \{\s*return \{ ok: false/)
+})
+
+test("Round 3 GUARD: a production config cannot reach resolveLocalRepositories or consume d1Binding", () => {
+  const block = legacyEnvBlock(read(REPO_RESOLVER))
+  const prodCheck = block.indexOf("if (config.isProduction)")
+  // options.d1Binding is only read AFTER the production fail-closed return.
+  const bindingUse = block.indexOf("options.d1Binding")
+  assert.ok(bindingUse === -1 || bindingUse > prodCheck, "options.d1Binding must not be consumed before the production check")
+  // The legacy env block never builds a D1 bundle directly.
+  assert.doesNotMatch(block, /d1Bundle\(/)
+})
+
+test("Round 3 GUARD: only routeRepositories imports resolveLocalRepositories, and only in the local branch", () => {
+  const dir = resolve(REPO_ROOT, "app")
+  // Recursively collect .ts files under app/.
+  const stack = [dir]
+  const importers: string[] = []
+  while (stack.length) {
+    const d = stack.pop()!
+    for (const entry of readdirSync(d, { withFileTypes: true })) {
+      const p = resolve(d, entry.name)
+      if (entry.isDirectory()) stack.push(p)
+      else if (entry.name.endsWith(".ts")) {
+        const rel = p.slice(REPO_ROOT.length + 1)
+        if (rel === "app/lib/persistence/repositoryResolver.ts") continue // definition site
+        const src = read(rel)
+        if (/import[\s\S]*?resolveLocalRepositories[\s\S]*?from/.test(src)) importers.push(rel)
+      }
+    }
+  }
+  assert.deepEqual(importers, ["app/lib/persistence/routeRepositories.ts"], `unexpected resolveLocalRepositories importers: ${importers.join(", ")}`)
+  // In routeRepositories, the Cloudflare branch uses the production API; the local
+  // API is used only in the else (local) branch. Match CALL SITES, not imports.
+  const rr = read(ROUTE_REPOS)
+  const cf = rr.indexOf('rt.source === "cloudflare"')
+  const prodCall = rr.indexOf("await resolveProductionRepositories")
+  const localCall = rr.indexOf("await resolveLocalRepositories")
+  assert.ok(cf >= 0 && prodCall > cf, "the production API is called inside the cloudflare branch")
+  assert.ok(localCall > prodCall, "resolveLocalRepositories is called only after (outside) the cloudflare production dispatch")
+})

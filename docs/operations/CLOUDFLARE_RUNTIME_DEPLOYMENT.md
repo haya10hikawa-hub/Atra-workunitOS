@@ -247,8 +247,16 @@ P7.1 MAC wiring is introduced.
     Cloudflare **and** Node production return safe `503`s, never keyed on
     `runtime.source` alone or `process.env.NODE_ENV`;
   - the legacy `resolveRepositories({ runtimeEnv })` direct path is **closed** — a
-    validated Cloudflare D1 env requires a resolver and fails closed without one, so
-    **every production-capable repository path requires registry validation**;
+    validated Cloudflare D1 env requires a resolver and fails closed without one;
+  - the legacy `env`/`process.env` seam is **local/test-only**: a `config.isProduction`
+    check fails closed **before** any mode dispatch, so **Node production can never use
+    the legacy env/direct-binding seam** (`options.d1Binding`, `process.env`, an omitted
+    resolver, `resolveLocalRepositories`, or an inferred authority). Node production D1
+    requires an explicit production persistence projection + tenant resolver via
+    `resolveProductionRepositories` / `resolveRepositoriesForAuthority({ kind:
+    "cloudflare_production" })`. **Every production-capable repository path requires
+    registry validation; no production path can infer local authority.** Cloudflare
+    production uses request-scoped production authority (one frozen snapshot per request);
   - tenant-scoped children (Action Preview / Approval / WorkUnit Feedback) may
     reference only **same-tenant** parents; a foreign-tenant or missing parent fails
     closed IDENTICALLY as an opaque `parent_boundary_violation`. Object IDs are
