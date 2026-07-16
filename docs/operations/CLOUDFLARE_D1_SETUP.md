@@ -944,3 +944,23 @@ execution** and a review of the resulting evidence (`npm run cf:d1:evidence` pro
 an artifact carrying the patch id, commit SHA, tool versions, manifest + schema-contract
 digests, migration filenames/versions, bootstrap + idempotence results, test counts, and
 a timestamp — and **no** database IDs, identities, secrets, SQL, or row data).
+
+### Operational evidence packs (P0-OPS-016)
+
+The future authorized run is recorded as a **D1 operational evidence pack** — a
+versioned, allowlisted record (`contracts/operations/d1-operational-evidence.v1.json`)
+of safe categories and digests only, assembled by an **observational** recorder
+(`scripts/lib/d1OperationalEvidence.mjs`) and verified fully offline with
+`npm run cf:d1:evidence:verify -- --file .d1-evidence/<pack>.json`. The pack binds
+the repository commit, the manifest/plan/schema-contract digests, and the exact
+deploy-config **authority digest** to a contiguous, prerequisite-checked operation
+sequence (plan → migrate → verify schema → bootstrap → verify counts → preflight →
+deploy), with **one** authority digest across every operation. A recursive
+sensitive-data scanner rejects database IDs and names, tokens, emails, provider
+subjects, raw config, raw SQL, paths, and raw output **before** anything is
+serialized. The recorder authorizes nothing: every existing operator gate stays
+independent and operator-supplied. See
+[D1_OPERATIONAL_EVIDENCE.md](D1_OPERATIONAL_EVIDENCE.md) for the contract, the
+ten-step human-approved workflow, and the acceptance policy — the framework itself
+is **not** remote proof, and Issue #155 stays open until authorized remote evidence
+is produced and reviewed.

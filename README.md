@@ -218,6 +218,19 @@ only verifies the remote schema read-only. D1 data rollback is **separate** from
 Worker rollback. FakeD1 and `cf:deploy:dry-run` are **not** production-readiness
 proof — Issue #155 remains open until authorized remote evidence is reviewed.
 
+**D1 operational evidence packs (P0-OPS-016)** define how that future authorized
+run will be recorded: a versioned, allowlisted contract
+(`contracts/operations/d1-operational-evidence.v1.json`) of safe categories and
+digests only — never a database ID or name, token, email, provider subject, raw
+config, raw SQL, path, or raw output. An observational recorder assembles packs
+into the git-ignored `.d1-evidence/` (0600, exclusive, frozen, canonical-digest
+chained), and `npm run cf:d1:evidence:verify -- --file <pack>` verifies one fully
+offline: contract shape, sensitive scan, recomputed digest, operation ordering,
+one authority digest across every operation, completeness. The recorder authorizes
+nothing — every operator gate stays independent. See
+[docs/operations/D1_OPERATIONAL_EVIDENCE.md](docs/operations/D1_OPERATIONAL_EVIDENCE.md);
+the framework itself is **not** remote proof.
+
 After `cf:build`, clean generated artifacts before committing:
 
 ```bash

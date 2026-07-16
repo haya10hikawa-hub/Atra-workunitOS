@@ -442,3 +442,13 @@ FakeD1 and `cf:deploy:dry-run` are **not production-readiness proof**. The local
 bootstrap proves reproducibility against real SQLite (`node:sqlite`) only.
 **Issue #155 remains open** until an authorized remote execution is performed and its
 evidence (`npm run cf:d1:evidence`) is reviewed.
+
+When that authorized run happens, it is recorded as a **D1 operational evidence
+pack** (P0-OPS-016): a versioned, allowlisted, privacy-safe record binding the
+commit, the manifest/plan/schema-contract digests, and the deploy-config
+**authority digest** to the ordered operation sequence — verified fully offline via
+`npm run cf:d1:evidence:verify` (ideally from a second clean checkout). The
+recorder is observational only and never satisfies an operator gate; each of the
+ten workflow steps remains a separate human-approved action. See
+[D1_OPERATIONAL_EVIDENCE.md](D1_OPERATIONAL_EVIDENCE.md). The evidence framework
+itself proves nothing about staging or production readiness.
