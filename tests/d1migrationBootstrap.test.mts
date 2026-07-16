@@ -14,7 +14,8 @@ import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
 import { loadManifest, buildPlan, KNOWN_BINDINGS } from "../scripts/lib/d1MigrationManifest.mjs"
 import { loadSchemaContract, verifyDatabase, schemaSignature } from "../scripts/lib/d1SchemaContract.mjs"
-import { applyLane, bootstrapInMemory, withTemporaryBootstrap } from "../scripts/lib/d1LocalBootstrap.mjs"
+import { applyLane, applyLaneDetailed, bootstrapInMemory, withTemporaryBootstrap } from "../scripts/lib/d1LocalBootstrap.mjs"
+import { MIGRATION_HISTORY_TABLE } from "../scripts/lib/d1MigrationLedger.mjs"
 import { LOCAL_FIXTURE, assertLocalFixtureOnly, seedLocalControlFixture } from "../scripts/lib/d1BootstrapFixture.mjs"
 import { runBootstrapLocal } from "../scripts/cf-d1-bootstrap-local.mjs"
 
@@ -68,37 +69,76 @@ test("5. schema signatures are EQUIVALENT before and after the second applicatio
   }
 })
 
-test("every lane migration is declared idempotent (only CREATE ... IF NOT EXISTS)", () => {
+test("a migration declared `replay_safe` really is raw-re-runnable", () => {
+  // The declaration is load-bearing (a `replay_safe` step is re-executed on every
+  // run), so it is checked against the real engine rather than trusted.
   for (const binding of KNOWN_BINDINGS) {
+    const db = new DatabaseSync(":memory:")
     for (const step of buildPlan(manifest(), binding)) {
-      assert.equal(step.idempotent, true, `${step.name} must be idempotent to live in a re-runnable lane`)
+      if (step.apply !== "replay_safe") continue
+      const sql = readFileSync(resolve(REPO_ROOT, step.path), "utf8")
+      db.exec(sql)
+      assert.doesNotThrow(() => db.exec(sql), `${step.name} is declared replay_safe, so raw re-execution must not throw`)
     }
   }
 })
 
-test("the DEFERRED 0006 is correctly flagged non-idempotent (applying it twice fails)", () => {
-  // This is exactly why 0006 is NOT in an idempotent bootstrap lane: SQLite has no
-  // `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
-  const deferred = (manifest().deferred ?? []).find((e) => e.path.includes("0006"))
-  if (!deferred) throw new Error("the manifest must pin the deferred 0006 migration")
-  assert.equal(deferred.idempotent, false)
+test("0006 is `once` because raw replay genuinely fails — and the ledger, not replay-safety, makes the lane re-runnable", () => {
+  const step = buildPlan(manifest(), "TENANT_DB_DEFAULT").find((s) => s.path.includes("0006"))
+  if (!step) throw new Error("0006 must be an ACTIVE tenant lane member")
+  assert.equal(step.apply, "once")
+
+  // Raw replay of 0006 fails: this is WHY it needs the ledger. (SQLite has no
+  // `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.)
+  const raw = new DatabaseSync(":memory:")
+  raw.exec(readFileSync(resolve(REPO_ROOT, "migrations/0002_tenant_core.sql"), "utf8"))
+  const sql = readFileSync(resolve(REPO_ROOT, step.path), "utf8")
+  raw.exec(sql)
+  assert.throws(() => raw.exec(sql), /duplicate column/i)
+
+  // Through the ledger, applying the lane twice is safe: 0006 is applied once and
+  // then SKIPPED, never raw-replayed.
   const db = new DatabaseSync(":memory:")
-  applyLane(db, manifest(), "TENANT_DB_DEFAULT", REPO_ROOT)
-  const sql = readFileSync(resolve(REPO_ROOT, deferred.path), "utf8")
-  db.exec(sql) // first application succeeds
-  assert.throws(() => db.exec(sql), /duplicate column/i)
+  const first = applyLaneDetailed(db, manifest(), "TENANT_DB_DEFAULT", REPO_ROOT)
+  assert.ok(first.applied.includes("0006_action_preview_creator.sql"), "an empty database must apply 0006")
+  assert.deepEqual(first.skipped, [])
+  const second = applyLaneDetailed(db, manifest(), "TENANT_DB_DEFAULT", REPO_ROOT)
+  assert.deepEqual(second.skipped, ["0006_action_preview_creator.sql"], "a second run must SKIP 0006, not replay it")
+  assert.equal(second.applied.includes("0006_action_preview_creator.sql"), false)
 })
 
 // ─── 14. migrations never seed rows ─────────────────────────────
 
-test("14. a freshly migrated database contains NO rows (no default tenant/user/identity/credential)", () => {
+test("14. a freshly migrated database contains NO application rows (no default tenant/user/identity/credential)", () => {
   const { dbs } = bootstrapInMemory(REPO_ROOT, manifest())
   for (const binding of KNOWN_BINDINGS) {
     const tables = many<{ name: string }>(dbs[binding], "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
     assert.ok(tables.length > 0)
     for (const t of tables) {
+      // The migration ledger legitimately records that migrations ran; it is
+      // asserted separately below to contain ONLY migration metadata.
+      if (t.name === MIGRATION_HISTORY_TABLE) continue
       const count = one<{ c: number }>(dbs[binding], `SELECT COUNT(*) AS c FROM "${t.name}"`).c
       assert.equal(count, 0, `${binding}.${t.name} must be empty after migration`)
+    }
+  }
+})
+
+test("the migration ledger holds ONLY migration metadata — no application data and no database ID", () => {
+  const { dbs } = bootstrapInMemory(REPO_ROOT, manifest())
+  for (const binding of KNOWN_BINDINGS) {
+    // Columns are structural metadata only — there is nowhere for a tenant id,
+    // email, subject, or D1 database id to be recorded.
+    const cols = many<{ name: string }>(dbs[binding], `SELECT name FROM pragma_table_info('${MIGRATION_HISTORY_TABLE}')`).map((c) => c.name).sort()
+    assert.deepEqual(cols, ["applied_at", "binding", "path", "sequence", "sha256"])
+
+    const rows = many<{ binding: string; path: string; sha256: string }>(dbs[binding], `SELECT * FROM ${MIGRATION_HISTORY_TABLE}`)
+    assert.equal(rows.length, buildPlan(manifest(), binding).length, "every applied lane step is recorded exactly once")
+    for (const row of rows) {
+      // Every recorded value is manifest metadata, and the lane cannot be crossed.
+      assert.equal(row.binding, binding, "a lane's history may never contain another binding's rows")
+      assert.match(row.path, /^migrations\/\d{4}_[a-z0-9_]+\.sql$/)
+      assert.match(row.sha256, /^[0-9a-f]{64}$/)
     }
   }
 })
@@ -128,7 +168,12 @@ test("cf:d1:bootstrap:local reports a clean bootstrap, idempotence, and a seeded
   assert.equal(result.seedRowCount, 1)
   for (const binding of KNOWN_BINDINGS) assert.equal(result.verify[binding].ok, true)
   assert.deepEqual(result.applied.CONTROL_DB, ["0001_control_db.sql", "0004_control_auth_workspace.sql"])
-  assert.deepEqual(result.applied.TENANT_DB_DEFAULT, ["0002_tenant_core.sql", "0003_tenant_persistence_foundation.sql", "0005_tenant_scoped_indexes.sql"])
+  // The complete tenant lane — 0006 included, so the bootstrapped schema is the
+  // one the application actually requires.
+  assert.deepEqual(result.applied.TENANT_DB_DEFAULT, [
+    "0002_tenant_core.sql", "0003_tenant_persistence_foundation.sql",
+    "0005_tenant_scoped_indexes.sql", "0006_action_preview_creator.sql",
+  ])
 })
 
 // ─── Local fixture ──────────────────────────────────────────────

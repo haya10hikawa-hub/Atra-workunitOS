@@ -101,7 +101,8 @@ test("apply: the built commands follow lane order, use --remote, and never weake
     const cmds = buildApplyCommands(REPO_ROOT, configPath)
     assert.deepEqual(cmds.map((c: { name: string }) => c.name), [
       "0001_control_db.sql", "0004_control_auth_workspace.sql",
-      "0002_tenant_core.sql", "0003_tenant_persistence_foundation.sql", "0005_tenant_scoped_indexes.sql",
+      "0002_tenant_core.sql", "0003_tenant_persistence_foundation.sql",
+      "0005_tenant_scoped_indexes.sql", "0006_action_preview_creator.sql",
     ])
     for (const c of cmds) {
       assert.ok(c.args.includes("--remote"), "apply is explicitly remote")
@@ -109,8 +110,11 @@ test("apply: the built commands follow lane order, use --remote, and never weake
       assert.equal(c.args.includes("--yes"), false, "must not weaken operator visibility")
       assert.equal(c.args.includes("-y"), false, "must not weaken operator visibility")
     }
-    // The deferred non-idempotent 0006 is NEVER auto-applied.
-    assert.equal(cmds.some((c: { name: string }) => c.name.includes("0006")), false)
+    // 0006 is an ACTIVE, operator-visible migration — planned exactly once, and
+    // declared `once` so the ledger applies it a single time.
+    const sixes = cmds.filter((c: { name: string }) => c.name.includes("0006"))
+    assert.equal(sixes.length, 1, "the production plan must include 0006 exactly once")
+    assert.equal(sixes[0].apply, "once")
   })
 })
 

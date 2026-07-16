@@ -23,6 +23,7 @@ import {
   isReadOnlyIntrospectionSql,
 } from "../scripts/lib/d1SchemaContract.mjs"
 import { bootstrapInMemory, applyLane } from "../scripts/lib/d1LocalBootstrap.mjs"
+import { ensureHistoryTable } from "../scripts/lib/d1MigrationLedger.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 function manifest() {
@@ -206,7 +207,10 @@ test("7. reversing a lane fails (0005 indexes cannot precede the 0003 tables)", 
 // ─── Canonicalization ───────────────────────────────────────────
 
 test("verification canonicalizes ordering — index/column creation order is irrelevant", () => {
-  const a = dbWith(["0002_tenant_core.sql", "0003_tenant_persistence_foundation.sql", "0005_tenant_scoped_indexes.sql"])
+  // Both databases must carry the SAME logical schema: the complete tenant lane.
+  // `a` applies the files directly, `b` goes through the ledger.
+  const a = dbWith(["0002_tenant_core.sql", "0003_tenant_persistence_foundation.sql", "0005_tenant_scoped_indexes.sql", "0006_action_preview_creator.sql"])
+  ensureHistoryTable(a)
   const b = new DatabaseSync(":memory:")
   applyLane(b, manifest(), "TENANT_DB_DEFAULT", REPO_ROOT)
   // Add the SAME index again in a different order — signature must be unchanged.

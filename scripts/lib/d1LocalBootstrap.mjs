@@ -7,19 +7,27 @@
  */
 
 import { DatabaseSync } from "node:sqlite"
-import { readFileSync, mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
 import { resolve as resolvePath } from "node:path"
 import { tmpdir } from "node:os"
-import { buildPlan, KNOWN_BINDINGS } from "./d1MigrationManifest.mjs"
+import { KNOWN_BINDINGS } from "./d1MigrationManifest.mjs"
+import { applyLaneWithLedger } from "./d1MigrationLedger.mjs"
 
-/** Apply a binding's ordered lane to an open DB. Returns applied migration names. */
-export function applyLane(db, manifest, binding, repoRoot) {
-  const applied = []
-  for (const step of buildPlan(manifest, binding)) {
-    db.exec(readFileSync(resolvePath(repoRoot, step.path), "utf8"))
-    applied.push(step.name)
-  }
-  return applied
+/**
+ * Apply a binding's ordered lane to an open DB through the migration ledger.
+ * Returns the applied migration names.
+ *
+ * Goes through the ledger rather than raw-replaying the files, so a `once`
+ * migration (0006) is applied exactly once and skipped on re-application. Calling
+ * this twice is the idempotence proof.
+ */
+export function applyLane(db, manifest, binding, repoRoot, options = {}) {
+  return applyLaneWithLedger(db, manifest, binding, repoRoot, options).applied
+}
+
+/** As `applyLane`, but also reports which `once` migrations were skipped. */
+export function applyLaneDetailed(db, manifest, binding, repoRoot, options = {}) {
+  return applyLaneWithLedger(db, manifest, binding, repoRoot, options)
 }
 
 /**

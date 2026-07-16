@@ -81,7 +81,7 @@ export function buildEvidence(repoRoot = REPO_ROOT, options = {}) {
   const migrations = {}
   for (const binding of KNOWN_BINDINGS) {
     // Filenames + logical versions ONLY (no paths, no SQL, no IDs).
-    migrations[binding] = plans[binding].map((s) => ({ sequence: s.sequence, name: s.name, kind: s.kind, idempotent: s.idempotent }))
+    migrations[binding] = plans[binding].map((s) => ({ sequence: s.sequence, name: s.name, kind: s.kind, apply: s.apply }))
   }
 
   return {

@@ -21,6 +21,7 @@
     "cf:d1:schema:verify:local": "node --disable-warning=ExperimentalWarning scripts/cf-d1-schema-verify-local.mjs",
     "cf:d1:evidence": "node --disable-warning=ExperimentalWarning scripts/cf-d1-evidence.mjs",
     "cf:d1:bootstrap:prepare": "node scripts/cf-d1-bootstrap-prepare.mjs",
+    "cf:d1:bootstrap:apply": "node scripts/cf-d1-bootstrap-apply.mjs",
     "cf:d1:migrations:apply": "node scripts/cf-d1-migrations-apply.mjs",
     "cf:d1:schema:verify:remote": "node scripts/cf-d1-schema-verify-remote.mjs",
     "electron:dev": "ATRA_ELECTRON_START_URL=http://localhost:3000 NODE_OPTIONS=--experimental-strip-types electron electron/main.ts",

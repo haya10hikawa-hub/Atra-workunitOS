@@ -63,7 +63,14 @@ wrangler d1 execute CONTROL_DB --local --file=migrations/0004_control_auth_works
 wrangler d1 execute TENANT_DB_DEFAULT --local --file=migrations/0002_tenant_core.sql
 wrangler d1 execute TENANT_DB_DEFAULT --local --file=migrations/0003_tenant_persistence_foundation.sql
 wrangler d1 execute TENANT_DB_DEFAULT --local --file=migrations/0005_tenant_scoped_indexes.sql
+wrangler d1 execute TENANT_DB_DEFAULT --local --file=migrations/0006_action_preview_creator.sql
 ```
+
+`0006` is **required** — without it `action_previews` has no `created_by_user_id` and
+every Action Preview create fails. It is `once`-only: run it **exactly once** against
+a given local database (re-running raises `duplicate column name`). Because this
+hand-driven path has no ledger, prefer `cf:d1:bootstrap:local`, which applies the
+complete lane through the ledger and is safely repeatable.
 
 ### Start dev server
 
@@ -115,9 +122,14 @@ npm run cf:d1:migrations:apply -- --remote --config wrangler.deploy.json
 ```
 
 The apply walks each lane in manifest order and aborts on the first failure. It does
-**not** pass `--yes`: Wrangler's own confirmation stays visible to the operator. Only
-the **lane** migrations are applied — the deferred, non-idempotent `0006` is never
-auto-applied (see [§6](#6-migration-lanes)).
+**not** pass `--yes`: Wrangler's own confirmation stays visible to the operator.
+
+**Every** active migration is applied, `0006` included. Before touching a lane the
+command reconciles the remote ledger and refuses if anything disagrees. A `once`
+migration is applied exactly once — its DDL and its ledger row go in a **single**
+`d1 execute --file` invocation, which D1 runs as one implicit atomic batch — so
+re-running this command skips `0006` rather than failing on it (see
+[§6](#6-migration-lanes)).
 
 ### Set environment variables
 
@@ -170,18 +182,79 @@ change — a changed digest fails `cf:d1:migrations:check`. New work is appended
 new migration + a new manifest entry; existing entries are never rewritten or
 renumbered.
 
-**Every lane migration is idempotent** (`CREATE ... IF NOT EXISTS`), so re-applying a
-complete lane succeeds and leaves the schema signature unchanged.
+### Apply modes: `replay_safe` vs `once`
 
-### Deferred: `0006_action_preview_creator.sql`
+Every migration declares **how** it may be applied. There is deliberately no
+"deferred"/"skip" mode: a required migration is never hidden from operations.
 
-`0006` (`ALTER TABLE action_previews ADD COLUMN created_by_user_id`) is **not** in an
-idempotent lane: SQLite has no `ADD COLUMN IF NOT EXISTS`, so re-applying it fails.
-It is recorded in the manifest's `deferred` list — digest-pinned (the manifest stays
-canonical over *every* committed migration) but never auto-applied by
-`cf:d1:migrations:apply` and never part of the bootstrap lanes. An operator applies
-it **once**, separately. Folding it into an idempotent `CREATE` during a future
-schema rebuild is tracked under **Issue #155**.
+| Mode | Meaning | Applied |
+| --- | --- | --- |
+| `replay_safe` | Every statement is `IF NOT EXISTS`-guarded, so the raw SQL can be re-executed against an already-migrated database. | Every run |
+| `once` | The raw SQL is **not** re-runnable (SQLite has no `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`). | Exactly once, tracked in the ledger |
+
+A `once` migration must declare an **effect probe** (`{ type: "column_exists",
+table, column }`) — the deterministic schema question "did this change land?". It is
+what lets the ledger and the real schema be reconciled after a crash or a manual
+apply. `cf:d1:migrations:check` rejects a `once` migration without one.
+
+### The migration ledger (`__atra_d1_migrations`)
+
+Applied migrations are recorded per database:
+
+```text
+__atra_d1_migrations(binding, sequence, path, sha256, applied_at)
+  PRIMARY KEY (binding, sequence)
+  UNIQUE      (binding, path)
+```
+
+It holds **only** migration metadata — never application data and never a database
+ID. It guarantees:
+
+- an empty database applies **every** required migration, `0006` included;
+- an already-applied `once` migration is **skipped**, never raw-replayed;
+- replaying `cf:d1:migrations:apply` does **not** attempt `0006` again;
+- a history entry with the wrong **digest**, **path**, or **sequence** fails closed;
+- SQL is **never** marked applied before it succeeds, and a failed migration is
+  never recorded as successful (the SQL and its ledger row commit together);
+- order is deterministic, and a later migration cannot be satisfied before its
+  predecessors;
+- Control DB and Tenant DB histories cannot mix (a foreign binding fails closed).
+
+**Why a custom ledger, not `wrangler d1 migrations apply`?** Verified against this
+repository's pinned Wrangler (4.99.0): `wrangler d1 migrations apply <database>`
+applies **every** file in the migrations directory to **one** database. This
+repository interleaves two independent lanes in a single `migrations/` directory
+(0001/0004 → `CONTROL_DB`; 0002/0003/0005/0006 → `TENANT_DB_DEFAULT`), so the
+built-in mechanism would apply control migrations to the tenant database and vice
+versa. It also performs no digest pinning and cannot fail closed on a tampered
+migration.
+
+#### Recovery states
+
+Reconciliation (`reconcileLane`) resolves every ledger/schema disagreement
+deterministically. Anything other than `pending`/`satisfied` **stops the lane before
+anything is applied** and is an operator action category:
+
+| State | Meaning |
+| --- | --- |
+| `pending` | Not recorded, effect absent → apply |
+| `satisfied` | Recorded and effect present → skip |
+| `schema_without_history` | Column exists but no ledger row (crash after DDL, or a manual apply) |
+| `history_without_schema` | Ledger row exists but the column does not (interrupted execution) |
+| `digest_mismatch` | Recorded digest ≠ pinned manifest digest |
+| `path_mismatch` | Recorded path ≠ manifest path for that sequence |
+| `foreign_binding` | A row from the other database's lane |
+
+### `0006_action_preview_creator.sql` is ACTIVE and `once`
+
+`0006` (`ALTER TABLE action_previews ADD COLUMN created_by_user_id`) is an **active,
+ordered member of the tenant lane** (sequence 4) marked `once`.
+
+It is **required**: `D1ActionPreviewRepository.create()` always inserts
+`created_by_user_id`. A database without that column cannot serve Action Preview
+creation at all — so a bootstrap that omits it is not "clean", it is broken. The
+schema contract therefore **requires** the column, and both the local and remote
+verifiers **fail** when it is missing.
 
 Migrations are pure DDL: `cf:d1:migrations:check` fails if any migration contains
 `INSERT`/`UPDATE`/`DELETE`/`REPLACE`/`ATTACH`, so **no migration ever seeds a default
@@ -443,11 +516,12 @@ schema must contain).
 | Command | Network | Mutates | Purpose |
 |---------|---------|---------|---------|
 | `cf:d1:migrations:check` | none | no | Validate manifest, paths, digests, lanes, SQL safety |
-| `cf:d1:migrations:plan` | none | no | Print the ordered plan (binding, filename, sequence, kind, idempotence) |
+| `cf:d1:migrations:plan` | none | no | Print the ordered plan (binding, filename, sequence, kind, apply mode) |
 | `cf:d1:bootstrap:local` | none | isolated temp only | Fresh bootstrap + schema verify + idempotence + local fixture |
 | `cf:d1:schema:verify:local` | none | no | Verify both schemas against the contract |
 | `cf:d1:evidence` | none | writes `.d1-evidence/` (untracked) | Safe operational evidence artifact |
 | `cf:d1:bootstrap:prepare` | none | writes `bootstrap.control.sql` (untracked, 0600) | Prepare operator bootstrap SQL — **does not apply** |
+| `cf:d1:bootstrap:apply` | **remote** | **yes** | Operator-gated, atomic production Control DB bootstrap |
 | `cf:d1:migrations:apply` | **remote** | **yes** | Operator-gated production migration apply |
 | `cf:d1:schema:verify:remote` | **remote** | no (read-only) | Verify production schema without writing |
 
@@ -470,8 +544,13 @@ then deletes the temporary state. No remote access.
 
 The bootstrap applies each complete lane **twice** and compares a canonical schema
 *signature* (tables, columns, NOT NULL, primary keys, indexes, foreign keys) before
-and after. The signature must be identical. Every lane migration is
-`CREATE ... IF NOT EXISTS`; the non-idempotent `0006` is deliberately deferred (§6).
+and after. The signature must be identical.
+
+Idempotence comes from the **ledger**, not from every migration being replay-safe:
+the `replay_safe` migrations are re-executed harmlessly, and the `once` migration
+`0006` is **skipped** on the second run because it is already recorded (§6). The
+clean bootstrap therefore contains `action_previews.created_by_user_id`, and
+supports **Action Preview and Approval**, not just WorkUnit.
 
 ### Local bootstrap fixture (LOCAL/TEST ONLY)
 
@@ -489,7 +568,30 @@ request-scoped **JWT session** resolves against the freshly bootstrapped Control
 and reaches the freshly migrated **tenant repository bundle** through the mandatory
 tenant-registry resolver.
 
-### Production bootstrap preparation (operator-gated)
+`tests/d1bootstrapLifecycle.test.mts` proves the **complete lifecycle** on a clean
+bootstrap, using real `node:sqlite` (never FakeD1, which enforces no schema and
+therefore cannot prove schema compatibility): JWT session → production repository
+resolution → WorkUnit create/read → **Action Preview create with a server-set
+`creatorUserId`** → creator read-back → **Approval by a different approver (201)** →
+**self-approval rejected (403)** → exact approval hashes and WorkUnit/Preview
+relationships → wrong-tenant Preview lookup returns `null`. It also proves a schema
+missing `created_by_user_id` **fails verification before any repository use**, and
+carries a direct regression test: on the old `0002/0003/0005`-only lane
+`D1ActionPreviewRepository.create()` fails, and on the complete lane it passes.
+
+### Production bootstrap (operator-gated, repository-controlled)
+
+The **only** supported production bootstrap workflow:
+
+```text
+prepare bootstrap → inspect safe plan → gated apply → read-only verification → cleanup
+```
+
+Do **not** hand the generated SQL to a raw `wrangler d1 execute`. That bypasses every
+gate, the atomic-batch guarantee, the post-apply verification, and the guaranteed
+cleanup. Use `cf:d1:bootstrap:apply`.
+
+#### 1. Prepare
 
 ```bash
 CF_D1_BOOTSTRAP_TENANT_ID=... CF_D1_BOOTSTRAP_TENANT_NAME=... CF_D1_BOOTSTRAP_TENANT_SLUG=... \
@@ -506,13 +608,57 @@ variable fails closed. The role is allowlisted (`owner|manager|editor|viewer`),
 tenant and membership status must be **explicitly** `active`, and the database ID
 uses the **same UUID validation as the deployment config** (placeholders rejected).
 Output is written to the untracked repository-root `bootstrap.control.sql` with
-`0600` permissions and is removed after apply or failure. **No value is ever logged**
-(failures name only the field). The generated SQL uses plain `INSERT`s ordered
-tenant → registry → user → membership → identity, so a **missing parent** (foreign
-key) and a **duplicate identity** (`UNIQUE(provider, provider_subject)`) both fail
-closed. Applying it requires a **separate** explicit execution flag
-(`CF_D1_BOOTSTRAP_EXECUTE=1`) and an operator-run `wrangler d1 execute --remote`.
+`0600` permissions. **No value is ever logged** (failures name only the field).
 Generated bootstrap SQL is git-ignored and must never be committed.
+
+#### 2. Inspect the safe plan
+
+```bash
+npm run cf:d1:migrations:plan        # ordered lanes, no IDs, no SQL
+npm run cf:d1:migrations:check       # manifest, digests, lanes, SQL safety
+```
+
+#### 3. Gated apply
+
+```bash
+CF_D1_BOOTSTRAP_EXECUTE=1 \
+CF_D1_BOOTSTRAP_CONFIRM=APPLY_PRODUCTION_CONTROL_BOOTSTRAP \
+CF_D1_BOOTSTRAP_TENANT_ID=... (the same operator variables as above) \
+npm run cf:d1:bootstrap:apply -- --remote --config wrangler.deploy.json
+```
+
+The apply **stops before Wrangler** unless *every* gate passes: explicit `--remote`;
+a validated generated deploy config with real, non-placeholder D1 IDs; the target
+binding is exactly `CONTROL_DB`; the generated SQL exists, is a **plain file** (never
+a symlink), is at the **approved repository-root location**, and has permissions no
+broader than `0600`; `CF_D1_BOOTSTRAP_EXECUTE=1`; the exact confirmation phrase; and
+a valid manifest + Control DB schema contract. Operator input is **re-validated** at
+apply time — the command does not trust `prepare`.
+
+**Atomicity.** The five records are applied by **one** `wrangler d1 execute --file`
+invocation, which D1 runs as a **single implicit atomic batch**: all five commit, or
+none do. Verified against this repository's pinned Wrangler (4.99.0): D1 **rejects**
+explicit `BEGIN IMMEDIATE`/`COMMIT`/`SAVEPOINT`, so the generated file deliberately
+contains no transaction control — the single-file batch *is* the atomic boundary. D1
+enforces foreign keys (`PRAGMA foreign_keys` → 1). The SQL uses plain `INSERT`s
+(never `INSERT OR IGNORE`, never `REPLACE`) ordered tenant → registry → user →
+membership → identity, so a duplicate tenant, slug, email, membership, or
+provider/subject — and any missing parent — fails closed with **zero new rows**.
+
+#### 4. Read-only verification (automatic)
+
+After a successful write the command verifies the Control DB **read-only** and
+**category-level**: exactly one active tenant, one matching registry row, one user,
+one active membership, one auth identity, and all foreign keys resolving. Every query
+is a bare `SELECT COUNT(*)`; **no ID, email, subject, database ID, or row content is
+read or printed**. A failed verification returns failure and removes the generated
+SQL.
+
+#### 5. Cleanup (guaranteed)
+
+The generated SQL is removed on **every** exit path — success, Wrangler failure,
+verification failure, refused gates, or an unexpected throw — and never before
+Wrangler has read it.
 
 ### Read-only remote schema verification
 
@@ -549,9 +695,9 @@ dry-run stay fully **offline**. No step can be skipped or reordered.
 
 - **D1 data rollback is SEPARATE from Worker rollback.** Rolling the Worker back to a
   previous version does **not** roll back applied migrations or data.
-- Migrations here are additive (`CREATE ... IF NOT EXISTS`, plus the deferred `0006`
-  `ADD COLUMN`); there are **no down-migrations**. A schema change cannot be undone by
-  re-deploying an older Worker.
+- Migrations here are additive (`replay_safe` `CREATE ... IF NOT EXISTS`, plus the
+  `once` `0006 ADD COLUMN`); there are **no down-migrations**. A schema change cannot
+  be undone by re-deploying an older Worker.
 - Recovering D1 data requires Cloudflare **Time Travel** (`wrangler d1 time-travel`)
   or a restore from an export — an operator action outside this pipeline, with its own
   retention window.

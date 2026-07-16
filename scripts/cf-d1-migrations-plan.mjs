@@ -3,9 +3,12 @@
  * cf:d1:migrations:plan (P0-PERSIST-015)
  *
  * Prints the deterministic per-binding migration plan: binding name, migration
- * filenames, logical sequence, kind, and idempotence — SAFE fields only. NEVER
+ * filenames, logical sequence, kind, and apply mode — SAFE fields only. NEVER
  * prints real database IDs, secrets, or SQL contents. Performs NO SQL execution
  * and NO database/network access.
+ *
+ * Every committed migration appears here, `once` migrations included: the plan is
+ * the complete operational picture, so no required migration can be invisible.
  */
 
 import { fileURLToPath } from "node:url"
@@ -25,7 +28,7 @@ export function buildPlanReport(repoRoot = REPO_ROOT) {
   for (const binding of KNOWN_BINDINGS) {
     lines.push(`${binding}:`)
     for (const step of plans[binding]) {
-      lines.push(`  [${step.sequence}] ${step.name}  (kind=${step.kind}, idempotent=${step.idempotent})`)
+      lines.push(`  [${step.sequence}] ${step.name}  (kind=${step.kind}, apply=${step.apply})`)
     }
   }
   return { ok: true, lines, plans }

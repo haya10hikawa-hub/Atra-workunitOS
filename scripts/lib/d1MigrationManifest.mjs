@@ -16,15 +16,30 @@
  *     absolute paths, `..` traversal, and symlink escapes (realpath-checked).
  */
 
-import { readFileSync, existsSync, realpathSync, lstatSync } from "node:fs"
+import { readFileSync, existsSync, realpathSync, lstatSync, readdirSync } from "node:fs"
 import { resolve as resolvePath, basename, isAbsolute, sep } from "node:path"
 import { createHash } from "node:crypto"
 
 export const MANIFEST_RELATIVE_PATH = "migrations/manifest.json"
 export const KNOWN_BINDINGS = ["CONTROL_DB", "TENANT_DB_DEFAULT"]
 export const KNOWN_KINDS = ["schema", "index"]
+
+/**
+ * How a migration may be applied.
+ *   - `replay_safe`: every statement is `IF NOT EXISTS`-guarded, so the raw SQL
+ *     can be re-executed against an already-migrated database. Applied every run.
+ *   - `once`: the raw SQL is NOT re-runnable (SQLite has no
+ *     `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`). Applied exactly once and
+ *     recorded in the migration ledger; later runs skip it.
+ * A required migration is NEVER hidden from operations to dodge replay-safety —
+ * that produces a bootstrap schema the application cannot use.
+ */
+export const MIGRATION_APPLY_MODES = ["replay_safe", "once"]
+
 const SHA256_RE = /^[0-9a-f]{64}$/
 const MIGRATIONS_PREFIX = "migrations/"
+const MIGRATIONS_DIR = "migrations"
+const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 // ─── Load ────────────────────────────────────────────────────────
 
@@ -105,6 +120,18 @@ export function computeDigest(absPath) {
 
 // ─── Entry + lane validation ─────────────────────────────────────
 
+/**
+ * A `once` migration's effect probe — the deterministic schema question "did this
+ * migration's change actually land?". Metadata only: it names a table + column,
+ * never row data. Identifiers are validated because the verifier interpolates
+ * them into a PRAGMA.
+ */
+export function isValidEffectProbe(effect) {
+  if (!effect || typeof effect !== "object" || Array.isArray(effect)) return false
+  if (effect.type !== "column_exists") return false
+  return IDENT_RE.test(String(effect.table ?? "")) && IDENT_RE.test(String(effect.column ?? ""))
+}
+
 function validateEntry(repoRoot, entry, laneBinding, failures, seenPaths, seenSeq) {
   const name = entry && typeof entry.path === "string" ? basename(entry.path) : "?"
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
@@ -122,8 +149,14 @@ function validateEntry(repoRoot, entry, laneBinding, failures, seenPaths, seenSe
   if (!KNOWN_KINDS.includes(entry.kind)) {
     failures.push(`kind_invalid:${laneBinding}:${name}`)
   }
-  if (typeof entry.idempotent !== "boolean") {
-    failures.push(`idempotent_flag_invalid:${laneBinding}:${name}`)
+  if (!MIGRATION_APPLY_MODES.includes(entry.apply)) {
+    failures.push(`apply_mode_invalid:${laneBinding}:${name}`)
+  }
+  // A `once` migration MUST declare an effect probe: it is the only way the
+  // ledger and the real schema can be reconciled deterministically after a
+  // crash or a manual apply.
+  if (entry.apply === "once" && !isValidEffectProbe(entry.effect)) {
+    failures.push(`effect_probe_invalid:${laneBinding}:${name}`)
   }
   if (typeof entry.sha256 !== "string" || !SHA256_RE.test(entry.sha256)) {
     failures.push(`digest_format_invalid:${laneBinding}:${name}`)
@@ -180,31 +213,33 @@ export function validateManifest(manifest, repoRoot) {
     for (const entry of lane) validateEntry(repoRoot, entry, binding, failures, seenPaths, seenSeq)
   }
 
-  // Deferred (non-lane) migrations are also digest-pinned + path-safe so the
-  // manifest is canonical over EVERY committed migration.
-  const deferred = Array.isArray(manifest.deferred) ? manifest.deferred : []
-  for (const entry of deferred) {
-    const name = entry && typeof entry.path === "string" ? basename(entry.path) : "?"
-    if (!entry || typeof entry !== "object") { failures.push("deferred_entry_invalid"); continue }
-    if (!KNOWN_BINDINGS.includes(entry.binding)) failures.push(`unknown_binding:deferred:${name}`)
-    if (typeof entry.sha256 !== "string" || !SHA256_RE.test(entry.sha256)) { failures.push(`digest_format_invalid:deferred:${name}`); continue }
-    if (typeof entry.path === "string") {
-      if (seenPaths.has(entry.path)) failures.push(`duplicate_path:${name}`)
-      seenPaths.add(entry.path)
-    }
-    const resolved = resolveMigrationPath(repoRoot, entry.path)
-    if (!resolved.ok) { failures.push(`${resolved.failure}:deferred:${name}`); continue }
-    if (computeDigest(resolved.absPath) !== entry.sha256) failures.push(`digest_mismatch:deferred:${name}`)
+  // `deferred` is NOT a supported concept. A committed migration parked outside
+  // the lanes is invisible to `migrations:plan`/`bootstrap` and silently yields a
+  // schema the application cannot use (this is exactly how action_previews shipped
+  // without created_by_user_id). Non-idempotent SQL is expressed with
+  // `apply: "once"` + the ledger — never by hiding the migration.
+  if ("deferred" in manifest) failures.push("deferred_migrations_not_supported")
+
+  // Completeness: every committed migration file must be in exactly one lane.
+  for (const name of listCommittedMigrationFiles(repoRoot)) {
+    if (!seenPaths.has(`${MIGRATIONS_PREFIX}${name}`)) failures.push(`migration_not_in_any_lane:${name}`)
   }
 
   return { ok: failures.length === 0, failures }
+}
+
+/** Committed `migrations/*.sql` basenames, sorted. Never reads file contents. */
+export function listCommittedMigrationFiles(repoRoot) {
+  let entries
+  try { entries = readdirSync(resolvePath(repoRoot, MIGRATIONS_DIR)) } catch { return [] }
+  return entries.filter((n) => n.endsWith(".sql")).sort()
 }
 
 // ─── Ordered plan ────────────────────────────────────────────────
 
 /**
  * Deterministic ordered plan for a binding: the lane sorted by sequence. Returns
- * only safe fields (binding, sequence, path, name, kind, idempotent, sha256).
+ * only safe fields (binding, sequence, path, name, kind, apply, effect, sha256).
  * Never resolves DB IDs and never reads SQL contents.
  */
 export function buildPlan(manifest, binding) {
@@ -217,7 +252,8 @@ export function buildPlan(manifest, binding) {
       path: e.path,
       name: basename(e.path),
       kind: e.kind,
-      idempotent: e.idempotent,
+      apply: e.apply,
+      effect: e.effect,
       sha256: e.sha256,
     }))
 }
@@ -240,7 +276,6 @@ export function scanMigrationSqlSafety(repoRoot, manifest) {
   const failures = []
   const steps = []
   for (const binding of KNOWN_BINDINGS) for (const e of buildPlan(manifest, binding)) steps.push(e.path)
-  for (const e of Array.isArray(manifest.deferred) ? manifest.deferred : []) steps.push(e.path)
   const forbidden = [
     { code: "insert", re: /\binsert\b/i },
     { code: "replace_into", re: /\breplace\s+into\b/i },
@@ -263,10 +298,7 @@ export function scanMigrationSqlSafety(repoRoot, manifest) {
 export function manifestDigest(manifest) {
   const parts = []
   for (const binding of KNOWN_BINDINGS) {
-    for (const e of buildPlan(manifest, binding)) parts.push(`${binding}:${e.sequence}:${e.name}:${e.sha256}`)
-  }
-  for (const e of (Array.isArray(manifest.deferred) ? manifest.deferred : [])) {
-    parts.push(`deferred:${basename(e.path)}:${e.sha256}`)
+    for (const e of buildPlan(manifest, binding)) parts.push(`${binding}:${e.sequence}:${e.name}:${e.apply}:${e.sha256}`)
   }
   return createHash("sha256").update(parts.join("\n")).digest("hex")
 }

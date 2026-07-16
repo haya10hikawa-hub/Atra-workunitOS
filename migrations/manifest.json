@@ -1,28 +1,31 @@
 {
   "patchId": "P0-PERSIST-015",
-  "version": 1,
-  "description": "Canonical, machine-readable D1 migration manifest for WorkUnit OS. Two INDEPENDENT lanes (CONTROL_DB, TENANT_DB_DEFAULT). Existing migration SQL is IMMUTABLE after this manifest is introduced; changes are append-only. Each `sha256` is SHA-256 over the file bytes and is pinned. This file NEVER contains database IDs, secrets, identities, or seed values.",
+  "version": 2,
+  "description": "Canonical, machine-readable D1 migration manifest for WorkUnit OS. Two INDEPENDENT lanes (CONTROL_DB, TENANT_DB_DEFAULT). Every committed migration MUST appear in exactly one lane — there is no `deferred` escape hatch, because an operationally invisible migration produces a bootstrap schema the application cannot use. Existing migration SQL is IMMUTABLE after this manifest is introduced; changes are append-only. Each `sha256` is SHA-256 over the file bytes and is pinned. This file NEVER contains database IDs, secrets, identities, or seed values.",
+  "applyModes": {
+    "replay_safe": "The raw SQL may be re-executed against an already-migrated database with no effect and no error (every statement is `IF NOT EXISTS`-guarded). Applied on every run.",
+    "once": "The raw SQL is NOT re-runnable (e.g. `ALTER TABLE ... ADD COLUMN`, which SQLite cannot guard with `IF NOT EXISTS`). Applied exactly once, recorded in the `__atra_d1_migrations` ledger, and skipped on later runs. Requires an `effect` probe so the ledger and the real schema reconcile deterministically."
+  },
   "bindings": ["CONTROL_DB", "TENANT_DB_DEFAULT"],
   "lanes": {
     "CONTROL_DB": [
-      { "sequence": 1, "binding": "CONTROL_DB", "path": "migrations/0001_control_db.sql", "sha256": "b693b3d1852cd03fc1b2eb4156cc953f63c36c61813516661b49e8bbdab7eb07", "kind": "schema", "idempotent": true },
-      { "sequence": 2, "binding": "CONTROL_DB", "path": "migrations/0004_control_auth_workspace.sql", "sha256": "2cd28456dd9bb40e1ff9c06798b06e901a081bc0808093dc0d578d85208f0e1d", "kind": "schema", "idempotent": true }
+      { "sequence": 1, "binding": "CONTROL_DB", "path": "migrations/0001_control_db.sql", "sha256": "b693b3d1852cd03fc1b2eb4156cc953f63c36c61813516661b49e8bbdab7eb07", "kind": "schema", "apply": "replay_safe" },
+      { "sequence": 2, "binding": "CONTROL_DB", "path": "migrations/0004_control_auth_workspace.sql", "sha256": "2cd28456dd9bb40e1ff9c06798b06e901a081bc0808093dc0d578d85208f0e1d", "kind": "schema", "apply": "replay_safe" }
     ],
     "TENANT_DB_DEFAULT": [
-      { "sequence": 1, "binding": "TENANT_DB_DEFAULT", "path": "migrations/0002_tenant_core.sql", "sha256": "226f522c3e3b35c1bd6e5aa611a7bee0801de0f483a228b1687b47ccf6a4728b", "kind": "schema", "idempotent": true },
-      { "sequence": 2, "binding": "TENANT_DB_DEFAULT", "path": "migrations/0003_tenant_persistence_foundation.sql", "sha256": "19df5f787fa6a37f283b45cc369fcc59e878bab7fa58886691f2f298e2840d53", "kind": "schema", "idempotent": true },
-      { "sequence": 3, "binding": "TENANT_DB_DEFAULT", "path": "migrations/0005_tenant_scoped_indexes.sql", "sha256": "5e4b48a9df9166e18371cc1942151e3424c8add72c638e1529facdc484d7be8b", "kind": "index", "idempotent": true }
+      { "sequence": 1, "binding": "TENANT_DB_DEFAULT", "path": "migrations/0002_tenant_core.sql", "sha256": "226f522c3e3b35c1bd6e5aa611a7bee0801de0f483a228b1687b47ccf6a4728b", "kind": "schema", "apply": "replay_safe" },
+      { "sequence": 2, "binding": "TENANT_DB_DEFAULT", "path": "migrations/0003_tenant_persistence_foundation.sql", "sha256": "19df5f787fa6a37f283b45cc369fcc59e878bab7fa58886691f2f298e2840d53", "kind": "schema", "apply": "replay_safe" },
+      { "sequence": 3, "binding": "TENANT_DB_DEFAULT", "path": "migrations/0005_tenant_scoped_indexes.sql", "sha256": "5e4b48a9df9166e18371cc1942151e3424c8add72c638e1529facdc484d7be8b", "kind": "index", "apply": "replay_safe" },
+      {
+        "sequence": 4,
+        "binding": "TENANT_DB_DEFAULT",
+        "path": "migrations/0006_action_preview_creator.sql",
+        "sha256": "334c2b08abd361454d00d09d29dcbd12a379701a3da9a0451a985859614e13b9",
+        "kind": "schema",
+        "apply": "once",
+        "effect": { "type": "column_exists", "table": "action_previews", "column": "created_by_user_id" },
+        "note": "Four-eyes approval support. `D1ActionPreviewRepository.create()` ALWAYS inserts action_previews.created_by_user_id, so this migration is REQUIRED for a usable tenant database: it is an ordered, ACTIVE lane member, never deferred. It is `once` because SQLite has no `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`; the ledger — not raw replay-safety — is what makes re-running the lane safe."
+      }
     ]
-  },
-  "deferred": [
-    {
-      "binding": "TENANT_DB_DEFAULT",
-      "path": "migrations/0006_action_preview_creator.sql",
-      "sha256": "334c2b08abd361454d00d09d29dcbd12a379701a3da9a0451a985859614e13b9",
-      "kind": "schema",
-      "idempotent": false,
-      "reason": "non_idempotent_alter_add_column",
-      "note": "SQLite has no `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so 0006 is not safely re-runnable and MUST NOT be part of an idempotent reproducible bootstrap lane. It is pinned here for digest-immutability (the manifest is canonical over every committed migration) and is applied once, separately, by an operator. Folding 0006 into a CREATE (a future idempotent rebuild) is tracked under Issue #155."
-    }
-  ]
+  }
 }

@@ -63,10 +63,23 @@ test("GUARD: production apply requires BOTH an execution flag and the exact conf
   assert.match(src, /env\.CF_D1_MIGRATE_CONFIRM !== MIGRATE_CONFIRM_PHRASE/)
   assert.match(src, /MIGRATE_CONFIRM_PHRASE = "APPLY_PRODUCTION_D1_MIGRATIONS"/)
   assert.match(src, /argv\.includes\("--remote"\)/)
-  // Wrangler is only reached after ALL gates pass.
+
+  // Wrangler is only reached after ALL gates pass. This is enforced by a runtime
+  // latch rather than by source ordering, so that moving a call site cannot
+  // silently reach production: every Wrangler-invoking helper must first call
+  // requireAuthorizedExecution(), and the latch may only open after the gates.
+  for (const helper of ["function remoteQuery(", "function execRemoteSqlText("]) {
+    const start = src.indexOf(helper)
+    assert.ok(start >= 0, `${helper} must exist`)
+    const body = src.slice(start, start + 400)
+    assert.match(body, /requireAuthorizedExecution\(\)/, `${helper} must refuse to run unless gates passed`)
+  }
+  assert.match(src, /if \(!executionAuthorized\) throw new Error\("gate_bypass_attempt"\)/)
+  // The latch opens exactly once, and only after the gate check.
+  assert.equal(src.split("executionAuthorized = true").length - 1, 1, "the latch must open in exactly one place")
   const gateIdx = src.indexOf("if (!gates.ok)")
-  const spawnIdx = src.indexOf("spawnSync(WRANGLER_BIN")
-  assert.ok(gateIdx >= 0 && spawnIdx > gateIdx, "the gate check must precede any Wrangler invocation")
+  const latchIdx = src.indexOf("executionAuthorized = true")
+  assert.ok(gateIdx >= 0 && latchIdx > gateIdx, "the gate check must precede opening the execution latch")
 })
 
 test("GUARD: production apply cannot use the committed placeholder config", () => {

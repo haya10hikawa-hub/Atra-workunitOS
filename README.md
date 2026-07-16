@@ -134,14 +134,23 @@ lanes (immutable, SHA-256 pinned, append-only). Full guide:
 
 ```text
 CONTROL_DB
-  0001_control_db.sql
-  0004_control_auth_workspace.sql
+  0001_control_db.sql                     replay_safe
+  0004_control_auth_workspace.sql         replay_safe
 
 TENANT_DB_DEFAULT
-  0002_tenant_core.sql
-  0003_tenant_persistence_foundation.sql
-  0005_tenant_scoped_indexes.sql
+  0002_tenant_core.sql                    replay_safe
+  0003_tenant_persistence_foundation.sql  replay_safe
+  0005_tenant_scoped_indexes.sql          replay_safe
+  0006_action_preview_creator.sql         once
 ```
+
+Every committed migration is in exactly one lane; there is no `deferred` escape
+hatch. **`replay_safe`** migrations are `IF NOT EXISTS`-guarded and re-run every
+time. **`once`** migrations are not raw-re-runnable (SQLite has no
+`ADD COLUMN IF NOT EXISTS`), so they are applied a single time and recorded in the
+`__atra_d1_migrations` ledger, which makes replaying a lane safe. `0006` is required:
+Action Preview creation always writes `created_by_user_id`, so a clean bootstrap
+includes it and supports **Action Preview and Approval**, not just WorkUnit.
 
 ```bash
 npm run cf:d1:migrations:check     # manifest, paths, digests, lanes, SQL safety (offline)
@@ -152,9 +161,20 @@ npm run cf:d1:schema:verify:local  # verify both schemas against the schema cont
 
 Production migration apply is **operator-gated** (`--remote` + a validated generated
 config + `CF_D1_MIGRATE_EXECUTE=1` + `CF_D1_MIGRATE_CONFIRM=APPLY_PRODUCTION_D1_MIGRATIONS`)
-and is never part of `cf:deploy`. D1 data rollback is **separate** from Worker
-rollback. FakeD1 and `cf:deploy:dry-run` are **not** production-readiness proof —
-Issue #155 remains open until authorized remote evidence is reviewed.
+and is never part of `cf:deploy`.
+
+The production Control DB bootstrap is repository-controlled and follows
+`prepare → inspect safe plan → gated apply → read-only verification → cleanup`, via
+`cf:d1:bootstrap:prepare` then `cf:d1:bootstrap:apply` (`--remote` + a validated
+config + `CF_D1_BOOTSTRAP_EXECUTE=1` +
+`CF_D1_BOOTSTRAP_CONFIRM=APPLY_PRODUCTION_CONTROL_BOOTSTRAP`). It applies all five
+records as one atomic batch and always removes the generated SQL. Never apply the
+generated file with a raw `wrangler d1 execute` — that bypasses every gate.
+
+**Worker deploy never applies migrations and never writes bootstrap records**; it
+only verifies the remote schema read-only. D1 data rollback is **separate** from
+Worker rollback. FakeD1 and `cf:deploy:dry-run` are **not** production-readiness
+proof — Issue #155 remains open until authorized remote evidence is reviewed.
 
 After `cf:build`, clean generated artifacts before committing:
 

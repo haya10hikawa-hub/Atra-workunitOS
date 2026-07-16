@@ -12,16 +12,30 @@
  *   - a fully valid migration manifest.
  * Without ALL of them, it STOPS before invoking Wrangler.
  *
- * Applies only the manifest LANES (idempotent). The deferred non-idempotent 0006
- * is never auto-applied here. NEVER part of Worker deploy. This patch never sets
- * the execution variables and never performs a remote apply.
+ * Applies EVERY active lane migration, `once` migrations (0006) included, through
+ * the `__atra_d1_migrations` ledger:
+ *   - `replay_safe` steps are re-executed harmlessly and recorded;
+ *   - a `once` step is applied EXACTLY ONCE — its DDL and its ledger row go in a
+ *     SINGLE `d1 execute --file` invocation, which D1 applies as one implicit
+ *     atomic batch (verified against pinned Wrangler 4.99.0; D1 rejects explicit
+ *     BEGIN/COMMIT). Replaying this command therefore does NOT attempt 0006 again.
+ *   - any unreconcilable state (digest/path mismatch, recorded-but-absent schema,
+ *     mixed control/tenant history) STOPS the lane before anything is applied.
+ *
+ * NEVER part of Worker deploy. This patch never sets the execution variables and
+ * never performs a remote apply.
  */
 
 import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
 import { spawnSync } from "node:child_process"
-import { loadManifest, validateManifest, buildPlan, KNOWN_BINDINGS } from "./lib/d1MigrationManifest.mjs"
+import { readFileSync, writeFileSync, rmSync, mkdtempSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { loadManifest, validateManifest, buildPlan, computeDigest, resolveMigrationPath, KNOWN_BINDINGS } from "./lib/d1MigrationManifest.mjs"
 import { loadConfigFile, validateDeployConfig } from "./lib/cfDeployConfig.mjs"
+import {
+  CREATE_HISTORY_SQL, MIGRATION_HISTORY_TABLE, reconcileFromState, buildAtomicMigrationBatchSql,
+} from "./lib/d1MigrationLedger.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 export const MIGRATE_CONFIRM_PHRASE = "APPLY_PRODUCTION_D1_MIGRATIONS"
@@ -53,16 +67,103 @@ export function evaluateApplyGates({ env = process.env, argv = [], repoRoot = RE
   return { ok: blocked.length === 0, blocked }
 }
 
-/** The ordered wrangler apply commands (safe — no IDs). Never executed unless gated. */
+// ─── Execution authorization latch ───────────────────────────────
+
+/**
+ * Wrangler is unreachable until EVERY gate has passed. This is a runtime latch,
+ * not a convention: every Wrangler-invoking helper calls
+ * `requireAuthorizedExecution()` first, and only `main()` opens the latch, only
+ * after `evaluateApplyGates` returned ok. A future refactor that moves a call site
+ * therefore cannot silently reach production.
+ */
+let executionAuthorized = false
+function requireAuthorizedExecution() {
+  if (!executionAuthorized) throw new Error("gate_bypass_attempt")
+}
+
+// ─── Remote read surface (read-only, metadata only) ──────────────
+
+/** Run a remote D1 query through Wrangler and parse its JSON results. */
+function remoteQuery(binding, configPath, sql) {
+  requireAuthorizedExecution()
+  const result = spawnSync(WRANGLER_BIN, ["d1", "execute", binding, "--command", sql, "--remote", "--json", "--config", configPath], {
+    cwd: REPO_ROOT, encoding: "utf8",
+  })
+  if (result.status !== 0) throw new Error(`remote_query_failed:${binding}`)
+  let parsed
+  try { parsed = JSON.parse(result.stdout) } catch { throw new Error(`remote_query_unparseable:${binding}`) }
+  const first = Array.isArray(parsed) ? parsed[0] : parsed
+  return (first && Array.isArray(first.results)) ? first.results : []
+}
+
+/**
+ * Read the remote ledger for a binding. Metadata only: no application rows, no
+ * database IDs. The ledger table is created first (replay-safe infrastructure).
+ */
+function readRemoteHistory(binding, configPath) {
+  execRemoteSqlText(binding, configPath, CREATE_HISTORY_SQL, "ledger-init")
+  const rows = remoteQuery(binding, configPath, `SELECT binding, sequence, path, sha256, applied_at FROM ${MIGRATION_HISTORY_TABLE} ORDER BY binding, sequence;`)
+  const own = []
+  const foreign = []
+  for (const r of rows) {
+    const row = { binding: String(r.binding), sequence: Number(r.sequence), path: String(r.path), sha256: String(r.sha256), appliedAt: String(r.applied_at) }
+    if (row.binding === binding) own.push(row)
+    else foreign.push(row)
+  }
+  return { own, foreign }
+}
+
+/** Does a remote column exist? Metadata-only PRAGMA, never row data. */
+function remoteProbe(binding, configPath, effect) {
+  if (!effect || effect.type !== "column_exists") return false
+  const rows = remoteQuery(binding, configPath, `PRAGMA table_info("${effect.table}");`)
+  return rows.some((c) => String(c.name) === effect.column)
+}
+
+/** Execute SQL text remotely via a temporary file — ONE atomic D1 batch. */
+function execRemoteSqlText(binding, configPath, sql, label) {
+  requireAuthorizedExecution()
+  const dir = mkdtempSync(resolve(tmpdir(), "d1-apply-"))
+  const file = resolve(dir, `${label}.sql`)
+  try {
+    writeFileSync(file, sql, { mode: 0o600 })
+    const result = spawnSync(WRANGLER_BIN, ["d1", "execute", binding, "--file", file, "--remote", "--config", configPath], {
+      cwd: REPO_ROOT, stdio: "inherit",
+    })
+    if (result.status !== 0) throw new Error(`remote_exec_failed:${binding}:${label}`)
+  } finally {
+    // The generated SQL never outlives the invocation, on success or failure.
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+// ─── Plan ────────────────────────────────────────────────────────
+
+/**
+ * The ordered wrangler apply commands (safe — no IDs). Never executed unless gated.
+ * `replay_safe` steps apply the pinned file directly; a `once` step is represented
+ * as a single generated atomic batch (DDL + ledger row).
+ */
 export function buildApplyCommands(repoRoot, configPath) {
   const manifest = loadManifest(repoRoot).manifest
   const commands = []
   for (const binding of KNOWN_BINDINGS) {
     for (const step of buildPlan(manifest, binding)) {
-      commands.push({ binding, name: step.name, args: ["d1", "execute", binding, "--file", step.path, "--remote", "--config", configPath] })
+      commands.push({
+        binding, name: step.name, apply: step.apply,
+        args: ["d1", "execute", binding, "--file", step.path, "--remote", "--config", configPath],
+      })
     }
   }
   return commands
+}
+
+/** Read the pinned migration SQL, re-verifying its digest at apply time. */
+function readPinnedMigration(repoRoot, step) {
+  const resolved = resolveMigrationPath(repoRoot, step.path)
+  if (!resolved.ok) throw new Error(`migration_path_unsafe:${resolved.failure}:${step.name}`)
+  if (computeDigest(resolved.absPath) !== step.sha256) throw new Error(`migration_digest_mismatch:${step.name}`)
+  return readFileSync(resolved.absPath, "utf8")
 }
 
 function parseConfigArg(argv) {
@@ -79,13 +180,50 @@ function main() {
     console.error(`Required: --remote --config wrangler.deploy.json, CF_D1_MIGRATE_EXECUTE=1, CF_D1_MIGRATE_CONFIRM=${MIGRATE_CONFIRM_PHRASE}, valid manifest + deploy config.`)
     process.exit(1)
   }
-  const commands = buildApplyCommands(REPO_ROOT, configPath)
-  for (const cmd of commands) {
-    console.log(`cf:d1:migrations:apply → ${cmd.binding} :: ${cmd.name}`)
-    const result = spawnSync(WRANGLER_BIN, cmd.args, { cwd: REPO_ROOT, stdio: "inherit" })
-    if (result.status !== 0) {
-      console.error(`cf:d1:migrations:apply: FAILED applying ${cmd.name} — aborting.`)
+  // EVERY gate passed — only now may Wrangler be reached.
+  executionAuthorized = true
+
+  const manifest = loadManifest(REPO_ROOT).manifest
+  for (const binding of KNOWN_BINDINGS) {
+    // Reconcile the REMOTE ledger + schema before applying anything in this lane.
+    let reconciled
+    try {
+      const history = readRemoteHistory(binding, configPath)
+      reconciled = reconcileFromState(manifest, binding, history, (effect) => remoteProbe(binding, configPath, effect))
+    } catch (err) {
+      console.error(`cf:d1:migrations:apply: FAILED reading migration history for ${binding} — ${err.message}`)
       process.exit(1)
+    }
+    if (!reconciled.ok) {
+      console.error(`cf:d1:migrations:apply: STOPPED — ${binding} history does not reconcile: ${reconciled.failures.join(", ")}`)
+      console.error("Operator action required. Nothing was applied for this lane.")
+      process.exit(1)
+    }
+
+    const stateBySeq = new Map(reconciled.steps.map((s) => [s.sequence, s.state]))
+    for (const step of buildPlan(manifest, binding)) {
+      const state = stateBySeq.get(step.sequence)
+      if (step.apply === "once" && state === "satisfied") {
+        console.log(`cf:d1:migrations:apply → ${binding} :: ${step.name} SKIPPED (once, already applied)`)
+        continue
+      }
+      console.log(`cf:d1:migrations:apply → ${binding} :: ${step.name} (${step.apply})`)
+      try {
+        const sql = readPinnedMigration(REPO_ROOT, step)
+        const label = step.name.replace(/\.sql$/, "")
+        if (state === "satisfied") {
+          // Already recorded and replay-safe: re-execute the pinned SQL (a no-op by
+          // construction) WITHOUT recording it a second time.
+          execRemoteSqlText(binding, configPath, sql, label)
+        } else {
+          // Pending: SQL + ledger row in ONE file = ONE atomic D1 batch. The
+          // migration is never recorded unless its own SQL committed with it.
+          execRemoteSqlText(binding, configPath, buildAtomicMigrationBatchSql(sql, step, new Date().toISOString()), label)
+        }
+      } catch (err) {
+        console.error(`cf:d1:migrations:apply: FAILED applying ${step.name} — ${err.message}. Aborting.`)
+        process.exit(1)
+      }
     }
   }
   console.log("cf:d1:migrations:apply: complete.")

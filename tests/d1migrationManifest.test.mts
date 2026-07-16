@@ -43,21 +43,41 @@ test("the committed manifest loads and fully validates", () => {
   assert.equal(result.ok, true)
 })
 
-test("both lanes are declared in the documented order", () => {
+test("both lanes are declared in the documented order, and 0006 is an ACTIVE tenant migration", () => {
   const plans = buildAllPlans(base())
   assert.deepEqual(plans.CONTROL_DB.map((s: { name: string }) => s.name), ["0001_control_db.sql", "0004_control_auth_workspace.sql"])
   assert.deepEqual(plans.TENANT_DB_DEFAULT.map((s: { name: string }) => s.name), [
     "0002_tenant_core.sql",
     "0003_tenant_persistence_foundation.sql",
     "0005_tenant_scoped_indexes.sql",
+    "0006_action_preview_creator.sql",
   ])
+})
+
+test("0006 is an active, once-only tenant migration ordered AFTER the table it alters is created", () => {
+  const plan = buildPlan(base(), "TENANT_DB_DEFAULT")
+  const step = plan.find((s: { name: string }) => s.name === "0006_action_preview_creator.sql")
+  assert.ok(step, "0006 must be an active lane member, never deferred")
+  assert.equal(step.apply, "once", "an ALTER ADD COLUMN is not raw-replay-safe")
+  assert.deepEqual(step.effect, { type: "column_exists", table: "action_previews", column: "created_by_user_id" })
+  // action_previews is CREATEd by 0002, so 0006 must come strictly after it.
+  const parent = plan.find((s: { name: string }) => s.name === "0002_tenant_core.sql")
+  assert.ok(parent, "0002 must be in the tenant lane")
+  assert.ok(parent.sequence < step.sequence, "0006 must be ordered after its parent table creation")
+})
+
+test("the production migration plan includes 0006 exactly once", () => {
+  const plan = buildPlan(base(), "TENANT_DB_DEFAULT")
+  assert.equal(plan.filter((s: { name: string }) => s.name.startsWith("0006")).length, 1)
+  // …and only in the tenant lane — the control lane never sees it.
+  assert.equal(buildPlan(base(), "CONTROL_DB").filter((s: { name: string }) => s.name.startsWith("0006")).length, 0)
 })
 
 test("the plan is deterministic and ordered by logical sequence", () => {
   const m = base()
   // Shuffle the declared order — buildPlan must still sort by sequence.
   m.lanes.TENANT_DB_DEFAULT.reverse()
-  assert.deepEqual(buildPlan(m, "TENANT_DB_DEFAULT").map((s: { sequence: number }) => s.sequence), [1, 2, 3])
+  assert.deepEqual(buildPlan(m, "TENANT_DB_DEFAULT").map((s: { sequence: number }) => s.sequence), [1, 2, 3, 4])
 })
 
 // ─── Digest immutability ────────────────────────────────────────
@@ -74,10 +94,21 @@ test("a malformed digest fails validation", () => {
   assert.ok(failuresOf(m).some((f) => f.startsWith("digest_format_invalid:CONTROL_DB")))
 })
 
-test("a deferred migration digest is pinned too (manifest is canonical over ALL migrations)", () => {
+test("every committed migration must live in a lane — `deferred` is not a supported concept", () => {
   const m = base()
-  m.deferred[0].sha256 = "0".repeat(64)
-  assert.ok(failuresOf(m).some((f) => f.startsWith("digest_mismatch:deferred:0006_action_preview_creator.sql")))
+  // The old escape hatch: park a required migration outside the lanes. This is
+  // exactly how action_previews shipped without created_by_user_id, so the
+  // manifest must now refuse it outright.
+  m.deferred = [{ binding: "TENANT_DB_DEFAULT", path: "migrations/0006_action_preview_creator.sql", sha256: "0".repeat(64), kind: "schema" }]
+  assert.ok(failuresOf(m).includes("deferred_migrations_not_supported"))
+})
+
+test("a committed migration that is in NO lane fails validation (manifest is canonical over ALL migrations)", () => {
+  const m = base()
+  // Drop 0006 from the tenant lane: the file is still committed, so the manifest
+  // no longer covers every migration and must fail closed.
+  m.lanes.TENANT_DB_DEFAULT = m.lanes.TENANT_DB_DEFAULT.filter((e: { path: string }) => !e.path.includes("0006"))
+  assert.ok(failuresOf(m).includes("migration_not_in_any_lane:0006_action_preview_creator.sql"))
 })
 
 // ─── Structural rules ───────────────────────────────────────────
@@ -102,19 +133,19 @@ test("duplicate lane sequences fail validation", () => {
 
 test("an unknown binding fails validation", () => {
   const m = base()
-  m.lanes.SOME_OTHER_DB = [{ sequence: 1, binding: "SOME_OTHER_DB", path: "migrations/0001_control_db.sql", sha256: "0".repeat(64), kind: "schema", idempotent: true }]
+  m.lanes.SOME_OTHER_DB = [{ sequence: 1, binding: "SOME_OTHER_DB", path: "migrations/0001_control_db.sql", sha256: "0".repeat(64), kind: "schema", apply: "replay_safe" }]
   assert.ok(failuresOf(m).some((f) => f === "unknown_binding:SOME_OTHER_DB"))
 })
 
 test("a Control DB migration cannot appear in the tenant lane", () => {
   const m = base()
-  m.lanes.TENANT_DB_DEFAULT.push({ sequence: 4, binding: "CONTROL_DB", path: "migrations/0001_control_db.sql", sha256: m.lanes.CONTROL_DB[0].sha256, kind: "schema", idempotent: true })
+  m.lanes.TENANT_DB_DEFAULT.push({ sequence: 4, binding: "CONTROL_DB", path: "migrations/0001_control_db.sql", sha256: m.lanes.CONTROL_DB[0].sha256, kind: "schema", apply: "replay_safe" })
   assert.ok(failuresOf(m).some((f) => f.startsWith("binding_lane_mismatch:TENANT_DB_DEFAULT:0001_control_db.sql")))
 })
 
 test("a tenant migration cannot appear in the Control DB lane", () => {
   const m = base()
-  m.lanes.CONTROL_DB.push({ sequence: 3, binding: "TENANT_DB_DEFAULT", path: "migrations/0002_tenant_core.sql", sha256: m.lanes.TENANT_DB_DEFAULT[0].sha256, kind: "schema", idempotent: true })
+  m.lanes.CONTROL_DB.push({ sequence: 3, binding: "TENANT_DB_DEFAULT", path: "migrations/0002_tenant_core.sql", sha256: m.lanes.TENANT_DB_DEFAULT[0].sha256, kind: "schema", apply: "replay_safe" })
   assert.ok(failuresOf(m).some((f) => f.startsWith("binding_lane_mismatch:CONTROL_DB:0002_tenant_core.sql")))
 })
 
@@ -124,13 +155,26 @@ test("an empty lane fails validation", () => {
   assert.ok(failuresOf(m).some((f) => f === "lane_empty:CONTROL_DB"))
 })
 
-test("an invalid kind or idempotent flag fails validation", () => {
+test("an invalid kind or apply mode fails validation", () => {
   const m = base()
   m.lanes.CONTROL_DB[0].kind = "wat"
-  m.lanes.CONTROL_DB[1].idempotent = "yes"
+  m.lanes.CONTROL_DB[1].apply = "yes"
   const f = failuresOf(m)
   assert.ok(f.some((x) => x.startsWith("kind_invalid:CONTROL_DB")))
-  assert.ok(f.some((x) => x.startsWith("idempotent_flag_invalid:CONTROL_DB")))
+  assert.ok(f.some((x) => x.startsWith("apply_mode_invalid:CONTROL_DB")))
+})
+
+test("a `once` migration without a usable effect probe fails validation", () => {
+  // The probe is what lets the ledger and the real schema be reconciled after a
+  // crash or a manual apply. A `once` migration without one is unreconcilable.
+  for (const bad of [undefined, {}, { type: "column_exists", table: "action_previews" }, { type: "guesswork", table: "t", column: "c" }, { type: "column_exists", table: "bad-ident", column: "c" }]) {
+    const m = base()
+    m.lanes.TENANT_DB_DEFAULT[3].effect = bad
+    assert.ok(
+      failuresOf(m).some((x) => x.startsWith("effect_probe_invalid:TENANT_DB_DEFAULT:0006")),
+      `effect ${JSON.stringify(bad)} must be rejected`,
+    )
+  }
 })
 
 // ─── Path safety ────────────────────────────────────────────────
@@ -197,7 +241,7 @@ test("a migration containing an INSERT is rejected by the SQL-safety scan", () =
   try {
     writeFileSync(seeded, "CREATE TABLE IF NOT EXISTS t (id TEXT PRIMARY KEY);\nINSERT INTO t (id) VALUES ('default-tenant');\n")
     const m = base()
-    m.lanes.CONTROL_DB.push({ sequence: 3, binding: "CONTROL_DB", path: "migrations/_seed_test.sql", sha256: "0".repeat(64), kind: "schema", idempotent: true })
+    m.lanes.CONTROL_DB.push({ sequence: 3, binding: "CONTROL_DB", path: "migrations/_seed_test.sql", sha256: "0".repeat(64), kind: "schema", apply: "replay_safe" })
     const result = scanMigrationSqlSafety(REPO_ROOT, m)
     assert.ok(result.failures.some((f: string) => f === "forbidden_sql_insert:_seed_test.sql"))
   } finally {
@@ -214,11 +258,11 @@ test("a newly appended valid migration is representable without rewriting old en
     const digest = createHash("sha256").update(readFileSync(appended)).digest("hex")
     const m = base()
     const before = JSON.parse(JSON.stringify(m.lanes.TENANT_DB_DEFAULT))
-    m.lanes.TENANT_DB_DEFAULT.push({ sequence: 4, binding: "TENANT_DB_DEFAULT", path: "migrations/_appended_test.sql", sha256: digest, kind: "index", idempotent: true })
+    m.lanes.TENANT_DB_DEFAULT.push({ sequence: 5, binding: "TENANT_DB_DEFAULT", path: "migrations/_appended_test.sql", sha256: digest, kind: "index", apply: "replay_safe" })
     const result = validateManifest(m, REPO_ROOT)
     assert.deepEqual(result.failures, [])
-    // Existing entries are untouched (append-only).
-    assert.deepEqual(m.lanes.TENANT_DB_DEFAULT.slice(0, 3), before)
+    // Existing entries are untouched (append-only) — 0006's pinned digest included.
+    assert.deepEqual(m.lanes.TENANT_DB_DEFAULT.slice(0, 4), before)
   } finally {
     rmSync(appended, { force: true })
   }

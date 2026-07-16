@@ -36,7 +36,14 @@ export interface TableSpec {
   indexes?: string[]
   foreignKeys?: { column: string; references: string; to: string }[]
 }
-export interface DatabaseSpec { tables: Record<string, TableSpec> }
+export interface DatabaseSpec {
+  tables: Record<string, TableSpec>
+  /**
+   * Tables created by the migration apply mechanism rather than by a lane (the
+   * `__atra_d1_migrations` ledger). Exempt from drift reporting; not required.
+   */
+  infrastructureTables?: string[]
+}
 export interface SchemaContract {
   patchId: string
   version: number

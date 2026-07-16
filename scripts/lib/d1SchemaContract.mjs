@@ -96,9 +96,14 @@ export function introspectViaRunner(runner) {
 export function verifyIntrospection(actual, contractDbSection) {
   const failures = []
   const expected = (contractDbSection && contractDbSection.tables) || {}
+  // Infrastructure tables (the migration ledger) are created by the apply
+  // mechanism rather than by a lane. They are exempt from drift reporting but are
+  // NOT required by this contract, which describes the APPLICATION schema.
+  const infrastructure = new Set((contractDbSection && contractDbSection.infrastructureTables) || [])
 
   // Unexpected user tables (schema drift).
   for (const name of Object.keys(actual.tables)) {
+    if (infrastructure.has(name)) continue
     if (!(name in expected)) failures.push({ category: "unexpected_table", table: name })
   }
 

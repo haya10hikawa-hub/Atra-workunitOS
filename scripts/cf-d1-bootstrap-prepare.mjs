@@ -12,8 +12,11 @@
  *   - NEVER logs any operator value (tenant/user/email/subject/database id).
  *   - The database id uses the SAME UUID validation as the deployment config.
  *   - Generated SQL is git-ignored and must never be committed.
- *   - Applying requires a SEPARATE explicit execution flag (CF_D1_BOOTSTRAP_EXECUTE=1)
- *     — this command only prepares.
+ *   - Applying is a SEPARATE, repository-controlled, fully gated command
+ *     (`cf:d1:bootstrap:apply`) — this command only prepares. Applying the
+ *     generated file with a raw `wrangler d1 execute` is NOT the supported
+ *     workflow: it would bypass every gate, the post-apply verification, and the
+ *     guaranteed cleanup.
  *   - Missing-parent and duplicate-identity conditions fail closed (plain INSERTs
  *     + declared foreign keys; internal parent consistency is validated here).
  */
@@ -118,14 +121,27 @@ export function readOperatorInput(env) {
 const lit = (v) => `'${String(v).replace(/'/g, "''")}'`
 
 /**
- * Build the ordered control-registry bootstrap SQL. Plain INSERTs (never
- * INSERT OR IGNORE), so a duplicate identity/tenant FAILS CLOSED; declared
- * foreign keys make a missing parent fail closed.
+ * Build the ordered control-registry bootstrap SQL as ONE ATOMIC OPERATION.
+ *
+ * ATOMICITY (verified against pinned Wrangler 4.99.0, not assumed):
+ *   All five INSERTs live in ONE file, applied by ONE `wrangler d1 execute --file`
+ *   invocation, which D1 runs as a single implicit atomic batch — a failure at any
+ *   statement leaves ZERO rows. The file deliberately contains NO
+ *   `BEGIN IMMEDIATE`/`COMMIT`: D1 REJECTS explicit transaction control, so adding
+ *   it would break the bootstrap rather than make it atomic. The single-file batch
+ *   IS the atomic boundary. See scripts/lib/d1AtomicBatch.mjs.
+ *
+ * Plain INSERTs (never INSERT OR IGNORE, never REPLACE), so a duplicate
+ * tenant/slug/email/membership/identity FAILS CLOSED with zero new rows; D1
+ * enforces the declared foreign keys, so a missing parent fails closed too.
  */
 export function buildBootstrapSql(values, now = new Date().toISOString()) {
   const t = lit(now)
   return [
     "-- P0-PERSIST-015 operator bootstrap (GENERATED, UNTRACKED, 0600). Do not commit.",
+    "-- ATOMIC: these five INSERTs are applied as ONE wrangler `d1 execute --file`",
+    "-- invocation = ONE implicit D1 batch transaction (all-or-nothing).",
+    "-- No BEGIN/COMMIT: D1 rejects explicit transaction control (verified).",
     "-- Plain INSERTs: a duplicate tenant/user/identity fails closed.",
     `INSERT INTO tenants (id,name,slug,status,created_at,updated_at) VALUES (${lit(values.tenantId)},${lit(values.tenantName)},${lit(values.tenantSlug)},${lit(values.tenantStatus)},${t},${t});`,
     `INSERT INTO tenant_databases (tenant_id,database_name,database_id,schema_version,status,created_at,updated_at) VALUES (${lit(values.tenantId)},${lit(values.databaseName)},${lit(values.databaseId)},${lit(values.schemaVersion)},'active',${t},${t});`,
@@ -164,7 +180,9 @@ function main() {
   }
   // No operator value is ever logged.
   console.log(`cf:d1:bootstrap:prepare: prepared ${BOOTSTRAP_SQL_BASENAME} (untracked, 0600, 5 statements).`)
-  console.log("Applying requires a SEPARATE explicit execution flag (CF_D1_BOOTSTRAP_EXECUTE=1) and an operator-run wrangler d1 execute --remote. This command does NOT apply.")
+  console.log("This command does NOT apply. Inspect the plan, then apply with the repository-controlled command:")
+  console.log("  npm run cf:d1:bootstrap:apply -- --remote --config wrangler.deploy.json")
+  console.log("It requires CF_D1_BOOTSTRAP_EXECUTE=1 and CF_D1_BOOTSTRAP_CONFIRM=APPLY_PRODUCTION_CONTROL_BOOTSTRAP, applies the file as ONE atomic batch, verifies the result read-only, and always removes the generated SQL.")
   process.exit(0)
 }
 

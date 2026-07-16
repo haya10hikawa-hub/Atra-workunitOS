@@ -284,19 +284,33 @@ deliberately no migration step in the `cf:deploy` pipeline.
 
 ```text
 CONTROL_DB
-  0001_control_db.sql
-  0004_control_auth_workspace.sql
+  0001_control_db.sql                     replay_safe
+  0004_control_auth_workspace.sql         replay_safe
 
 TENANT_DB_DEFAULT
-  0002_tenant_core.sql
-  0003_tenant_persistence_foundation.sql
-  0005_tenant_scoped_indexes.sql
+  0002_tenant_core.sql                    replay_safe
+  0003_tenant_persistence_foundation.sql  replay_safe
+  0005_tenant_scoped_indexes.sql          replay_safe
+  0006_action_preview_creator.sql         once
 ```
 
-Existing migration SQL is immutable (SHA-256 pinned); changes are append-only. The
-non-idempotent `0006_action_preview_creator.sql` (`ADD COLUMN`) is **deferred**:
-digest-pinned but never part of an idempotent lane and never auto-applied. Full
-detail: [CLOUDFLARE_D1_SETUP.md §6 + §10](CLOUDFLARE_D1_SETUP.md).
+Existing migration SQL is immutable (SHA-256 pinned); changes are append-only. Every
+committed migration is in exactly one lane — there is no `deferred` escape hatch,
+because an operationally invisible migration produces a bootstrap schema the
+application cannot use.
+
+- **`replay_safe`** — every statement is `IF NOT EXISTS`-guarded; re-executed on
+  every run.
+- **`once`** — the raw SQL is not re-runnable (SQLite has no
+  `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`). Applied exactly once, recorded in the
+  `__atra_d1_migrations` ledger, and skipped afterwards.
+
+`0006_action_preview_creator.sql` is **required and active**:
+`D1ActionPreviewRepository.create()` always inserts `created_by_user_id`, so a
+database without it cannot serve Action Preview creation. Worker deploy **fails**
+when that column is absent, because the read-only remote schema verification checks
+the contract that requires it. Full detail:
+[CLOUDFLARE_D1_SETUP.md §6 + §10](CLOUDFLARE_D1_SETUP.md).
 
 ### Deploy ordering (`CF_DEPLOY_EXECUTE=1`)
 
@@ -316,6 +330,9 @@ prepare deploy config
 - Without `CF_DEPLOY_EXECUTE=1` the pipeline stops **before** the first remote step —
   preflight and dry-run remain fully offline and never contact Cloudflare.
 - No step can be skipped or reordered. `EXTERNAL_ACTIONS_ENABLED` remains `false`.
+- **Worker deploy never applies migrations and never writes bootstrap records.**
+  Both are separate, operator-gated commands. Deploy only *verifies* the remote
+  schema, read-only.
 
 ### Production migration apply gates
 
@@ -323,6 +340,30 @@ prepare deploy config
 validated generated `wrangler.deploy.json` (real, non-placeholder IDs; exactly the
 approved bindings), `CF_D1_MIGRATE_EXECUTE=1`,
 `CF_D1_MIGRATE_CONFIRM=APPLY_PRODUCTION_D1_MIGRATIONS`, and a fully valid manifest.
+It reconciles the remote ledger first and refuses on any disagreement; a `once`
+migration is applied exactly once and skipped on re-runs.
+
+### Production bootstrap apply gates
+
+`cf:d1:bootstrap:apply` is the **only** supported way to apply the generated
+`bootstrap.control.sql`. The documented workflow is:
+
+```text
+prepare bootstrap → inspect safe plan → gated apply → read-only verification → cleanup
+```
+
+It stops before Wrangler unless **all** hold: `--remote`; a validated generated
+deploy config with real, non-placeholder IDs; the target binding is exactly
+`CONTROL_DB`; the generated SQL exists, is a plain file (never a symlink), sits at the
+approved repository-root location, and is no broader than `0600`;
+`CF_D1_BOOTSTRAP_EXECUTE=1`; `CF_D1_BOOTSTRAP_CONFIRM=APPLY_PRODUCTION_CONTROL_BOOTSTRAP`;
+and a valid manifest + Control DB schema contract.
+
+The five records are applied as **one atomic D1 batch** (all-or-nothing), verified
+read-only afterwards at category level (counts only — no IDs, email, subject, or row
+contents printed), and the generated SQL is removed on **every** exit path. Never run
+a raw `wrangler d1 execute` against the generated file: it bypasses every gate, the
+verification, and the cleanup.
 
 ### Rollback limitations
 

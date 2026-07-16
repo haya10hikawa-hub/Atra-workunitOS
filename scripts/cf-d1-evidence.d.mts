@@ -1,7 +1,7 @@
 /** Type declarations for cf:d1:evidence (P0-PERSIST-015). */
-import type { Binding } from "./lib/d1MigrationManifest.d.mts"
+import type { Binding, MigrationApplyMode } from "./lib/d1MigrationManifest.d.mts"
 
-export interface EvidenceMigration { sequence: number; name: string; kind: string; idempotent: boolean }
+export interface EvidenceMigration { sequence: number; name: string; kind: string; apply: MigrationApplyMode }
 export interface Evidence {
   patchId: string
   issue: string

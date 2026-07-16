@@ -6,22 +6,31 @@
 export type Binding = "CONTROL_DB" | "TENANT_DB_DEFAULT"
 export type MigrationKind = "schema" | "index"
 
+/**
+ * How a migration may be applied.
+ *   - `replay_safe`: raw SQL is re-runnable against an already-migrated database.
+ *   - `once`: raw SQL is NOT re-runnable; applied exactly once via the ledger.
+ * There is deliberately no "deferred"/"skip" mode: a required migration is never
+ * hidden from operations.
+ */
+export type MigrationApplyMode = "replay_safe" | "once"
+
+/** Deterministic schema probe proving a `once` migration's change landed. */
+export interface MigrationEffect {
+  type: "column_exists"
+  table: string
+  column: string
+}
+
 export interface MigrationEntry {
   sequence: number
   binding: Binding
   path: string
   sha256: string
   kind: MigrationKind
-  idempotent: boolean
-}
-
-export interface DeferredEntry {
-  binding: Binding
-  path: string
-  sha256: string
-  kind: string
-  idempotent: boolean
-  reason?: string
+  apply: MigrationApplyMode
+  /** Required when `apply` is `once`. */
+  effect?: MigrationEffect
   note?: string
 }
 
@@ -29,9 +38,9 @@ export interface Manifest {
   patchId: string
   version: number
   description?: string
+  applyModes?: Record<MigrationApplyMode, string>
   bindings: Binding[]
   lanes: Record<Binding, MigrationEntry[]>
-  deferred?: DeferredEntry[]
 }
 
 export interface PlanStep {
@@ -40,7 +49,8 @@ export interface PlanStep {
   path: string
   name: string
   kind: MigrationKind
-  idempotent: boolean
+  apply: MigrationApplyMode
+  effect?: MigrationEffect
   sha256: string
 }
 
@@ -57,10 +67,13 @@ export interface FailureReport { ok: boolean; failures: string[] }
 export declare const MANIFEST_RELATIVE_PATH: string
 export declare const KNOWN_BINDINGS: readonly Binding[]
 export declare const KNOWN_KINDS: readonly MigrationKind[]
+export declare const MIGRATION_APPLY_MODES: readonly MigrationApplyMode[]
 
 export declare function loadManifest(repoRoot: string): LoadManifestResult
 export declare function resolveMigrationPath(repoRoot: string, relPath: unknown): PathResolution
 export declare function computeDigest(absPath: string): string
+export declare function isValidEffectProbe(effect: unknown): boolean
+export declare function listCommittedMigrationFiles(repoRoot: string): string[]
 export declare function validateManifest(manifest: unknown, repoRoot: string): FailureReport
 export declare function buildPlan(manifest: unknown, binding: string): PlanStep[]
 export declare function buildAllPlans(manifest: unknown): Record<Binding, PlanStep[]>
