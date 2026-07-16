@@ -83,11 +83,15 @@ test("GUARD: production apply requires BOTH an execution flag and the exact conf
 })
 
 test("GUARD: production apply cannot use the committed placeholder config", () => {
-  // Placeholder IDs are never allowed for apply / remote verification.
+  // Placeholder IDs are never allowed for apply / remote verification. Both now
+  // load config through the SHARED authority library, which runs the shared
+  // validator internally — so the rule is inherited from one place rather than
+  // re-implemented per command.
   for (const file of [APPLY, VERIFY_REMOTE]) {
     assert.match(read(file), /allowPlaceholderIds:\s*false/, `${file} must reject placeholder IDs`)
-    assert.match(read(file), /validateDeployConfig/)
+    assert.match(read(file), /loadValidatedDeployConfigAuthority\(/, `${file} must load config through the shared authority`)
   }
+  assert.match(read("scripts/lib/cfDeployConfigAuthority.mjs"), /validateDeployConfig\(/, "the shared authority runs the shared validator")
 })
 
 test("GUARD: production apply never weakens operator visibility with --yes", () => {

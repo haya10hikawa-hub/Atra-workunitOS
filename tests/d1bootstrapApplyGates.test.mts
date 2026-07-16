@@ -24,6 +24,7 @@ import {
 import { BOOTSTRAP_SQL_BASENAME, buildBootstrapSql, BOOTSTRAP_ARTIFACT_MAX_BYTES } from "../scripts/cf-d1-bootstrap-prepare.mjs"
 import { SYNTHETIC_D1_IDS } from "../scripts/lib/cfDeployConfig.mjs"
 import { loadManifest, tenantRegistrySchemaVersion } from "../scripts/lib/d1MigrationManifest.mjs"
+import { createPrivateExecutionConfig, removePrivateExecutionConfig } from "../scripts/lib/cfDeployConfigAuthority.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const APPLY_SRC = resolve(REPO_ROOT, "scripts/cf-d1-bootstrap-apply.mjs")
@@ -564,13 +565,14 @@ function driveExecution(snapshot: unknown, canonicalSql: string, options: { fail
   const observed: Array<{ kind: string; config: string; configBytes: string; mode: number }> = []
   let executionConfig: string | null = null
 
+  // The private execution config now comes from the SHARED authority library —
+  // there is no bootstrap-only implementation to extract.
   const harness = new Function("deps", `
     const { spawnSync, mkdtempSync, writeFileSync, rmSync, resolve, tmpdir, randomBytes, readFileSync,
-            requireAuthorizedExecution, WRANGLER_BIN, REPO_ROOT, BOOTSTRAP_BINDING } = deps
-    ${slice("writeExecutionConfig").replace("export ", "")}
+            createPrivateExecutionConfig, requireAuthorizedExecution, WRANGLER_BIN, REPO_ROOT, BOOTSTRAP_BINDING } = deps
     ${slice("applyBootstrapFile")}
     ${slice("remoteCount")}
-    return { writeExecutionConfig, applyBootstrapFile, remoteCount }
+    return { applyBootstrapFile, remoteCount }
   `)({
     spawnSync: (_bin: string, args: string[]) => {
       const config = args[args.indexOf("--config") + 1]
@@ -585,6 +587,7 @@ function driveExecution(snapshot: unknown, canonicalSql: string, options: { fail
       return { status: 0, stdout: JSON.stringify([{ results: [{ c: 1 }] }]) }
     },
     mkdtempSync, writeFileSync, rmSync, resolve, tmpdir, randomBytes, readFileSync,
+    createPrivateExecutionConfig,
     requireAuthorizedExecution: () => {},
     WRANGLER_BIN: "/nonexistent/wrangler", REPO_ROOT, BOOTSTRAP_BINDING,
   })
@@ -594,19 +597,24 @@ function driveExecution(snapshot: unknown, canonicalSql: string, options: { fail
   const mainStart = src.indexOf("function main()")
   const finallyIdx = src.indexOf("} finally {", mainStart)
   const cleanupBody = src.slice(finallyIdx + "} finally {".length, src.indexOf("\n  }", finallyIdx))
-  const runMainCleanup = new Function("rmSync", "executionConfig", "removeBootstrapSql", "exitCode", cleanupBody)
+  const runMainCleanup = new Function(
+    "rmSync", "removePrivateExecutionConfig", "executionConfig", "removeBootstrapSql", "exitCode", cleanupBody,
+  )
 
   let threw: Error | null = null
   let exitCode = 0
   try {
-    executionConfig = harness.writeExecutionConfig(snapshot, REPO_ROOT)
+    executionConfig = createPrivateExecutionConfig(
+      { bytes: JSON.stringify(snapshot, null, 2), snapshot: snapshot as Readonly<Record<string, unknown>> },
+      { repoRoot: REPO_ROOT, purpose: "bootstrap-exec" },
+    )
     harness.applyBootstrapFile(executionConfig, canonicalSql)
     harness.remoteCount(executionConfig, "SELECT COUNT(*) AS c FROM tenants WHERE id = 'x';")
   } catch (err) {
     threw = err as Error
     exitCode = 1
   } finally {
-    runMainCleanup(rmSync, executionConfig, () => {}, exitCode)
+    runMainCleanup(rmSync, removePrivateExecutionConfig, executionConfig, () => {}, exitCode)
   }
   return { observed, executionConfig, threw }
 }
@@ -686,11 +694,17 @@ test("the private execution config is removed after success, Wrangler failure, a
 })
 
 test("the execution config is created EXCLUSIVELY — an existing file is never overwritten or followed", () => {
-  const src = readFileSync(APPLY_SRC, "utf8")
+  // The private-config writer now lives in the SHARED authority library, which
+  // bootstrap, migration apply, remote verification, and Worker deploy all use.
+  const src = readFileSync(resolve(REPO_ROOT, "scripts/lib/cfDeployConfigAuthority.mjs"), "utf8")
   assert.match(src, /flag: "wx"/, "exclusive creation prevents overwriting or following a pre-placed file")
   assert.match(src, /randomBytes\(12\)\.toString\("hex"\)/, "the name must be collision-resistant")
-  // The content is the validated snapshot, never rebuilt from ambient env vars.
-  assert.match(src, /JSON\.stringify\(snapshot, null, 2\), \{ mode: 0o600, flag: "wx" \}/)
+  // The EXACT retained bytes — never a re-serialization of a mutable parsed object.
+  assert.match(src, /writeFileSync\(path, authority\.bytes, \{ mode: 0o600, flag: "wx" \}\)/)
+  // Bootstrap consumes the shared writer rather than keeping its own.
+  const apply = readFileSync(APPLY_SRC, "utf8")
+  assert.match(apply, /createPrivateExecutionConfig\(gates\.configAuthority/)
+  assert.doesNotMatch(apply, /flag: "wx"/, "bootstrap must not keep a duplicate private-config writer")
 })
 
 test("no database ID or config content reaches logs", () => {

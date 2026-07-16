@@ -169,6 +169,19 @@ The production Control DB bootstrap is repository-controlled and follows
 config + `CF_D1_BOOTSTRAP_EXECUTE=1` +
 `CF_D1_BOOTSTRAP_CONFIRM=APPLY_PRODUCTION_CONTROL_BOOTSTRAP`).
 
+**The deploy config is authority-bearing** — it selects the physical databases and
+the Worker deployment configuration. One shared library loads and validates it
+**once**, retains its exact bytes, and writes them to a single private (`0600`,
+exclusively created) execution config; every remote command —
+`cf:d1:migrations:apply`, `cf:d1:schema:verify:remote`, `cf:d1:bootstrap:apply`, and
+`cf:deploy` — hands Wrangler **only** that file, never the original mutable path.
+Migration apply uses one snapshot across both lanes; schema verification uses one
+across both bindings; and the deploy orchestrator verifies and uploads against the
+**same** snapshot, so the config verified is the config deployed. Editing, replacing,
+or deleting the original after validation cannot redirect anything. Every private
+config is removed unconditionally, and the orchestrator removes the original
+generated config on every exit too.
+
 **`CONTROL_DB` and `TENANT_DB_DEFAULT` must be different physical D1 databases.** The
 shared deploy-config validator compares the two `database_id`s and refuses a
 collision before any database access, so every command inherits it — `CONTROL_DB is

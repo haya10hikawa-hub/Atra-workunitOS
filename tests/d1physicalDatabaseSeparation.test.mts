@@ -79,7 +79,8 @@ test("1 + 2 + 3 + 4. migrations:apply refuses a same-id config before Wrangler â
   // latch opens only after the gates pass. Asserted on the runtime latch rather
   // than source order, since an import mentioning CREATE_HISTORY_SQL naturally
   // appears at the top of the file.
-  assert.match(src, /execRemoteSqlText\(binding, configPath, CREATE_HISTORY_SQL, "ledger-init"\)/, "the ledger is created by a remote write")
+  assert.match(src, /execRemoteSqlText\(binding, executionConfig, CREATE_HISTORY_SQL, "ledger-init"\)/,
+    "the ledger is created by a remote write, through the PRIVATE execution config")
   for (const helper of ["function remoteQuery(", "function execRemoteSqlText("]) {
     const start = src.indexOf(helper)
     assert.ok(start >= 0, `${helper} must exist`)

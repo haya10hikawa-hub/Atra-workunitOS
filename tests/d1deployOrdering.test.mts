@@ -23,6 +23,12 @@ function stepNamed(name: string): DeployStep {
   if (!step) throw new Error(`deploy pipeline is missing the "${name}" step`)
   return step
 }
+/** A spawned step's args for a given private execution config. */
+function argsOf(name: string, executionConfig: string): string[] {
+  const step = stepNamed(name)
+  if (!step.args) throw new Error(`"${name}" must be a spawned step with args`)
+  return step.args(executionConfig)
+}
 
 test("the deploy pipeline order is exactly prepare → validate → build → verify artifacts → verify remote schema → deploy", () => {
   assert.deepEqual(names(), ["prepare", "preflight", "build", "verify", "verify-remote-schema", "deploy"])
@@ -40,9 +46,11 @@ test("no step can be skipped or reordered — every gate precedes deploy", () =>
     assert.ok(idx(gate) < idx("deploy"), `${gate} must precede deploy`)
   }
   // The orchestrator aborts on the FIRST failing step (so a schema-verification
-  // failure prevents deploy).
+  // failure prevents deploy). It returns an exit code rather than exiting inside
+  // the loop — a nested exit would bypass the private-config cleanup.
   const src = read("scripts/cloudflare-deploy.mjs")
-  assert.match(src, /if \(!runStep\(step\)\)[\s\S]*?deploy aborted[\s\S]*?process\.exit\(1\)/)
+  assert.match(src, /if \(!run\(step, executionConfig\)\)[\s\S]*?deploy aborted[\s\S]*?return 1/)
+  assert.match(src, /if \(!result\.ok\)[\s\S]*?deploy aborted[\s\S]*?return 1/, "a remote schema-verification failure must abort before deploy")
 })
 
 test("Worker deploy NEVER applies database migrations", () => {
@@ -53,6 +61,7 @@ test("Worker deploy NEVER applies database migrations", () => {
   }
   const src = read("scripts/cloudflare-deploy.mjs")
   assert.doesNotMatch(src, /cf-d1-migrations-apply/)
+  assert.doesNotMatch(src, /cf-d1-bootstrap-apply/, "deploy must never write bootstrap records either")
 })
 
 test("only the remote steps are network steps, and they are gated by CF_DEPLOY_EXECUTE=1", () => {
@@ -64,14 +73,39 @@ test("only the remote steps are network steps, and they are gated by CF_DEPLOY_E
   // The loop halts at the first remote step unless CF_DEPLOY_EXECUTE=1.
   const src = read("scripts/cloudflare-deploy.mjs")
   assert.match(src, /const execute = process\.env\.CF_DEPLOY_EXECUTE === "1"/)
-  assert.match(src, /if \(step\.remote && !execute\)[\s\S]*?process\.exit\(0\)/)
+  assert.match(src, /if \(step\.remote && !execute\)[\s\S]*?return 0/)
 })
 
-test("the remote schema verification step is READ-ONLY and uses the generated config", () => {
-  const args = stepNamed("verify-remote-schema").args.join(" ")
-  assert.match(args, /cf-d1-schema-verify-remote\.mjs/)
-  assert.match(args, /--config wrangler\.deploy\.json/)
-  assert.match(args, /--remote/)
+test("remote schema verification and deploy are tied to ONE retained authority — never the mutable generated config", () => {
+  // Verification runs IN-PROCESS against the same authority the deploy uses, rather
+  // than spawning a child that would snapshot wrangler.deploy.json a second time —
+  // two independent reads of a mutable file could verify one database and deploy
+  // another.
+  assert.equal(stepNamed("verify-remote-schema").inProcess, "verifyRemoteSchema")
+  assert.equal(stepNamed("verify-remote-schema").cmd, undefined, "verification must not spawn a second snapshot")
+  const src = read("scripts/cloudflare-deploy.mjs")
+  assert.match(src, /verifyRemoteSchemas\(authority, \{ repoRoot: REPO_ROOT \}\)/)
+
+  // NO step may name the original generated config: every step's args are a
+  // function of the PRIVATE execution config.
+  for (const step of DEPLOY_STEPS) {
+    if (!step.args) continue
+    const args = step.args("PRIVATE_EXEC_CONFIG").join(" ")
+    assert.doesNotMatch(args, /wrangler\.deploy\.json/, `${step.name} must never receive the original generated config`)
+  }
+  // …and deploy receives exactly that private config.
+  assert.deepEqual(argsOf("deploy", "PRIVATE_EXEC_CONFIG"), ["deploy", "--config", "PRIVATE_EXEC_CONFIG"])
+  assert.deepEqual(argsOf("preflight", "PRIVATE_EXEC_CONFIG"), ["scripts/cloudflare-deploy-preflight.mjs", "--config", "PRIVATE_EXEC_CONFIG"])
+})
+
+test("the orchestrator removes BOTH the private execution config and the original generated config on every exit", () => {
+  const src = read("scripts/cloudflare-deploy.mjs")
+  const finallyIdx = src.indexOf("} finally {")
+  assert.ok(finallyIdx > 0, "cleanup must be in a finally-equivalent path")
+  const body = src.slice(finallyIdx, src.indexOf("\n  }", finallyIdx))
+  assert.match(body, /removePrivateExecutionConfig\(executionConfig\)/)
+  assert.match(body, /rmSync\(generatedConfig, \{ force: true \}\)/)
+  assert.doesNotMatch(body.replace(/\/\/[^\n]*/g, ""), /\bif\s*\(/, "cleanup must be unconditional")
 })
 
 test("offline preflight and dry-run perform NO remote schema query and never contact Cloudflare", () => {

@@ -1,5 +1,7 @@
 /** Type declarations for cf:d1:bootstrap:apply (P0-PERSIST-015, operator-gated). */
 
+import type { DeployConfigAuthority } from "./lib/cfDeployConfigAuthority.d.mts"
+
 export interface BootstrapGateInput {
   env?: Record<string, string | undefined>
   argv?: string[]
@@ -26,16 +28,14 @@ export interface BootstrapGateResult extends GateResult {
    */
   canonicalSql: string | null
   /**
-   * The immutable (frozen) parsed deploy config the registry comparisons were made
-   * against. The private execution config is written from THIS, never from a
-   * re-read of the operator's mutable path.
+   * The retained deploy-config authority, from the SHARED library. The private
+   * execution config is written from its EXACT bytes — never from a re-read of the
+   * operator's mutable path, and never from a re-serialized parsed object.
    */
+  configAuthority: DeployConfigAuthority | null
+  /** The authority's recursively immutable parsed view, for comparisons. */
   configSnapshot: Readonly<Record<string, unknown>> | null
 }
-
-export type DeployConfigSnapshotResult =
-  | { ok: true; snapshot: Readonly<Record<string, unknown>> }
-  | { ok: false; blocked: string[] }
 
 export type CanonicalArtifactResult =
   | { ok: true; sql: string }
@@ -49,21 +49,8 @@ export declare const BOOTSTRAP_BINDING: "CONTROL_DB"
  */
 export declare const VERIFICATION_FAILED_AFTER_COMMIT: "bootstrap_verification_failed_after_commit"
 
-/** Hard size cap for the generated deploy config, enforced before parsing. */
-export declare const DEPLOY_CONFIG_MAX_BYTES: number
-
 export declare function inspectBootstrapArtifact(path?: string, repoRoot?: string): GateResult
 export declare function validateCanonicalArtifact(input: { values: unknown; path?: string }): CanonicalArtifactResult
-/**
- * Read + validate the generated deploy config ONCE and return an immutable
- * snapshot. The original path is never re-read after validation.
- */
-export declare function loadDeployConfigSnapshot(configPath?: string, repoRoot?: string): DeployConfigSnapshotResult
-/**
- * Write the validated snapshot to a fresh private (0600, exclusively created)
- * execution config and return its path. Content is exactly the snapshot.
- */
-export declare function writeExecutionConfig(snapshot: unknown, repoRoot?: string): string
 export declare function evaluateRegistryBinding(values: unknown, config: unknown): GateResult
 export declare function parseBindingArg(argv: string[]): string
 export declare function evaluateBootstrapGates(input?: BootstrapGateInput): BootstrapGateResult

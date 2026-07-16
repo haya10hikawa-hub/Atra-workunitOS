@@ -237,7 +237,7 @@ test("GUARD: operator database metadata must be compared to TENANT_DB_DEFAULT", 
   assert.match(src, /of\(REGISTRY_BINDING\)/, "the comparison must target the TENANT_DB_DEFAULT binding")
   assert.match(src, /values\.databaseId !== tenant\.database_id/)
   assert.match(src, /values\.databaseName !== tenant\.database_name/)
-  assert.match(src, /evaluateRegistryBinding\(input\.values, config\.snapshot\)/, "the gates must run the registry binding check against the validated snapshot")
+  assert.match(src, /evaluateRegistryBinding\(input\.values, config\.authority\.snapshot\)/, "the gates must run the registry binding check against the validated authority snapshot")
   for (const category of ["tenant_database_id_mismatch", "tenant_database_name_mismatch", "tenant_binding_missing"]) {
     assert.ok(src.includes(category), `${category} must exist`)
   }
@@ -417,13 +417,19 @@ test("GUARD: the SHARED deploy validator must compare Control and Tenant databas
 test("GUARD: the same physical ID is rejected by bootstrap, migration apply, remote verify, preflight, and deploy", () => {
   // Every gated command must route its config through the shared validator — the
   // one place the collision rule lives.
+  // Preflight calls the shared validator directly; every remote command goes
+  // through the shared AUTHORITY library, which calls it internally — either way
+  // the collision rule is inherited from one place.
+  assert.match(codeOf("scripts/cloudflare-deploy-preflight.mjs"), /validateDeployConfig\(/, "preflight must use the shared validator")
+  assert.match(codeOf("scripts/lib/cfDeployConfigAuthority.mjs"), /validateDeployConfig\(parsed, \{ configPath, repoRoot, allowPlaceholderIds \}\)/,
+    "the shared authority must run the shared validator")
   for (const file of [
     "scripts/cf-d1-bootstrap-apply.mjs",
     "scripts/cf-d1-migrations-apply.mjs",
     "scripts/cf-d1-schema-verify-remote.mjs",
-    "scripts/cloudflare-deploy-preflight.mjs",
+    "scripts/cloudflare-deploy.mjs",
   ]) {
-    assert.match(codeOf(file), /validateDeployConfig\(/, `${file} must validate through the shared validator`)
+    assert.match(codeOf(file), /loadValidatedDeployConfigAuthority\(/, `${file} must load config through the shared authority`)
   }
   // Deploy reaches the network only through preflight + the read-only verifier.
   assert.match(codeOf(DEPLOY), /cloudflare-deploy-preflight\.mjs/)
@@ -448,17 +454,20 @@ test("GUARD: bootstrap execution must never pass the original config path to Wra
     assert.match(body, /"--config", executionConfig/, `${helper} must use the private execution config`)
   }
   // main() derives ONE execution config from the validated snapshot…
-  assert.match(src, /executionConfig = writeExecutionConfig\(gates\.configSnapshot, REPO_ROOT\)/)
+  assert.match(src, /executionConfig = createPrivateExecutionConfig\(gates\.configAuthority, \{ repoRoot: REPO_ROOT, purpose: "bootstrap-exec" \}\)/,
+    "the private config must come from the SHARED library, built from the retained authority")
   // …and both the apply and the verification use THAT one.
   assert.match(src, /applyBootstrapFile\(executionConfig, gates\.canonicalSql\)/)
   assert.match(src, /remoteCount\(executionConfig, sql\)/)
 })
 
 test("GUARD: the config is read once, validated as a snapshot, and never re-read after validation", () => {
-  const src = codeOf(BOOTSTRAP_APPLY)
-  assert.match(src, /export function loadDeployConfigSnapshot\(/)
+  // The loader lives in the SHARED library — there is no bootstrap-only variant.
+  const src = codeOf("scripts/lib/cfDeployConfigAuthority.mjs")
+  assert.match(src, /export function loadValidatedDeployConfigAuthority\(/)
+  assert.doesNotMatch(codeOf(BOOTSTRAP_APPLY), /export function loadDeployConfigSnapshot\(/, "bootstrap must not keep a duplicate loader")
   // Path/type/location/mode/size before the read.
-  const start = src.indexOf("export function loadDeployConfigSnapshot(")
+  const start = src.indexOf("export function loadValidatedDeployConfigAuthority(")
   const body = src.slice(start, src.indexOf("\n}", start))
   assert.match(body, /validateGeneratedConfigLocation\(configPath, repoRoot\)/)
   assert.match(body, /isSymbolicLink\(\)/)
@@ -469,9 +478,9 @@ test("GUARD: the config is read once, validated as a snapshot, and never re-read
   assert.ok(sizeIdx > 0 && sizeIdx < readIdx, "the size cap must precede the read")
   // Exactly one read of the operator's path, and the parsed snapshot is frozen.
   assert.equal(body.split("readFileSync(configPath").length - 1, 1, "the config must be read exactly once")
-  assert.match(body, /Object\.freeze\(parsed\)/)
+  assert.match(body, /deepFreeze\(parsed\)/, "a shallow freeze would leave database_id writable")
   // Nothing after gate evaluation re-reads the original path.
-  const afterGates = src.slice(src.indexOf("function main()"))
+  const afterGates = codeOf(BOOTSTRAP_APPLY).slice(codeOf(BOOTSTRAP_APPLY).indexOf("function main()"))
   assert.doesNotMatch(afterGates, /readFileSync\(configPath/, "main must never re-read the original config")
   assert.doesNotMatch(afterGates, /loadConfigFile\(/, "main must never reload the original config")
 })
@@ -480,22 +489,23 @@ test("GUARD: apply and post-verification can never use different config snapshot
   const src = codeOf(BOOTSTRAP_APPLY)
   const main = src.slice(src.indexOf("function main()"))
   // Exactly one execution config is produced, and every Wrangler call uses it.
-  assert.equal(main.split("writeExecutionConfig(").length - 1, 1, "exactly one execution config may be written")
+  assert.equal(main.split("createPrivateExecutionConfig(").length - 1, 1, "exactly one execution config may be written")
   for (const call of main.matchAll(/(applyBootstrapFile|remoteCount)\(([A-Za-z.]+),/g)) {
     assert.equal(call[2], "executionConfig", `${call[1]} must receive the single execution config, got ${call[2]}`)
   }
 })
 
 test("GUARD: the temporary execution config must be private, exclusive, and unconditionally removed", () => {
-  const src = codeOf(BOOTSTRAP_APPLY)
-  assert.match(src, /mode: 0o600, flag: "wx"/, "private + exclusive creation (never overwrite or follow an existing file)")
-  assert.match(src, /wrangler\.deploy\.bootstrap-exec-\$\{randomBytes\(12\)\.toString\("hex"\)\}\.json/,
+  const shared = codeOf("scripts/lib/cfDeployConfigAuthority.mjs")
+  assert.match(shared, /mode: 0o600, flag: "wx"/, "private + exclusive creation (never overwrite or follow an existing file)")
+  assert.match(shared, /wrangler\.deploy\.\$\{label\}-\$\{randomBytes\(12\)\.toString\("hex"\)\}\.json/,
     "a collision-resistant, git-ignored, repository-root generated-config name")
-  // The content is the validated snapshot — never rebuilt from ambient env vars.
-  assert.match(src, /JSON\.stringify\(snapshot, null, 2\)/)
+  // The EXACT retained bytes — never a re-serialization of a mutable parsed object.
+  assert.match(shared, /writeFileSync\(path, authority\.bytes/)
+  const src = codeOf(BOOTSTRAP_APPLY)
   // Cleanup is unconditional, in a finally.
   const bodies = finallyBodies(src)
-  assert.ok(bodies.some((b) => /^\s*rmSync\(executionConfig \?\? "", \{ force: true \}\)\s*$/m.test(b)),
+  assert.ok(bodies.some((b) => /^\s*removePrivateExecutionConfig\(executionConfig\)\s*$/m.test(b)),
     "the private execution config must be removed unconditionally")
   for (const body of bodies) assert.doesNotMatch(body, /\bif\s*\(/, "no cleanup path may be conditional")
   // …and the generated-config pattern is git-ignored.

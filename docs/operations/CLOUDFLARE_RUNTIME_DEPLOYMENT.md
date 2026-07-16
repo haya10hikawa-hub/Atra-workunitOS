@@ -315,13 +315,29 @@ the contract that requires it. Full detail:
 ### Deploy ordering (`CF_DEPLOY_EXECUTE=1`)
 
 ```text
-prepare deploy config
-  → validate deploy config
+prepare generated config
+  → load + validate ONE config authority (retain its exact bytes)
+  → create ONE private execution config from it
+  → preflight            (that private config)
   → build Worker
-  → verify Worker artifacts
-  → verify remote D1 schemas (READ-ONLY)
-  → deploy Worker
+  → verify Worker artifacts   (that private config)
+  → verify remote D1 schemas  (READ-ONLY, same retained authority)
+  → deploy Worker             (that same private config)
+  → unconditional cleanup of BOTH the private and the original generated config
 ```
+
+**The deploy config is authority-bearing** — it selects the physical databases and
+the Worker deployment configuration. Previously every step re-read
+`wrangler.deploy.json` independently, so the config verified remotely and the config
+deployed were two separate reads of a mutable file and could differ. The orchestrator
+now loads it **once** through the shared authority library
+(`scripts/lib/cfDeployConfigAuthority.mjs`), writes the exact retained bytes to a
+single private `0600`, exclusively-created `wrangler.deploy.deploy-exec-<random>.json`,
+and gives **every** step that one file. Remote verification runs **in-process against
+the same retained authority** rather than spawning a child that would snapshot the
+file a second time. Editing, replacing, or deleting the original after the snapshot
+cannot redirect verification or the upload, and deleting it does not break the
+pipeline. Wrangler never receives the original generated config.
 
 - **`CONTROL_DB` and `TENANT_DB_DEFAULT` must reference DIFFERENT physical D1
   databases.** The shared deploy-config validator compares the two `database_id`s and

@@ -40,10 +40,13 @@ import { dirname, resolve } from "node:path"
 import { spawnSync } from "node:child_process"
 import { existsSync, lstatSync, realpathSync, statSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { randomBytes } from "node:crypto"
 import { loadManifest, validateManifest, REGISTRY_BINDING } from "./lib/d1MigrationManifest.mjs"
 import { loadSchemaContract } from "./lib/d1SchemaContract.mjs"
-import { validateDeployConfig, validateD1Id, validateGeneratedConfigLocation } from "./lib/cfDeployConfig.mjs"
+import { validateD1Id } from "./lib/cfDeployConfig.mjs"
+// ONE shared config-authority implementation — no bootstrap-only variant.
+import {
+  loadValidatedDeployConfigAuthority, createPrivateExecutionConfig, removePrivateExecutionConfig,
+} from "./lib/cfDeployConfigAuthority.mjs"
 import {
   BOOTSTRAP_SQL_BASENAME, BOOTSTRAP_SQL_PATH, BOOTSTRAP_ARTIFACT_MAX_BYTES,
   removeBootstrapSql, readOperatorInput, buildBootstrapSql, parseArtifactHeader,
@@ -201,75 +204,6 @@ export function evaluateRegistryBinding(values, config) {
   return { ok: blocked.length === 0, blocked: [...new Set(blocked)] }
 }
 
-// ─── Deploy-config snapshot ──────────────────────────────────────
-
-/**
- * Hard size cap for the generated deploy config, enforced BEFORE it is parsed.
- */
-export const DEPLOY_CONFIG_MAX_BYTES = 64 * 1024
-
-/**
- * Read + validate the generated deploy config ONCE and return an immutable
- * snapshot of the parsed configuration.
- *
- * WHY: the bootstrap SQL bytes are bound to operator authority, but the deploy
- * config decides WHICH DATABASE those bytes hit — and it was still being validated
- * as parsed config A and then handed to Wrangler as a mutable path that could have
- * become config B. The config is authority-bearing, so it gets the same treatment
- * as the SQL: inspect the path, bound the size, read the bytes once, parse and
- * validate THOSE bytes, and never re-read the original path afterwards.
- *
- * Returns `{ ok, snapshot }` or `{ ok:false, blocked }` — safe categories only,
- * never a database id or any config content.
- */
-export function loadDeployConfigSnapshot(configPath, repoRoot = REPO_ROOT) {
-  if (!configPath) return { ok: false, blocked: ["missing_config"] }
-
-  // Path/type/location before reading. A real-id config must be exactly an
-  // approved, git-ignored repository-root `wrangler.deploy*.json`.
-  const location = validateGeneratedConfigLocation(configPath, repoRoot)
-  if (!location.ok) return { ok: false, blocked: ["deploy_config_unapproved_location"] }
-
-  let stats
-  try { stats = lstatSync(configPath) } catch { return { ok: false, blocked: ["deploy_config_unreadable"] } }
-  if (stats.isSymbolicLink()) return { ok: false, blocked: ["deploy_config_symlink"] }
-  if (!stats.isFile()) return { ok: false, blocked: ["deploy_config_not_plain_file"] }
-  if ((stats.mode & 0o777 & ~0o600) !== 0) return { ok: false, blocked: ["deploy_config_permissions_too_broad"] }
-  if (stats.size > DEPLOY_CONFIG_MAX_BYTES) return { ok: false, blocked: ["deploy_config_too_large"] }
-
-  // ONE read. Everything downstream uses these retained bytes.
-  let text
-  try { text = readFileSync(configPath, "utf8") } catch { return { ok: false, blocked: ["deploy_config_unreadable"] } }
-  if (Buffer.byteLength(text) > DEPLOY_CONFIG_MAX_BYTES) return { ok: false, blocked: ["deploy_config_too_large"] }
-
-  let parsed
-  try { parsed = JSON.parse(text) } catch { return { ok: false, blocked: ["deploy_config_unparseable"] } }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, blocked: ["deploy_config_unparseable"] }
-
-  // Validate the SNAPSHOT — including the shared physical-separation rule.
-  const validation = validateDeployConfig(parsed, { configPath, repoRoot, allowPlaceholderIds: false })
-  if (!validation.ok) return { ok: false, blocked: ["deploy_config_invalid"] }
-
-  // Frozen so no later step can quietly retarget the write in memory either.
-  return { ok: true, snapshot: Object.freeze(parsed) }
-}
-
-/**
- * Write the validated snapshot to a FRESH PRIVATE execution config and return its
- * path. Exclusive creation (`wx`) so an existing file can never be overwritten or
- * followed; `0600`; a collision-resistant, git-ignored, repository-root name that
- * matches the approved generated-config pattern (so Wrangler resolves it relative
- * to the repository root exactly as a normal generated config would).
- *
- * The content is EXACTLY the validated snapshot — never rebuilt from ambient
- * environment variables after validation.
- */
-export function writeExecutionConfig(snapshot, repoRoot = REPO_ROOT) {
-  const path = resolve(repoRoot, `wrangler.deploy.bootstrap-exec-${randomBytes(12).toString("hex")}.json`)
-  writeFileSync(path, JSON.stringify(snapshot, null, 2), { mode: 0o600, flag: "wx" })
-  return path
-}
-
 /** The requested target binding (defaults to CONTROL_DB). */
 export function parseBindingArg(argv) {
   const i = argv.indexOf("--binding")
@@ -306,13 +240,14 @@ export function evaluateBootstrapGates({ env = process.env, argv = [], repoRoot 
   if (!input.ok) blocked.push("operator_input_invalid")
 
   // The deploy config is authority-bearing: it decides WHICH database the bytes
-  // hit. Read + validated ONCE into an immutable snapshot; never re-read afterwards.
-  const config = loadDeployConfigSnapshot(configPath, repoRoot)
+  // hit. Loaded + validated ONCE through the SHARED authority library (the same one
+  // migration apply, remote verification, and Worker deploy use); never re-read.
+  const config = loadValidatedDeployConfigAuthority({ configPath, repoRoot, allowPlaceholderIds: false })
   if (!config.ok) blocked.push(...config.blocked)
 
   // The registry row must describe the deployment's REAL TENANT_DB_DEFAULT —
-  // compared against the SAME snapshot that will be executed.
-  if (input.ok && config.ok) blocked.push(...evaluateRegistryBinding(input.values, config.snapshot).blocked)
+  // compared against the SAME snapshot whose bytes will be executed.
+  if (input.ok && config.ok) blocked.push(...evaluateRegistryBinding(input.values, config.authority.snapshot).blocked)
 
   const loaded = loadManifest(repoRoot)
   if (!loaded.ok) blocked.push("manifest_unreadable")
@@ -343,7 +278,9 @@ export function evaluateBootstrapGates({ env = process.env, argv = [], repoRoot 
     ok,
     blocked: [...new Set(blocked)],
     canonicalSql: ok ? canonicalSql : null,
-    configSnapshot: ok ? config.snapshot : null,
+    configAuthority: ok ? config.authority : null,
+    // The immutable parsed view, for callers/tests that compare bindings.
+    configSnapshot: ok ? config.authority.snapshot : null,
   }
 }
 
@@ -427,7 +364,7 @@ function main() {
   // configPath is never handed to Wrangler.
   let executionConfig = null
   try {
-    executionConfig = writeExecutionConfig(gates.configSnapshot, REPO_ROOT)
+    executionConfig = createPrivateExecutionConfig(gates.configAuthority, { repoRoot: REPO_ROOT, purpose: "bootstrap-exec" })
 
     // ONE invocation = ONE atomic batch: all five records, or none. The bytes are
     // the ones validation retained — never re-read from the mutable artifact path.
@@ -456,7 +393,7 @@ function main() {
     // failure, or an unexpected throw. Only ever runs AFTER Wrangler has read the
     // (temporary) execution file, never before. Both the private execution config
     // and the repository-root preparation artifact go, unconditionally.
-    rmSync(executionConfig ?? "", { force: true })
+    removePrivateExecutionConfig(executionConfig)
     removeBootstrapSql()
   }
   process.exit(exitCode)

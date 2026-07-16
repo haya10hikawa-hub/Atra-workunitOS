@@ -92,10 +92,13 @@ test("apply: WITHOUT explicit remote mode it is blocked", () => {
   })
 })
 
-test("apply: the COMMITTED placeholder config is rejected (placeholder D1 IDs)", () => {
+test("apply: the COMMITTED placeholder config is rejected, and no authority is returned", () => {
   const gates = evaluateApplyGates({ env: FULL_ENV, argv: ["--remote"], repoRoot: REPO_ROOT, configPath: resolve(REPO_ROOT, "wrangler.json") })
   assert.equal(gates.ok, false)
-  assert.ok(gates.blocked.includes("deploy_config_invalid"), "placeholder IDs must be rejected")
+  // The committed base is not an approved GENERATED config, so the shared authority
+  // refuses it on location before its placeholder IDs are even reached.
+  assert.ok(gates.blocked.some((b: string) => b.startsWith("deploy_config_")), `expected a deploy-config refusal, got ${gates.blocked.join(",")}`)
+  assert.equal(gates.configAuthority, null, "no execution authority may be returned")
 })
 
 test("apply: every gate satisfied → allowed (synthetic config; nothing is executed here)", () => {
@@ -133,8 +136,11 @@ test("apply: the built commands follow lane order, use --remote, and never weake
 test("remote verify: blocked without an explicit remote flag or a validated config", () => {
   assert.ok(evaluateRemoteVerifyGates({ argv: [], repoRoot: REPO_ROOT, configPath: undefined }).blocked.includes("missing_remote_flag"))
   assert.ok(evaluateRemoteVerifyGates({ argv: ["--remote"], repoRoot: REPO_ROOT, configPath: undefined }).blocked.includes("missing_config"))
-  // The committed placeholder config is refused.
-  assert.ok(evaluateRemoteVerifyGates({ argv: ["--remote"], repoRoot: REPO_ROOT, configPath: resolve(REPO_ROOT, "wrangler.json") }).blocked.includes("deploy_config_invalid"))
+  // The committed placeholder config is refused (not an approved generated config).
+  const committed = evaluateRemoteVerifyGates({ argv: ["--remote"], repoRoot: REPO_ROOT, configPath: resolve(REPO_ROOT, "wrangler.json") })
+  assert.equal(committed.ok, false)
+  assert.ok(committed.blocked.some((b: string) => b.startsWith("deploy_config_")), `expected a deploy-config refusal, got ${committed.blocked.join(",")}`)
+  assert.equal(committed.configAuthority, null, "no execution authority may be returned")
 })
 
 test("remote verify: allowed only with a validated generated config + explicit remote", () => {

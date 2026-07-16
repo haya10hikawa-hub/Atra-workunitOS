@@ -182,6 +182,64 @@ change — a changed digest fails `cf:d1:migrations:check`. New work is appended
 new migration + a new manifest entry; existing entries are never rewritten or
 renumbered.
 
+### The deploy config is authority-bearing — one immutable snapshot per command
+
+The generated `wrangler.deploy*.json` selects the **physical databases** and the
+Worker deployment configuration. Validating one read and then handing Wrangler the
+original path leaves a validate-then-execute window: the file can change in between.
+Reproduced against an earlier head — a post-validation edit **redirected a
+schema-verification query to a different database mid-run**, and the deploy
+orchestrator's `verify-remote-schema` and `deploy` steps each re-read
+`wrangler.deploy.json` independently, so the config verified and the config deployed
+could differ.
+
+One shared library (`scripts/lib/cfDeployConfigAuthority.mjs`) is now the only
+implementation. Every remote command — `cf:d1:migrations:apply`,
+`cf:d1:schema:verify:remote`, `cf:d1:bootstrap:apply`, and `cf:deploy` — uses it:
+
+```text
+load authority ONCE  → create ONE private execution config → use it for every
+                       remote operation → remove it unconditionally
+```
+
+`loadValidatedDeployConfigAuthority` requires an approved repository-root
+`wrangler.deploy*.json`, rejects a symlink, requires a plain file with permissions no
+broader than `0600`, bounds the size **before** reading, reads the bytes **exactly
+once**, re-checks the size, strictly parses the retained bytes, runs the shared
+validator (including physical separation and database-name rules), and returns the
+**exact validated bytes** plus a **recursively immutable** snapshot — a shallow
+freeze would leave `d1_databases[0].database_id` writable, which is the one field
+that decides which database is hit. Authority bytes are returned **only** when every
+check passes. Failures are safe categories that never contain a database ID, name,
+config content, path, or secret.
+
+`createPrivateExecutionConfig` writes those exact bytes — never a re-serialization of
+the parsed object, never a rebuild from environment variables — to a
+collision-resistant `wrangler.deploy.<purpose>-exec-<random>.json` at the repository
+root (so Wrangler resolves it as a normal generated config, and
+`/wrangler.deploy*.json` already ignores it), created **exclusively** (`wx`, so a
+pre-placed file is never overwritten or followed) with mode `0600`. The filename
+carries no database ID. It is removed unconditionally.
+
+**Wrangler never receives the original config path.** Consequently, mutating,
+replacing, or deleting the original after gate evaluation cannot redirect any
+operation — and deleting it does not break execution.
+
+Per command:
+
+| Command | One snapshot covers |
+| --- | --- |
+| `cf:d1:migrations:apply` | ledger initialization, migration-history queries, effect probes, and **every** Control and Tenant migration (replay-safe and once-only batches) |
+| `cf:d1:schema:verify:remote` | **every** Control and Tenant introspection query |
+| `cf:deploy` | preflight, artifact verification, remote schema verification, **and** the upload — verification runs in-process against the same retained authority, so the config verified *is* the config deployed |
+| `cf:d1:bootstrap:apply` | the atomic bootstrap batch and every post-bootstrap COUNT query |
+
+Migration apply and the deploy orchestrator return an exit code from their protected
+regions rather than calling `process.exit` inside them: a nested exit would terminate
+before the `finally` and leave a private config containing real database IDs at the
+repository root. The orchestrator additionally removes the **original** generated
+`wrangler.deploy.json` on every exit, since it owns it and it carries real IDs.
+
 ### CONTROL_DB and TENANT_DB_DEFAULT must be DIFFERENT physical databases
 
 `CONTROL_DB is never tenant-data storage` is an **architecture guarantee**, not a
