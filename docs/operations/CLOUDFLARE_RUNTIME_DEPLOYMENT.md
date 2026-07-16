@@ -323,6 +323,16 @@ prepare deploy config
   → deploy Worker
 ```
 
+- **`CONTROL_DB` and `TENANT_DB_DEFAULT` must reference DIFFERENT physical D1
+  databases.** The shared deploy-config validator compares the two `database_id`s and
+  refuses a collision (`d1_database_id_collision:CONTROL_DB:TENANT_DB_DEFAULT`)
+  **before any database access** — before the first Wrangler call, before the
+  migration ledger is created, and before either lane applies anything. `CONTROL_DB
+  is never tenant-data storage` is an architecture guarantee: one physical database
+  serving both bindings would put tenant rows in the control registry and let the
+  tenant lane rewrite the control schema. Every command inherits the rule (prepare,
+  preflight, dry-run, deploy, migration apply, bootstrap apply, remote verification).
+  Database names are validated and must also be distinct. No failure contains an id.
 - A remote schema-verification **failure prevents the deploy**.
 - The remote verification is read-only: `SELECT` on `sqlite_master` + read-only
   `PRAGMA` only; it never mutates, seeds, runs migrations, prints database IDs, or
@@ -373,12 +383,18 @@ echo a value.
 `registry.TENANT_DB_DEFAULT.schemaVersion`, which is pinned to the tenant lane it
 describes.
 
-**Wrangler receives a private temporary canonical copy**, never the mutable
-repository-root artifact — closing the validate-then-execute window. The five records
-are applied as **one atomic D1 batch** (all-or-nothing), then verified read-only at
-category level with COUNT-only queries over **all** supplied fields (no IDs, email,
-subject, or row contents printed). Both the temporary execution file and the
-repository-root artifact are removed on **every** exit path.
+**Wrangler receives private temporary files, never the mutable preparation files.**
+Both authority-bearing inputs are snapshotted: the canonical SQL bytes and the
+validated deploy config. The config is read once, validated as a snapshot, and
+written to a fresh exclusive `0600` `wrangler.deploy.bootstrap-exec-<random>.json`;
+only that config is passed to Wrangler, and the **same** one is used for the apply
+and for every verification query, so the database written and the database verified
+cannot diverge. Mutating, replacing, or deleting the original config after gate
+evaluation cannot redirect the write. The five records are applied as **one atomic D1
+batch** (all-or-nothing), then verified read-only at category level with COUNT-only
+queries over **all** supplied fields (no IDs, email, subject, or row contents
+printed). The temporary SQL file, the private execution config, and the
+repository-root artifact are all removed on **every** exit path.
 
 Because verification runs **after** the batch commits, a verification failure is an
 operator-action state (`bootstrap_verification_failed_after_commit`) — **not** a

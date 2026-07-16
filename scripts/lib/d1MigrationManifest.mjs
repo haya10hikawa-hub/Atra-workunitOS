@@ -331,9 +331,43 @@ export function scanMigrationSqlSafety(repoRoot, manifest) {
 export const REGISTRY_BINDING = "TENANT_DB_DEFAULT"
 const SCHEMA_VERSION_RE = /^[0-9]{1,10}$/
 
-/** Deterministic digest of a binding's ordered lane (safe: names + modes + digests). */
+/**
+ * Canonical, deterministic serialization of a `once` migration's effect probe.
+ *
+ * NORMALIZED TO AN ALLOWLISTED SHAPE with an explicit field order — never a bare
+ * `JSON.stringify` over an arbitrary object, whose output would depend on key
+ * insertion order and would silently absorb unknown fields.
+ *
+ * Returns "-" when there is no effect (a `replay_safe` migration), so presence and
+ * absence are themselves distinguishable in the digest.
+ */
+export function canonicalEffectRepresentation(effect) {
+  if (!isValidEffectProbe(effect)) return "-"
+  // Explicit order: type, table, column. Adding a field to the probe MUST also be
+  // added here, or the digest would not notice the change.
+  return `${effect.type}|${effect.table}|${effect.column}`
+}
+
+/**
+ * Deterministic digest of a binding's ordered lane. Safe: names, kinds, modes,
+ * pinned SQL digests, and the canonical effect — never IDs, secrets, or SQL.
+ *
+ * The effect probe is part of the OPERATIONAL plan, not a comment: it is what the
+ * ledger consults to decide whether a `once` migration is pending, satisfied,
+ * schema-without-history, or history-without-schema. A probe pointed at a column
+ * that always exists would make 0006 look permanently satisfied and silently skip
+ * it. So it is digested, and the pinned `registry.planDigest` changes when it does.
+ */
 export function computeRegistryPlanDigest(manifest, binding = REGISTRY_BINDING) {
-  const parts = buildPlan(manifest, binding).map((e) => `${e.sequence}:${e.name}:${e.apply}:${e.sha256}`)
+  const parts = buildPlan(manifest, binding).map((e) => [
+    binding,
+    e.sequence,
+    e.path,
+    e.kind,
+    e.apply,
+    e.sha256,
+    canonicalEffectRepresentation(e.effect),
+  ].join(":"))
   return createHash("sha256").update(parts.join("\n")).digest("hex")
 }
 

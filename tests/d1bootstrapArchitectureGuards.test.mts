@@ -175,7 +175,7 @@ test("GUARD: bootstrap apply requires BOTH an execution flag and the exact confi
   assert.match(src, /argv\.includes\("--remote"\)/)
   // The gate actually guards a write path — the whole point of this command — and
   // what it executes is the canonical bytes validation retained.
-  assert.match(src, /applyBootstrapFile\(configPath, gates\.canonicalSql\)/)
+  assert.match(src, /applyBootstrapFile\(executionConfig, gates\.canonicalSql\)/)
 })
 
 // ─── GUARD: the artifact is bound to operator authority ──────────
@@ -195,7 +195,7 @@ test("GUARD: Wrangler may never receive the repository-root artifact path", () =
   assert.match(body, /writeFileSync\(executionFile, canonicalSql, \{ mode: 0o600 \}\)/, "the execution file must be written 0600 from the canonical bytes")
   assert.doesNotMatch(body, /readFileSync/, "the bytes must not be re-read from any path at execution time")
   // main() executes the bytes validation retained.
-  assert.match(src, /applyBootstrapFile\(configPath, gates\.canonicalSql\)/)
+  assert.match(src, /applyBootstrapFile\(executionConfig, gates\.canonicalSql\)/)
 })
 
 test("GUARD: the artifact content is READ and regenerated from current validated values before execution", () => {
@@ -234,10 +234,10 @@ test("GUARD: extra SQL can never survive canonical comparison", () => {
 test("GUARD: operator database metadata must be compared to TENANT_DB_DEFAULT", () => {
   const src = codeOf(BOOTSTRAP_APPLY)
   assert.match(src, /export function evaluateRegistryBinding\(/)
-  assert.match(src, /d\.binding === REGISTRY_BINDING/, "the comparison must target the TENANT_DB_DEFAULT binding")
+  assert.match(src, /of\(REGISTRY_BINDING\)/, "the comparison must target the TENANT_DB_DEFAULT binding")
   assert.match(src, /values\.databaseId !== tenant\.database_id/)
   assert.match(src, /values\.databaseName !== tenant\.database_name/)
-  assert.match(src, /evaluateRegistryBinding\(input\.values, validatedConfig\)/, "the gates must run the registry binding check")
+  assert.match(src, /evaluateRegistryBinding\(input\.values, config\.snapshot\)/, "the gates must run the registry binding check against the validated snapshot")
   for (const category of ["tenant_database_id_mismatch", "tenant_database_name_mismatch", "tenant_binding_missing"]) {
     assert.ok(src.includes(category), `${category} must exist`)
   }
@@ -394,6 +394,127 @@ test("GUARD: the clean-bootstrap integration proof must exercise Action Preview 
   // It must use real SQLite, never FakeD1 (which enforces no schema at all).
   assert.match(src, /SqliteD1Database/)
   assert.doesNotMatch(src, /FakeD1Database/, "FakeD1 can never prove schema compatibility")
+})
+
+// ─── GUARD: physical D1 separation ───────────────────────────────
+
+test("GUARD: the SHARED deploy validator must compare Control and Tenant database IDs", () => {
+  // `CONTROL_DB is never tenant-data storage` cannot be enforced by validating each
+  // id alone. The comparison must live in the shared validator so prepare,
+  // preflight, dry-run, deploy, migration apply, bootstrap apply, and remote
+  // verification all inherit it — never in one command's private check.
+  const src = codeOf("scripts/lib/cfDeployConfig.mjs")
+  assert.match(src, /controlEntry\.database_id === tenantEntry\.database_id/, "the shared validator must compare the two ids")
+  assert.match(src, /failures\.push\("d1_database_id_collision:CONTROL_DB:TENANT_DB_DEFAULT"\)/)
+  assert.match(src, /export function validateD1Name\(/, "database names must be validated too")
+  assert.match(src, /controlEntry\.database_name === tenantEntry\.database_name/)
+  // The rule is about CONCRETE ids, so it must not be nested inside the
+  // `!allowPlaceholderIds` branch (preflight validates with placeholders allowed).
+  const placeholderBranch = src.slice(src.indexOf("if (!allowPlaceholderIds)"))
+  assert.doesNotMatch(placeholderBranch, /d1_database_id_collision/, "the collision rule must not depend on allowPlaceholderIds")
+})
+
+test("GUARD: the same physical ID is rejected by bootstrap, migration apply, remote verify, preflight, and deploy", () => {
+  // Every gated command must route its config through the shared validator — the
+  // one place the collision rule lives.
+  for (const file of [
+    "scripts/cf-d1-bootstrap-apply.mjs",
+    "scripts/cf-d1-migrations-apply.mjs",
+    "scripts/cf-d1-schema-verify-remote.mjs",
+    "scripts/cloudflare-deploy-preflight.mjs",
+  ]) {
+    assert.match(codeOf(file), /validateDeployConfig\(/, `${file} must validate through the shared validator`)
+  }
+  // Deploy reaches the network only through preflight + the read-only verifier.
+  assert.match(codeOf(DEPLOY), /cloudflare-deploy-preflight\.mjs/)
+  // Defence in depth at the bootstrap boundary, independent of the shared validator.
+  const apply = codeOf(BOOTSTRAP_APPLY)
+  assert.match(apply, /tenant\.database_id === control\.database_id/)
+  assert.match(apply, /control_tenant_database_collision/)
+  assert.match(apply, /values\.databaseId === control\.database_id/, "the operator must never store the Control id as tenant metadata")
+})
+
+// ─── GUARD: the deploy config is an immutable snapshot ───────────
+
+test("GUARD: bootstrap execution must never pass the original config path to Wrangler", () => {
+  const src = codeOf(BOOTSTRAP_APPLY)
+  // The SQL bytes were bound to operator authority, but the config decides WHICH
+  // DATABASE those bytes hit — it needs the same treatment.
+  for (const helper of ["function applyBootstrapFile(", "function remoteCount("]) {
+    const start = src.indexOf(helper)
+    assert.ok(start >= 0, `${helper} must exist`)
+    const body = src.slice(start, src.indexOf("\n}", start))
+    assert.doesNotMatch(body, /"--config", configPath/, `${helper} must not hand Wrangler the original config path`)
+    assert.match(body, /"--config", executionConfig/, `${helper} must use the private execution config`)
+  }
+  // main() derives ONE execution config from the validated snapshot…
+  assert.match(src, /executionConfig = writeExecutionConfig\(gates\.configSnapshot, REPO_ROOT\)/)
+  // …and both the apply and the verification use THAT one.
+  assert.match(src, /applyBootstrapFile\(executionConfig, gates\.canonicalSql\)/)
+  assert.match(src, /remoteCount\(executionConfig, sql\)/)
+})
+
+test("GUARD: the config is read once, validated as a snapshot, and never re-read after validation", () => {
+  const src = codeOf(BOOTSTRAP_APPLY)
+  assert.match(src, /export function loadDeployConfigSnapshot\(/)
+  // Path/type/location/mode/size before the read.
+  const start = src.indexOf("export function loadDeployConfigSnapshot(")
+  const body = src.slice(start, src.indexOf("\n}", start))
+  assert.match(body, /validateGeneratedConfigLocation\(configPath, repoRoot\)/)
+  assert.match(body, /isSymbolicLink\(\)/)
+  assert.match(body, /deploy_config_permissions_too_broad/)
+  assert.match(body, /stats\.size > DEPLOY_CONFIG_MAX_BYTES/)
+  const sizeIdx = body.indexOf("DEPLOY_CONFIG_MAX_BYTES")
+  const readIdx = body.indexOf('readFileSync(configPath, "utf8")')
+  assert.ok(sizeIdx > 0 && sizeIdx < readIdx, "the size cap must precede the read")
+  // Exactly one read of the operator's path, and the parsed snapshot is frozen.
+  assert.equal(body.split("readFileSync(configPath").length - 1, 1, "the config must be read exactly once")
+  assert.match(body, /Object\.freeze\(parsed\)/)
+  // Nothing after gate evaluation re-reads the original path.
+  const afterGates = src.slice(src.indexOf("function main()"))
+  assert.doesNotMatch(afterGates, /readFileSync\(configPath/, "main must never re-read the original config")
+  assert.doesNotMatch(afterGates, /loadConfigFile\(/, "main must never reload the original config")
+})
+
+test("GUARD: apply and post-verification can never use different config snapshots", () => {
+  const src = codeOf(BOOTSTRAP_APPLY)
+  const main = src.slice(src.indexOf("function main()"))
+  // Exactly one execution config is produced, and every Wrangler call uses it.
+  assert.equal(main.split("writeExecutionConfig(").length - 1, 1, "exactly one execution config may be written")
+  for (const call of main.matchAll(/(applyBootstrapFile|remoteCount)\(([A-Za-z.]+),/g)) {
+    assert.equal(call[2], "executionConfig", `${call[1]} must receive the single execution config, got ${call[2]}`)
+  }
+})
+
+test("GUARD: the temporary execution config must be private, exclusive, and unconditionally removed", () => {
+  const src = codeOf(BOOTSTRAP_APPLY)
+  assert.match(src, /mode: 0o600, flag: "wx"/, "private + exclusive creation (never overwrite or follow an existing file)")
+  assert.match(src, /wrangler\.deploy\.bootstrap-exec-\$\{randomBytes\(12\)\.toString\("hex"\)\}\.json/,
+    "a collision-resistant, git-ignored, repository-root generated-config name")
+  // The content is the validated snapshot — never rebuilt from ambient env vars.
+  assert.match(src, /JSON\.stringify\(snapshot, null, 2\)/)
+  // Cleanup is unconditional, in a finally.
+  const bodies = finallyBodies(src)
+  assert.ok(bodies.some((b) => /^\s*rmSync\(executionConfig \?\? "", \{ force: true \}\)\s*$/m.test(b)),
+    "the private execution config must be removed unconditionally")
+  for (const body of bodies) assert.doesNotMatch(body, /\bif\s*\(/, "no cleanup path may be conditional")
+  // …and the generated-config pattern is git-ignored.
+  assert.match(read(".gitignore"), /^\/wrangler\.deploy\*\.json$/m)
+})
+
+test("GUARD: the registry plan digest must cover migration kind and the effect probe", () => {
+  const src = codeOf("scripts/lib/d1MigrationManifest.mjs")
+  const start = src.indexOf("export function computeRegistryPlanDigest(")
+  const body = src.slice(start, src.indexOf("\n}", start))
+  for (const field of ["binding", "e.sequence", "e.path", "e.kind", "e.apply", "e.sha256", "canonicalEffectRepresentation(e.effect)"]) {
+    assert.ok(body.includes(field), `the plan digest must cover ${field}`)
+  }
+  // Normalized allowlisted shape — never a bare JSON.stringify over an arbitrary
+  // object (key-order dependent, and silently absorbs unknown fields).
+  assert.doesNotMatch(body, /JSON\.stringify/)
+  const effect = src.slice(src.indexOf("export function canonicalEffectRepresentation("))
+  assert.doesNotMatch(effect.slice(0, effect.indexOf("\n}")), /JSON\.stringify/)
+  assert.match(src, /return `\$\{effect\.type\}\|\$\{effect\.table\}\|\$\{effect\.column\}`/, "explicit field order")
 })
 
 // ─── GUARD: Worker deploy never migrates or bootstraps ───────────

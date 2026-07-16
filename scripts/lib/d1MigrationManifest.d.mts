@@ -87,7 +87,16 @@ export declare function isValidEffectProbe(effect: unknown): boolean
 export declare function listCommittedMigrationFiles(repoRoot: string): string[]
 
 export declare const REGISTRY_BINDING: "TENANT_DB_DEFAULT"
-/** Deterministic digest of a binding's ordered lane. */
+/**
+ * Canonical, deterministic serialization of a `once` migration's effect probe —
+ * a normalized allowlisted shape (`type|table|column`) with explicit field order,
+ * never a bare JSON.stringify. Returns "-" when there is no valid effect.
+ */
+export declare function canonicalEffectRepresentation(effect: unknown): string
+/**
+ * Deterministic digest of a binding's ordered lane: binding, sequence, path, kind,
+ * apply mode, pinned SQL sha256, and the canonical effect representation.
+ */
 export declare function computeRegistryPlanDigest(manifest: unknown, binding?: string): string
 /**
  * The canonical `tenant_databases.schema_version`, or null when the manifest does

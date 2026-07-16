@@ -182,6 +182,44 @@ change — a changed digest fails `cf:d1:migrations:check`. New work is appended
 new migration + a new manifest entry; existing entries are never rewritten or
 renumbered.
 
+### CONTROL_DB and TENANT_DB_DEFAULT must be DIFFERENT physical databases
+
+`CONTROL_DB is never tenant-data storage` is an **architecture guarantee**, not a
+naming convention. The control registry holds tenants, users, identities, and the
+`tenant_databases` rows that decide *which* database a tenant's data lives in.
+Assigning one physical D1 database to both approved bindings would put tenant rows
+inside the control registry and let the tenant migration lane rewrite the control
+schema.
+
+Validating each `database_id` on its own cannot see that, so the **shared** deploy-
+config validator compares them:
+
+```text
+CONTROL_DB.database_id !== TENANT_DB_DEFAULT.database_id
+  → else d1_database_id_collision:CONTROL_DB:TENANT_DB_DEFAULT
+```
+
+Every command inherits it — `cf:deploy:prepare`, `cf:deploy:preflight`,
+`cf:deploy:dry-run`, `cf:deploy`, `cf:d1:migrations:apply`, `cf:d1:bootstrap:apply`,
+and `cf:d1:schema:verify:remote` — because they all validate through that one
+library. A collided config is refused **before any database access**: before the
+first Wrangler call, before the `__atra_d1_migrations` ledger is created, and before
+either lane applies anything. The ledger's `foreign_binding` reconciliation is a
+backstop, never the first defence — by the time it runs the Control lane would
+already have written.
+
+The rule is about **concrete** ids, so it applies regardless of
+`allowPlaceholderIds`; the committed base (two different placeholders) is unaffected.
+
+Every required `database_name` is validated too — non-empty, bounded, approved
+charset, no placeholder marker (`d1_name_empty` / `d1_name_malformed` /
+`d1_name_placeholder`) — and the two approved bindings must have **distinct names**
+(`d1_database_name_collision:CONTROL_DB:TENANT_DB_DEFAULT`). Wrangler resolves a
+binding by id, so an alias would not by itself misroute; the requirement is that
+every operator-facing artifact (plan output, Wrangler prompts, the bootstrap registry
+row that must match `TENANT_DB_DEFAULT`) is unambiguous about which database is
+meant. No failure ever contains an id or a name.
+
 ### Apply modes: `replay_safe` vs `once`
 
 Every migration declares **how** it may be applied. There is deliberately no
@@ -196,6 +234,17 @@ A `once` migration must declare an **effect probe** (`{ type: "column_exists",
 table, column }`) — the deterministic schema question "did this change land?". It is
 what lets the ledger and the real schema be reconciled after a crash or a manual
 apply. `cf:d1:migrations:check` rejects a `once` migration without one.
+
+The probe is **part of the operational plan**, not documentation: the ledger consults
+it to decide `pending` / `satisfied` / `schema_without_history` /
+`history_without_schema`. A probe pointed at a column that always exists would make
+0006 look permanently satisfied and silently skip it. It is therefore covered by the
+canonical registry plan digest, which spans **binding, sequence, path, kind, apply
+mode, pinned SQL SHA-256, and a canonical effect representation** (`type|table|column`
+— a normalized allowlisted shape with explicit field order, never a bare
+`JSON.stringify` whose output would depend on key order and would silently absorb
+unknown fields). Changing any of them fails `registry_plan_digest_mismatch` until the
+plan is reviewed and the digest repinned.
 
 ### The migration ledger (`__atra_d1_migrations`)
 
@@ -681,7 +730,27 @@ binding: `CF_D1_BOOTSTRAP_DATABASE_ID` must equal the validated deploy config's
 `tenant_database_name_mismatch` and neither value is printed. Two individually valid
 UUIDs that differ are refused — and the **Control DB's own ID can never be stored as
 the tenant registry database ID**, which would point tenant data at the control
-registry itself.
+registry itself (`control_tenant_database_collision`). A missing or duplicated
+approved binding is unresolvable and fails closed.
+
+**Immutable deploy-config snapshot.** The config decides *which database* the bytes
+hit, so it is authority-bearing and gets the same treatment as the SQL. During gate
+evaluation apply inspects the config's path, type, location, and permissions, bounds
+its size, reads the bytes **once**, parses **those** bytes, validates the parsed
+snapshot, performs the registry comparisons against that same snapshot, and returns
+an immutable (frozen) snapshot only when every gate passes. The original path is
+never re-read afterwards.
+
+Before the first Wrangler invocation the snapshot is written to a **fresh private
+execution config** — `wrangler.deploy.bootstrap-exec-<random>.json`, created
+exclusively (`wx`, so an existing file can never be overwritten or followed) with
+mode `0600`, at the repository root so Wrangler resolves it exactly as a normal
+generated config, and git-ignored by `/wrangler.deploy*.json`. **Only that file is
+passed to Wrangler**, for the apply *and* for every post-bootstrap verification
+query — so the database that is written and the database that is verified can never
+diverge. Mutating, replacing, or deleting the original config after gate evaluation
+cannot redirect the write. It is removed unconditionally, alongside the preparation
+artifact.
 
 **No validate-then-execute window (TOCTOU).** Wrangler never receives
 `bootstrap.control.sql`. Validating the repository-root artifact and then handing

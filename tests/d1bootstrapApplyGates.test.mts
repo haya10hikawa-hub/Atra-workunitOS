@@ -12,8 +12,9 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { writeFileSync, rmSync, mkdtempSync, symlinkSync, chmodSync, readFileSync, existsSync, statSync } from "node:fs"
+import { writeFileSync, rmSync, mkdtempSync, symlinkSync, chmodSync, readFileSync, existsSync, statSync, readdirSync } from "node:fs"
 import { tmpdir } from "node:os"
+import { randomBytes } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
 import {
@@ -325,15 +326,26 @@ test("18. the Control DB's own ID can NEVER be stored as the tenant registry dat
 })
 
 test("the registry binding comparison is in-memory and never echoes either value", () => {
-  const config = { d1_databases: [{ binding: "TENANT_DB_DEFAULT", database_id: "aaaaaaaa-0000-4000-8000-000000000001", database_name: "real-tenant" }] }
+  const config = { d1_databases: [
+    { binding: "CONTROL_DB", database_id: "cccccccc-0000-4000-8000-000000000003", database_name: "real-control" },
+    { binding: "TENANT_DB_DEFAULT", database_id: "aaaaaaaa-0000-4000-8000-000000000001", database_name: "real-tenant" },
+  ] }
   const result = evaluateRegistryBinding({ databaseId: "bbbbbbbb-0000-4000-8000-000000000002", databaseName: "wrong-name" }, config)
   assert.deepEqual(result.blocked, ["tenant_database_id_mismatch", "tenant_database_name_mismatch"])
   const serialized = JSON.stringify(result.blocked)
-  for (const value of ["aaaaaaaa-0000-4000-8000-000000000001", "bbbbbbbb-0000-4000-8000-000000000002", "real-tenant", "wrong-name"]) {
+  for (const value of ["aaaaaaaa-0000-4000-8000-000000000001", "bbbbbbbb-0000-4000-8000-000000000002", "cccccccc-0000-4000-8000-000000000003", "real-tenant", "real-control", "wrong-name"]) {
     assert.equal(serialized.includes(value), false, `must never echo ${value}`)
   }
-  // A config with no tenant binding at all fails closed rather than passing.
+  // A missing OR duplicated approved binding is unresolvable — never guess.
   assert.deepEqual(evaluateRegistryBinding({ databaseId: "x", databaseName: "y" }, { d1_databases: [] }).blocked, ["tenant_binding_missing"])
+  assert.deepEqual(evaluateRegistryBinding({ databaseId: "x", databaseName: "y" },
+    { d1_databases: [{ binding: "TENANT_DB_DEFAULT", database_id: "x", database_name: "y" }] }).blocked, ["control_binding_missing"])
+  for (const dup of [
+    [{ binding: "CONTROL_DB", database_id: "c", database_name: "c" }, { binding: "TENANT_DB_DEFAULT", database_id: "x", database_name: "y" }, { binding: "TENANT_DB_DEFAULT", database_id: "x", database_name: "y" }],
+    [{ binding: "CONTROL_DB", database_id: "c", database_name: "c" }, { binding: "CONTROL_DB", database_id: "c", database_name: "c" }, { binding: "TENANT_DB_DEFAULT", database_id: "x", database_name: "y" }],
+  ]) {
+    assert.equal(evaluateRegistryBinding({ databaseId: "x", databaseName: "y" }, { d1_databases: dup }).ok, false, "a duplicated approved binding must fail closed")
+  }
 })
 
 test("19. an incorrect schema version fails before Wrangler", () => {
@@ -372,7 +384,11 @@ test("4. a placeholder deploy config stops before Wrangler", () => {
   const committed = resolve(REPO_ROOT, "wrangler.json")
   withArtifact((sqlPath) => {
     const gates = evaluateBootstrapGates({ env: { ...VALID_ENV }, argv: ["--remote"], repoRoot: REPO_ROOT, configPath: committed, sqlPath })
-    assert.ok(gates.blocked.includes("deploy_config_invalid"), "the placeholder committed config must be refused")
+    // The committed base is not an approved GENERATED config, so it is refused on
+    // location before its placeholder IDs are even reached — either way, refused.
+    assert.equal(gates.ok, false, "the placeholder committed config must be refused")
+    assert.ok(gates.blocked.some((b) => b.startsWith("deploy_config_")), `expected a deploy-config refusal, got ${gates.blocked.join(",")}`)
+    assert.equal(gates.canonicalSql, null)
   })
   // Every placeholder marker shape is refused.
   for (const id of ["REPLACE_WITH_CONTROL_DB_ID", "PLACEHOLDER", "TODO-fill-in", "CHANGEME", "not-a-uuid"]) {
@@ -532,6 +548,160 @@ test("14. the temporary execution file is removed after Wrangler FAILURE", () =>
   assert.equal(existsSync(observed.file!), false)
 })
 
+// ─── Immutable deploy-config snapshot ────────────────────────────
+
+/**
+ * Drive `main()`'s execution section without Wrangler: the source is loaded with
+ * `spawnSync` stubbed, so every `--config` argument and the bytes behind it can be
+ * observed. Nothing is executed, no network, no bootstrap.
+ */
+function driveExecution(snapshot: unknown, canonicalSql: string, options: { failWrangler?: boolean; failVerify?: boolean } = {}) {
+  const src = readFileSync(APPLY_SRC, "utf8")
+  const slice = (name: string) => {
+    const start = src.indexOf(`function ${name}(`)
+    return src.slice(start, src.indexOf("\n}", start) + 2)
+  }
+  const observed: Array<{ kind: string; config: string; configBytes: string; mode: number }> = []
+  let executionConfig: string | null = null
+
+  const harness = new Function("deps", `
+    const { spawnSync, mkdtempSync, writeFileSync, rmSync, resolve, tmpdir, randomBytes, readFileSync,
+            requireAuthorizedExecution, WRANGLER_BIN, REPO_ROOT, BOOTSTRAP_BINDING } = deps
+    ${slice("writeExecutionConfig").replace("export ", "")}
+    ${slice("applyBootstrapFile")}
+    ${slice("remoteCount")}
+    return { writeExecutionConfig, applyBootstrapFile, remoteCount }
+  `)({
+    spawnSync: (_bin: string, args: string[]) => {
+      const config = args[args.indexOf("--config") + 1]
+      observed.push({
+        kind: args.includes("--file") ? "apply" : "verify",
+        config,
+        configBytes: readFileSync(config, "utf8"),
+        mode: statSync(config).mode & 0o777,
+      })
+      if (args.includes("--file") && options.failWrangler) return { status: 1 }
+      if (!args.includes("--file") && options.failVerify) return { status: 1 }
+      return { status: 0, stdout: JSON.stringify([{ results: [{ c: 1 }] }]) }
+    },
+    mkdtempSync, writeFileSync, rmSync, resolve, tmpdir, randomBytes, readFileSync,
+    requireAuthorizedExecution: () => {},
+    WRANGLER_BIN: "/nonexistent/wrangler", REPO_ROOT, BOOTSTRAP_BINDING,
+  })
+
+  // Run main()'s ACTUAL finally body, extracted from source — never a
+  // reimplementation of it here, which could not detect main() regressing.
+  const mainStart = src.indexOf("function main()")
+  const finallyIdx = src.indexOf("} finally {", mainStart)
+  const cleanupBody = src.slice(finallyIdx + "} finally {".length, src.indexOf("\n  }", finallyIdx))
+  const runMainCleanup = new Function("rmSync", "executionConfig", "removeBootstrapSql", "exitCode", cleanupBody)
+
+  let threw: Error | null = null
+  let exitCode = 0
+  try {
+    executionConfig = harness.writeExecutionConfig(snapshot, REPO_ROOT)
+    harness.applyBootstrapFile(executionConfig, canonicalSql)
+    harness.remoteCount(executionConfig, "SELECT COUNT(*) AS c FROM tenants WHERE id = 'x';")
+  } catch (err) {
+    threw = err as Error
+    exitCode = 1
+  } finally {
+    runMainCleanup(rmSync, executionConfig, () => {}, exitCode)
+  }
+  return { observed, executionConfig, threw }
+}
+
+const snapshotOf = (configPath: string) => JSON.parse(readFileSync(configPath, "utf8"))
+
+test("Wrangler receives a PRIVATE temporary config — never the original operator config path", () => {
+  withSyntheticConfig((configPath) => {
+    const { observed, executionConfig } = driveExecution(snapshotOf(configPath), canonicalArtifact())
+    assert.equal(observed.length, 2, "apply + verification")
+    for (const call of observed) {
+      assert.notEqual(call.config, configPath, "Wrangler must NEVER receive the original mutable config path")
+      assert.match(call.config, /wrangler\.deploy\.bootstrap-exec-[0-9a-f]{24}\.json$/, "…it must receive the collision-resistant private execution config")
+      assert.equal(call.mode, 0o600, "the execution config must be private")
+      // It carries EXACTLY the validated binding ids and names.
+      const cfg = JSON.parse(call.configBytes)
+      const byBinding = Object.fromEntries(cfg.d1_databases.map((d: { binding: string }) => [d.binding, d]))
+      assert.equal(byBinding.CONTROL_DB.database_id, SYNTHETIC_D1_IDS.CONTROL_DB)
+      assert.equal(byBinding.TENANT_DB_DEFAULT.database_id, SYNTHETIC_D1_IDS.TENANT_DB_DEFAULT)
+      assert.equal(byBinding.TENANT_DB_DEFAULT.database_name, tenantBindingName())
+    }
+    // Apply and verification use ONE AND THE SAME snapshot — the database written
+    // and the database verified can never diverge.
+    assert.equal(observed[0].config, observed[1].config, "apply and verification must use the same execution config")
+    assert.equal(observed[0].configBytes, observed[1].configBytes)
+    // …and it is removed afterwards.
+    assert.equal(existsSync(executionConfig!), false)
+  })
+})
+
+test("mutating, deleting, or replacing the original config after validation cannot redirect execution", () => {
+  withSyntheticConfig((configPath) => {
+    const snapshot = snapshotOf(configPath) // validated snapshot, retained
+
+    // 1. Mutate the original to point at a DIFFERENT database.
+    const hijacked = snapshotOf(configPath)
+    for (const db of hijacked.d1_databases) db.database_id = "dddddddd-0000-4000-8000-00000000dead"
+    writeFileSync(configPath, JSON.stringify(hijacked, null, 2), { mode: 0o600 })
+    let run = driveExecution(snapshot, canonicalArtifact())
+    for (const call of run.observed) {
+      assert.doesNotMatch(call.configBytes, /dead/, "a post-validation mutation must not reach Wrangler")
+      assert.match(call.configBytes, new RegExp(SYNTHETIC_D1_IDS.CONTROL_DB))
+    }
+
+    // 2. Replace it with another otherwise-valid config.
+    writeFileSync(configPath, JSON.stringify({ ...hijacked, name: "someone-elses-worker" }, null, 2), { mode: 0o600 })
+    run = driveExecution(snapshot, canonicalArtifact())
+    for (const call of run.observed) assert.doesNotMatch(call.configBytes, /someone-elses-worker/, "a replaced config must not redirect execution")
+
+    // 3. Delete it entirely — execution still works from the snapshot.
+    rmSync(configPath, { force: true })
+    run = driveExecution(snapshot, canonicalArtifact())
+    assert.equal(run.threw, null, "deleting the original config after evaluation must not break execution")
+    assert.equal(run.observed.length, 2)
+  })
+})
+
+test("the private execution config is removed after success, Wrangler failure, and verification failure", () => {
+  withSyntheticConfig((configPath) => {
+    const snapshot = snapshotOf(configPath)
+    for (const [label, options] of [
+      ["success", {}],
+      ["Wrangler failure", { failWrangler: true }],
+      ["verification failure", { failVerify: true }],
+    ] as const) {
+      const { executionConfig, threw } = driveExecution(snapshot, canonicalArtifact(), options)
+      assert.ok(executionConfig, `${label}: an execution config must have been written`)
+      assert.equal(existsSync(executionConfig!), false, `${label}: the private execution config must be removed`)
+      if (label !== "success") assert.ok(threw, `${label}: must surface the failure`)
+    }
+    // No execution config is ever left behind at the repository root.
+    assert.deepEqual(
+      readdirSync(REPO_ROOT).filter((f) => f.startsWith("wrangler.deploy.bootstrap-exec-")), [],
+      "no private execution config may survive",
+    )
+  })
+})
+
+test("the execution config is created EXCLUSIVELY — an existing file is never overwritten or followed", () => {
+  const src = readFileSync(APPLY_SRC, "utf8")
+  assert.match(src, /flag: "wx"/, "exclusive creation prevents overwriting or following a pre-placed file")
+  assert.match(src, /randomBytes\(12\)\.toString\("hex"\)/, "the name must be collision-resistant")
+  // The content is the validated snapshot, never rebuilt from ambient env vars.
+  assert.match(src, /JSON\.stringify\(snapshot, null, 2\), \{ mode: 0o600, flag: "wx" \}/)
+})
+
+test("no database ID or config content reaches logs", () => {
+  const src = readFileSync(APPLY_SRC, "utf8")
+  for (const m of src.matchAll(/console\.(log|error|warn|info)\(([^\n]*)\)/g)) {
+    for (const forbidden of [/\bvalues\b/, /configSnapshot/, /snapshot/, /database_id/, /executionConfig/, /canonicalSql/]) {
+      assert.doesNotMatch(m[2], forbidden, `console call must not print config/authority content: ${m[0]}`)
+    }
+  }
+})
+
 // ─── 8. only CONTROL_DB ──────────────────────────────────────────
 
 test("8. the command can target ONLY CONTROL_DB", () => {
@@ -603,7 +773,7 @@ test("10. the generated SQL is removed on EVERY exit path (finally-equivalent)",
   // …and so is the repository-root preparation artifact.
   assert.ok(bodies.some((b) => /^\s*removeBootstrapSql\(\)\s*$/m.test(b)), "the repository-root artifact must be removed unconditionally")
   // Cleanup runs only after the apply has been attempted — never before.
-  const applyIdx = src.indexOf("applyBootstrapFile(configPath, gates.canonicalSql)")
+  const applyIdx = src.indexOf("applyBootstrapFile(executionConfig, gates.canonicalSql)")
   assert.ok(applyIdx > 0, "apply must execute the retained canonical bytes")
   assert.ok(applyIdx < src.lastIndexOf("removeBootstrapSql()"), "the artifact must only be removed after the apply has been attempted")
 })
@@ -614,7 +784,7 @@ test("a post-verification failure is reported HONESTLY as an operator-action sta
   // verification runs. Calling that a rollback would send an operator looking for
   // state that is really there.
   assert.equal(VERIFICATION_FAILED_AFTER_COMMIT, "bootstrap_verification_failed_after_commit")
-  const applyIdx = src.indexOf("applyBootstrapFile(configPath, gates.canonicalSql)")
+  const applyIdx = src.indexOf("applyBootstrapFile(executionConfig, gates.canonicalSql)")
   const verifyIdx = src.indexOf("verifyBootstrapVia(")
   assert.ok(applyIdx > 0 && verifyIdx > applyIdx, "verification runs AFTER the batch commits — that is why this state exists")
 

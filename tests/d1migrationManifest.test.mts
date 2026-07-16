@@ -21,12 +21,16 @@ import {
   manifestDigest,
   resolveMigrationPath,
   computeRegistryPlanDigest,
+  canonicalEffectRepresentation,
   listCommittedMigrationFiles,
   tenantRegistrySchemaVersion,
   KNOWN_BINDINGS,
 } from "../scripts/lib/d1MigrationManifest.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+/** Loose shape of the committed manifest, for mutation helpers. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Manifest = any
 /** The committed manifest, failing loudly (never `undefined`) if unreadable. */
 function loadedManifest() {
   const result = loadManifest(REPO_ROOT)
@@ -145,6 +149,63 @@ test("the manifest declares ONE canonical tenant registry schema version, pinned
   assert.equal(tenantRegistrySchemaVersion(m), "2", "the canonical version must be declared")
   assert.equal(m.registry.TENANT_DB_DEFAULT.planDigest, computeRegistryPlanDigest(m, "TENANT_DB_DEFAULT"))
   assert.deepEqual(failuresOf(m), [])
+})
+
+test("the canonical plan digest covers effect semantics — the probe is part of the operational plan", () => {
+  // The effect probe is not documentation: the ledger consults it to decide whether
+  // a `once` migration is pending, satisfied, schema_without_history, or
+  // history_without_schema. A probe pointed at a column that always exists would
+  // make 0006 look permanently satisfied and silently skip it — so a changed probe
+  // MUST change the digest, and therefore fail registry-plan validation until it is
+  // reviewed and repinned.
+  for (const [label, mutate] of [
+    ["effect type", (m: Manifest) => { m.lanes.TENANT_DB_DEFAULT[3].effect.type = "column_exists_but_different" }],
+    ["effect table", (m: Manifest) => { m.lanes.TENANT_DB_DEFAULT[3].effect.table = "users" }],
+    ["effect column", (m: Manifest) => { m.lanes.TENANT_DB_DEFAULT[3].effect.column = "id" }],
+    ["migration kind", (m: Manifest) => { m.lanes.TENANT_DB_DEFAULT[3].kind = "index" }],
+    ["apply mode", (m: Manifest) => { m.lanes.TENANT_DB_DEFAULT[0].apply = "once" }],
+    ["sequence", (m: Manifest) => { m.lanes.TENANT_DB_DEFAULT[3].sequence = 9 }],
+    ["SQL digest", (m: Manifest) => { m.lanes.TENANT_DB_DEFAULT[3].sha256 = "f".repeat(64) }],
+    ["lane membership", (m: Manifest) => { m.lanes.TENANT_DB_DEFAULT.pop() }],
+  ] as const) {
+    const m = base()
+    mutate(m)
+    assert.notEqual(computeRegistryPlanDigest(m, "TENANT_DB_DEFAULT"), computeRegistryPlanDigest(base(), "TENANT_DB_DEFAULT"), `${label} must change the plan digest`)
+    assert.ok(failuresOf(m).includes("registry_plan_digest_mismatch:TENANT_DB_DEFAULT"), `${label} must fail registry-plan validation`)
+  }
+})
+
+test("the canonical effect representation is a normalized allowlisted shape, not raw JSON.stringify", () => {
+  // A bare JSON.stringify would depend on key insertion order (so a semantically
+  // identical probe could produce a different digest) and would silently absorb
+  // unknown fields (so an added field would not be covered).
+  const a = canonicalEffectRepresentation({ type: "column_exists", table: "action_previews", column: "created_by_user_id" })
+  const b = canonicalEffectRepresentation({ column: "created_by_user_id", table: "action_previews", type: "column_exists" })
+  assert.equal(a, b, "key order must not change the representation")
+  assert.equal(a, "column_exists|action_previews|created_by_user_id")
+  // An unknown/invalid probe is not silently serialized into something plausible.
+  assert.equal(canonicalEffectRepresentation(undefined), "-")
+  assert.equal(canonicalEffectRepresentation({ type: "unknown", table: "t", column: "c" }), "-")
+  // Absence and presence are distinguishable in the digest.
+  assert.notEqual(canonicalEffectRepresentation(undefined), a)
+})
+
+test("the plan digest changed only because its INPUT widened — the physical tenant schema is unchanged", () => {
+  // Documented decision: `tenant_databases.schema_version` describes the schema a
+  // database HAS, not the digest algorithm. Widening the digest to cover kind and
+  // the effect probe changes the digest but not the schema, so bumping the version
+  // would falsely imply existing bootstrapped databases are outdated.
+  const m = base()
+  assert.equal(tenantRegistrySchemaVersion(m), "2", "the schema version stays 2")
+  // The lane and every pinned per-migration SQL digest are byte-identical to the
+  // ones version 2 was pinned against — that is what makes the decision safe.
+  assert.deepEqual(buildPlan(m, "TENANT_DB_DEFAULT").map((s: { name: string; sha256: string }) => [s.name, s.sha256]), [
+    ["0002_tenant_core.sql", "226f522c3e3b35c1bd6e5aa611a7bee0801de0f483a228b1687b47ccf6a4728b"],
+    ["0003_tenant_persistence_foundation.sql", "19df5f787fa6a37f283b45cc369fcc59e878bab7fa58886691f2f298e2840d53"],
+    ["0005_tenant_scoped_indexes.sql", "5e4b48a9df9166e18371cc1942151e3424c8add72c638e1529facdc484d7be8b"],
+    ["0006_action_preview_creator.sql", "334c2b08abd361454d00d09d29dcbd12a379701a3da9a0451a985859614e13b9"],
+  ])
+  assert.ok(m.registry.TENANT_DB_DEFAULT.schemaVersionDecision, "the decision must be documented in the manifest")
 })
 
 test("changing the active migration plan without updating the canonical schema version FAILS", () => {
