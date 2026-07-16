@@ -444,11 +444,19 @@ bootstrap proves reproducibility against real SQLite (`node:sqlite`) only.
 evidence (`npm run cf:d1:evidence`) is reviewed.
 
 When that authorized run happens, it is recorded as a **D1 operational evidence
-pack** (P0-OPS-016): a versioned, allowlisted, privacy-safe record binding the
-commit, the manifest/plan/schema-contract digests, and the deploy-config
-**authority digest** to the ordered operation sequence — verified fully offline via
-`npm run cf:d1:evidence:verify` (ideally from a second clean checkout). The
-recorder is observational only and never satisfies an operator gate; each of the
-ten workflow steps remains a separate human-approved action. See
-[D1_OPERATIONAL_EVIDENCE.md](D1_OPERATIONAL_EVIDENCE.md). The evidence framework
-itself proves nothing about staging or production readiness.
+pack** (P0-OPS-016) whose every operation is a **command-bound, session-signed
+receipt** emitted from the real command's result path — **pack-level hashing alone
+is not execution provenance**. An offline session initializer
+(`cf:d1:evidence:init`, read-only `git` only) derives the commit, clean tree, and
+contract digests and mints a 0600 Ed25519 session key; each receipt is signed and
+bound to one session + commit + deploy-config **authority digest**, with proof
+facts recomputed from the repository. The offline verifier recomputes every receipt
+digest, checks every signature, and enforces the chain, one-authority, per-operation
+category allowlists, and cross-operation timestamp monotonicity (ideally run from a
+second clean checkout with `--session`). The evidence layer satisfies no operator
+gate and reads no environment; each workflow step remains a separate human-approved
+action. Session signatures prove one local evidence-session origin only — **not** a
+Cloudflare attestation, and no defence against a malicious machine owner. See
+[D1_OPERATIONAL_EVIDENCE.md](D1_OPERATIONAL_EVIDENCE.md). The framework itself proves
+nothing about staging or production readiness; #155 additionally needs a
+Cloudflare-side cross-check and human review.

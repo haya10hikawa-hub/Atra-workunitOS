@@ -17,156 +17,213 @@ validated config authority
 > **Status honesty.** This document describes an evidence *framework*. It is
 > **implemented** and **tested offline**. Nothing has been **executed remotely**
 > under it, and nothing has been **reviewed as operational evidence**. This patch
-> does not prove staging or production readiness, and **Issue #155 remains open**.
+> does not prove staging or production readiness, and **Issue #155 remains open**
+> until an explicitly authorized run, second-checkout verification, a
+> Cloudflare-side evidence cross-check, and human review.
 
 | Layer | Status |
 | --- | --- |
 | Evidence contract (`contracts/operations/d1-operational-evidence.v1.json`) | implemented |
-| Evidence recorder (`scripts/lib/d1OperationalEvidence.mjs`) | implemented |
-| Safe adapters (`scripts/lib/d1EvidenceAdapters.mjs`) | implemented |
+| Session initializer (`npm run cf:d1:evidence:init`) | implemented |
+| Command-bound receipt emitters (`scripts/lib/d1EvidenceReceipts.mjs`) | implemented |
+| Core recorder + scanner (`scripts/lib/d1OperationalEvidence.mjs`) | implemented |
 | Offline verifier (`npm run cf:d1:evidence:verify`) | implemented |
 | Offline tests + mutation coverage | tested offline |
 | Authorized remote run recorded as evidence | **not executed** |
 | Human review of remote evidence | **not performed** |
 
-## 1. What evidence establishes
+## 1. Execution provenance — the core invariant
 
-A valid, complete pack establishes:
-
-- **which repository commit was tested** (`repository.commit_sha`, and
-  `repository.dirty_tree` is the literal `false` — evidence from a dirty tree cannot
-  be created);
-- **which migration manifest and schema contract were used**
-  (`contracts.migration_manifest_sha256`, `contracts.migration_plan_digest`,
-  `contracts.schema_contract_sha256`, `contracts.expected_schema_version`);
-- **which exact deploy-config authority was used** (`authority.sha256` — the SHA-256
-  of the retained authority bytes from the shared deploy-config authority loader;
-  the digest carries no database ID, name, or config content);
-- **that Control and Tenant bindings were physically distinct**
-  (`authority.control_tenant_physically_distinct` is the literal `true`, attested by
-  the shared validator having passed — no ID is recorded);
-- **that all remote operations used the same retained authority** (every operation's
-  `authority_sha256` must equal `authority.sha256`);
-- **that operations occurred in the required order** (contiguous sequences, canonical
-  relative order, and hard prerequisites: schema verification requires migration
-  apply, bootstrap COUNT verification requires bootstrap apply, deployment requires
-  schema verification; no success may follow a failure);
-- **that nothing sensitive was recorded** (see §2).
-
-## 2. Prohibited content
-
-The contract, recorder, and verifier all reject — **before serialization**, never by
-after-the-fact redaction — any field or value containing:
-
-D1 database UUIDs · database names (as sensitive keys) · OAuth/API tokens ·
-authorization headers · cookies · user email addresses · provider subjects ·
-tenant/user/membership/identity keys · raw environment-variable values · raw deploy
-config · raw SQL (including bootstrap values) · application-row contents ·
-filesystem paths · command stdout/stderr (any multi-line/control-character value).
-
-Evidence stores **safe categories** (`[a-z][a-z0-9_]{0,47}`) and **digests**
-(lowercase 64-hex SHA-256), not raw command output. A recursive sensitive-key and
-sensitive-value scanner enforces this at record time, at finalization, at write
-time, and again at verification.
-
-## 3. The record (`evidence_version: "1"`)
-
-Exact allowlists at every level — unknown top-level **and nested** fields are
-rejected. All timestamps are strict UTC ISO-8601 with milliseconds. Every digest is
-lowercase 64-hex SHA-256. `operations[].sequence` starts at 1 and is contiguous.
-`chain.previous_record_sha256` (nullable) links retry packs;
-`chain.evidence_sha256` is the SHA-256 of the record's **canonical serialization**
-(recursively key-sorted JSON) with the digest field itself excluded — the verifier
-always **recomputes** it and never trusts the stored value.
-
-## 4. Recorder (observational only)
+**Pack-level hashing alone is not execution provenance.** An internally consistent
+pack proves only that someone hashed it consistently. The repaired invariant is:
 
 ```text
-createEvidenceSession(...)   → validates every input; refuses a dirty tree or a
-                               non-distinct Control/Tenant attestation outright
-recordEvidenceOperation(...) → append-only; one authority digest; no duplicates;
-                               hard prerequisites; canonical order for successes;
-                               a failure blocks all later successes; scans content
-finalizeEvidenceSession(...) → contract + scan + ordering validation, canonical
-                               digest, recursive freeze; the session is sealed
-writeEvidencePack(...)       → re-validates everything, requires the git-ignored
-                               `.d1-evidence/`, writes 0600, exclusively (`wx`),
-                               collision-resistant secret-free name
+A successful operational receipt can only be emitted from the
+actual repository command path after that command reached its
+existing execution result boundary.
 ```
 
-The recorder **authorizes nothing**: it never spawns Wrangler, never runs SQL,
-never touches the network, and never reads or sets an operator gate
-(`CF_DEPLOY_EXECUTE`, the migration execute flag + confirmation phrase, the
-bootstrap execute flag + confirmation phrase all remain independent and
-operator-supplied). There is deliberately **no wrapper** that runs the commands and
-sets those gates for you.
+Every operation entry in a pack is a **command-bound receipt**, emitted by the real
+operator command from inside its result path:
 
-The adapters (`d1EvidenceAdapters.mjs`) map each existing command's already-safe
-result into exactly `{ operation, status, authorityDigest, resultDigest,
-safeCategories }` — never a config path, SQL path, database ID/name, raw output, or
-operator input. Raw category inputs are scanned **before** normalization so a
-sensitive value cannot be laundered into a safe-looking category. `resultDigest` is
-the SHA-256 of the canonical safe result itself.
+| Producer | Command | Operation |
+| --- | --- | --- |
+| `cf_d1_migration_plan` | `cf:d1:migrations:check` | `migration_plan_verified` |
+| `cf_d1_migration_apply` | `cf:d1:migrations:apply` | `migration_apply_completed` |
+| `cf_d1_schema_verify_remote` | `cf:d1:schema:verify:remote` | `remote_schema_verified` |
+| `cf_d1_bootstrap_apply` | `cf:d1:bootstrap:apply` | `bootstrap_apply_completed` |
+| `cf_d1_bootstrap_counts` | `cf:d1:bootstrap:apply` (COUNT check) | `bootstrap_counts_verified` |
+| `cf_worker_preflight` | `cf:deploy:preflight` | `worker_preflight_completed` |
+| `cf_worker_deploy` | `cf:deploy` | `worker_deploy_completed` |
 
-## 5. Offline verifier
+The emitters take each command's **real result objects** — there is **no status,
+exit-code, or timestamp parameter** anywhere on the surface. Status is derived from
+the result; many proof facts are **recomputed from the repository itself** (the
+committed migration plan, the built Worker artifact bytes, the manifest and schema
+contract digests); the schema-verification receipt requires the verifier result's
+own `authorityDigest` to equal the session authority; a successful migration-apply
+receipt requires the applied plan to equal the committed plan byte-for-byte. The
+generic caller-trusted adapter layer (`buildOperationEvidence(op, { exitCode… })`)
+that made packs forgeable is **deleted**; the low-level recorder survives only as an
+assembler that itself refuses unsigned or foreign-key receipts.
+
+## 2. Trust model — state it honestly
+
+Receipts are signed with a **session-scoped Ed25519 key**:
+
+- generated by `cf:d1:evidence:init`; private key written 0600, exclusively, into
+  the git-ignored session directory; never printed, never in any record;
+- the public key travels in the session manifest and the final pack;
+- every receipt digest is signed; the verifier checks every signature;
+- `--session <dir>` additionally anchors a pack to the initialized session's
+  manifest (same session id, public key, and derived commit).
+
+```text
+This proves that receipts came through one initialized repository
+evidence session. It is not a third-party Cloudflare attestation
+and does not protect against a malicious machine owner.
+```
+
+A machine owner who deliberately modifies repository source or reads the session
+key remains **outside the trust model**. What the design prevents is an ordinary
+caller manufacturing a valid success pack from arbitrary exit codes and strings.
+Two additional offline anchors narrow even wholesale re-implementation: every
+receipt's `producer_source_sha256` must match the **actual command source files in
+the local checkout**, and the optional session anchor must match the real session
+manifest. Cloudflare-side cross-checks and human review (see §8) close the rest.
+
+## 3. Evidence sessions (`npm run cf:d1:evidence:init`)
+
+Entirely offline — no network, D1, Wrangler, migration, bootstrap, or deploy
+action; the only process it spawns is **read-only `git`** (`rev-parse`, `status`).
+It **derives** — and never accepts as claims —
+
+- the exact HEAD commit and worktree cleanliness (a dirty tree fails closed);
+- the Node version and the installed Wrangler version;
+- the migration-manifest, migration-plan, and schema-contract digests.
+
+It fails closed when the tree is dirty, HEAD is unresolvable, required files are
+missing, or contract digests cannot be derived. It creates
+`.d1-evidence/<session-id>/` (0700) holding `session.json` and the private key
+(both 0600, exclusive). Operators then export
+`CF_D1_EVIDENCE_SESSION_DIR=<session dir>` and run the normal gated commands —
+each emits its own receipt; **no command gate is set, satisfied, or weakened by
+the evidence layer** (it never reads `process.env` and never names a gate).
+
+The Control/Tenant **physical-separation fact is derived** during the first
+authority-bearing command by parsing the retained authority bytes (recomputing the
+digest, checking exactly one CONTROL_DB and one TENANT_DB_DEFAULT with distinct
+valid ids and names). It is never supplied as a bare boolean, and no database ID
+or name is ever recorded. The session then binds to that ONE authority digest —
+first-writer-wins, immutable, enforced on every later receipt.
+
+## 4. Receipts
+
+Each receipt carries: `sequence` (append-only, contiguous), `operation`, `status`,
+boundary timestamps, `authority_sha256`, `session_id`, `repository_commit_sha`,
+`producer`, `producer_source_sha256`, `input_digest`, `result_digest`, an
+operation-specific `proof` object, sorted + deduplicated `safe_categories`,
+`previous_receipt_sha256` (chain), `receipt_sha256` (canonical digest), and
+`receipt_signature` (Ed25519, 128-hex).
+
+- **Timestamps come from the execution boundary**: `started_at` is captured
+  immediately before the operation begins (after the command's gates), and
+  `completed_at` immediately after its result is known. A receipt can never start
+  before its session was initialized or before its predecessor completed.
+- **Result digests are command-specific**: they cover operation, status, authority
+  digest, session id, repository commit, producer identity, producer-source digest,
+  and the operation's proof facts (e.g. manifest + plan digests; ordered
+  applied-steps digest + ledger reconciliation category; schema-contract +
+  category-only summary digests; canonical bootstrap-artifact digest; allowlisted
+  boolean COUNT assertions — never raw row values; Worker artifact digest). The
+  verifier recomputes every one from fields contained in the receipt.
+- **A failed receipt blocks every later success**, duplicates are refused, hard
+  prerequisites hold (verify ⇐ apply, counts ⇐ bootstrap, deploy ⇐ verify), and
+  successful operations advance in canonical order only.
+
+## 5. Safe categories — exact per-operation allowlists
+
+Arbitrary strings are **not** categories. The contract defines
+`safe_categories_by_operation`; unknown categories are rejected; nothing is
+normalized into a category (the pre-repair normalization turned the database name
+`atra-control-prod` into an accepted `atra_control_prod` — that path is gone).
+Commands map internal outcomes to repository-defined categories only; raw command
+messages are never accepted; lists are deduplicated and canonically sorted before
+digesting. The recursive sensitive-key/value scanner (UUIDs, hex blobs, emails,
+tokens, subjects, SQL, paths, raw output, structured blobs) remains as **defence in
+depth underneath** the allowlists, not as the primary authorization mechanism.
+
+## 6. Offline verifier (`npm run cf:d1:evidence:verify`)
 
 ```bash
-npm run cf:d1:evidence:verify -- --file .d1-evidence/<pack>.json
+npm run cf:d1:evidence:verify -- --file .d1-evidence/<pack>.json [--session .d1-evidence/<session-id>]
 ```
 
-Reads ONE pack from an explicitly supplied path (never scans a default location);
-rejects symlinks and non-plain files; enforces a bounded size **before** reading;
-strictly parses against the contract; re-runs the sensitive scanner; recomputes the
-canonical digest; verifies ordering, one authority digest, and completeness.
-Category-only output (`evidence_valid`, `evidence_unparseable`,
-`evidence_contract_invalid`, `evidence_sensitive_content`,
-`evidence_digest_mismatch`, `evidence_authority_mismatch`,
-`evidence_operation_order_invalid`, `evidence_incomplete`,
-`evidence_failed_operation`, plus `evidence_unreadable` / `evidence_too_large`).
-It performs **no network or database access** and should be run from a **second
-clean checkout** when reviewing.
+In addition to the pack-level checks (strict contract, scanner, recomputed
+canonical digest, ordering, one authority, completeness, symlink/size protections),
+the verifier now, per receipt: verifies the session public key and **every
+signature**; **recomputes every receipt digest** plus the input and result digests;
+verifies the chain, session id, repository commit, authority digest, producer
+identity, and producer-source digest **against the local checkout's actual command
+sources**; enforces the per-operation category allowlists; and enforces
+**cross-operation timestamp monotonicity**
+(`operation[i].started_at >= operation[i-1].completed_at`). A complete but unsigned
+fabricated pack fails. Category-only output, with receipt-layer categories:
+`evidence_receipt_unsigned`, `evidence_receipt_signature_invalid`,
+`evidence_receipt_digest_mismatch`, `evidence_receipt_chain_invalid`,
+`evidence_session_mismatch`, `evidence_repository_mismatch`,
+`evidence_producer_mismatch`, `evidence_producer_source_mismatch`,
+`evidence_category_not_allowlisted`, `evidence_temporal_order_invalid`. It performs
+**no network or database access** and reads no environment.
 
-## 6. Operator-run evidence workflow (future; NOT executed by this patch)
+## 7. Operator-run evidence workflow (future; NOT executed by this patch)
 
-Each numbered step below is a **separate human-approved action** against dedicated
-remote **staging** databases. The operator supplies every gate and confirmation
-directly; the recorder only observes safe results. Nothing sets another step's
-environment variables.
+Each numbered step is a **separate human-approved action** against dedicated remote
+**staging** databases. The operator supplies every gate and confirmation directly;
+the evidence layer only observes results. Nothing sets another step's environment.
 
 ```text
-1.  prepare and inspect the generated deploy config      (cf:deploy:prepare + review)
-2.  verify the offline migration plan                    (cf:d1:migrations:check / :plan)
-3.  apply remote migrations                              (cf:d1:migrations:apply — its own
-                                                          execute flag + confirmation phrase)
-4.  verify remote schemas                                (cf:d1:schema:verify:remote)
-5.  prepare and inspect the bootstrap artifact           (cf:d1:bootstrap:prepare + review)
-6.  apply the bootstrap                                  (cf:d1:bootstrap:apply — its own
-                                                          execute flag + confirmation phrase)
-7.  verify bootstrap counts                              (read-only COUNT verification)
-8.  run Worker preflight                                 (cf:deploy:preflight)
-9.  deploy the Worker                                    (cf:deploy — CF_DEPLOY_EXECUTE=1)
-10. finalize and verify the evidence pack                (recorder finalize + write, then
-                                                          cf:d1:evidence:verify from a
-                                                          second clean checkout)
+0.  npm run cf:d1:evidence:init -- --environment staging     (clean tree required)
+    export CF_D1_EVIDENCE_SESSION_DIR=.d1-evidence/<session-id>
+1.  prepare and inspect the generated deploy config           (cf:deploy:prepare + review)
+2.  verify the offline migration plan                         (cf:d1:migrations:check --config …)
+3.  apply remote migrations                                   (cf:d1:migrations:apply — its own
+                                                               execute flag + confirmation phrase)
+4.  verify remote schemas                                     (cf:d1:schema:verify:remote)
+5.  prepare and inspect the bootstrap artifact                (cf:d1:bootstrap:prepare + review)
+6.  apply the bootstrap                                       (cf:d1:bootstrap:apply — its own
+                                                               execute flag + confirmation phrase)
+7.  verify bootstrap counts                                   (emitted by the same command)
+8.  run Worker preflight                                      (cf:deploy:preflight --config … --check-artifacts)
+9.  deploy the Worker                                         (cf:deploy — CF_DEPLOY_EXECUTE=1)
+10. assemble and verify the evidence pack                     (cf:d1:evidence:init --assemble <session dir>,
+                                                               then cf:d1:evidence:verify from a
+                                                               SECOND clean checkout, with --session)
 ```
 
-## 7. Evidence acceptance policy — conditions before Issue #155 may close
+## 8. Evidence acceptance policy — conditions before Issue #155 may close
 
-1. Evidence was produced from a **clean tree** at a commit **reachable from `main`**.
+1. Evidence was produced from a **clean tree** at a commit **reachable from `main`**
+   (the initializer derives both; a dirty tree cannot open a session).
 2. The environment is identified only as `staging` or `production` — nothing more.
-3. Control/Tenant **physical separation** is confirmed **without recording IDs**.
-4. **Every required operation succeeded** (all seven, in order).
-5. **Every operation uses the same authority digest.**
+3. Control/Tenant **physical separation** was derived from the validated authority
+   **without recording IDs or names**.
+4. **Every required operation succeeded**, as command-issued, session-signed
+   receipts in order, with consistent timestamps.
+5. **Every receipt uses the same session, commit, and authority digest.**
 6. The **migration manifest and schema-contract digests match** the repository
    commit the evidence names.
-7. The **evidence verifier succeeds from a second clean checkout**.
-8. **No sensitive content** is present (the scanner and a human check agree).
-9. The evidence is **reviewed by a human** — automation alone accepts nothing.
-10. **Staging evidence proves reproducibility only.** It must never be described as
-    production proof.
-11. FakeD1, local SQLite, dry-run, mocks, and CI alone remain **insufficient**.
+7. The **evidence verifier succeeds from a second clean checkout**, with the
+   session anchor (`--session`).
+8. **Cloudflare-side evidence is cross-checked** (deployment visible in the
+   dashboard/API for the same window) — receipts alone are one-sided.
+9. **No sensitive content** is present (the scanner and a human check agree).
+10. The evidence is **reviewed by a human** — automation alone accepts nothing.
+11. **Staging evidence proves reproducibility only.** It must never be described
+    as production proof. FakeD1, local SQLite, dry-run, mocks, and CI alone remain
+    insufficient.
 
-## 8. Relationship to `cf:d1:evidence`
+## 9. Relationship to `cf:d1:evidence`
 
 `npm run cf:d1:evidence` (P0-PERSIST-015) produces a *build/test* evidence artifact
 from local validation. THIS document's packs are *operational* evidence of a real

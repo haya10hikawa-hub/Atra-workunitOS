@@ -219,15 +219,21 @@ Worker rollback. FakeD1 and `cf:deploy:dry-run` are **not** production-readiness
 proof — Issue #155 remains open until authorized remote evidence is reviewed.
 
 **D1 operational evidence packs (P0-OPS-016)** define how that future authorized
-run will be recorded: a versioned, allowlisted contract
-(`contracts/operations/d1-operational-evidence.v1.json`) of safe categories and
-digests only — never a database ID or name, token, email, provider subject, raw
-config, raw SQL, path, or raw output. An observational recorder assembles packs
-into the git-ignored `.d1-evidence/` (0600, exclusive, frozen, canonical-digest
-chained), and `npm run cf:d1:evidence:verify -- --file <pack>` verifies one fully
-offline: contract shape, sensitive scan, recomputed digest, operation ordering,
-one authority digest across every operation, completeness. The recorder authorizes
-nothing — every operator gate stays independent. See
+run will be recorded: every operation is a **command-bound receipt** emitted from
+inside the real operator command's result path — **pack-level hashing alone is not
+execution provenance**. `npm run cf:d1:evidence:init` (offline; read-only `git`
+only) derives the commit + clean tree + contract digests and mints a 0600 Ed25519
+session key; each command signs its own receipt, bound to one session + repository
+commit + deploy-config **authority digest**, chained, with proof facts recomputed
+from the repository. Safe categories are exact per-operation allowlists (no
+arbitrary string — e.g. a database name — becomes a category); a recursive scanner
+adds defence in depth. `npm run cf:d1:evidence:verify -- --file <pack> [--session <dir>]`
+verifies fully offline: recomputed pack + receipt digests, every signature, chain,
+one authority, per-operation categories, and cross-operation timestamp monotonicity
+— a complete but unsigned fabricated pack fails. The evidence layer satisfies no
+operator gate and reads no environment. Session signatures prove one local
+evidence-session origin only — **not** a Cloudflare attestation, no defence against a
+malicious machine owner. See
 [docs/operations/D1_OPERATIONAL_EVIDENCE.md](docs/operations/D1_OPERATIONAL_EVIDENCE.md);
 the framework itself is **not** remote proof.
 
