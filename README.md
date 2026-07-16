@@ -170,17 +170,23 @@ config + `CF_D1_BOOTSTRAP_EXECUTE=1` +
 `CF_D1_BOOTSTRAP_CONFIRM=APPLY_PRODUCTION_CONTROL_BOOTSTRAP`).
 
 **The deploy config is authority-bearing** — it selects the physical databases and
-the Worker deployment configuration. One shared library loads and validates it
-**once**, retains its exact bytes, and writes them to a single private (`0600`,
-exclusively created) execution config; every remote command —
+the Worker deployment configuration. Authority is the **retained exact bytes and their
+SHA-256**, not a filesystem path (a path is a mutable file that could be altered
+between calls). One shared library loads and validates it **once** and retains those
+bytes plus their digest. Every Wrangler invocation then gets its **own short-lived
+scoped config**, written from the exact bytes (exclusively created, read-only `0400`),
+verified to hash to the retained digest, and removed the instant its one call returns
+— `withPrivateExecutionConfig` never returns or reuses a path. Every remote command —
 `cf:d1:migrations:apply`, `cf:d1:schema:verify:remote`, `cf:d1:bootstrap:apply`, and
-`cf:deploy` — hands Wrangler **only** that file, never the original mutable path.
-Migration apply uses one snapshot across both lanes; schema verification uses one
-across both bindings; and the deploy orchestrator verifies and uploads against the
-**same** snapshot, so the config verified is the config deployed. Editing, replacing,
-or deleting the original after validation cannot redirect anything. Every private
-config is removed unconditionally, and the orchestrator removes the original
-generated config on every exit too.
+`cf:deploy` — derives every call from one retained authority; Wrangler never sees the
+original mutable path or a reusable private config. The deploy orchestrator verifies
+in-process and, **before uploading, asserts the verification digest equals its retained
+digest**: verification and upload may use different ephemeral paths but execute
+byte-for-byte identical bytes — byte identity, not a false same-path claim. Editing,
+replacing, or deleting the original after validation cannot redirect anything, nor can
+mutating a prior call's already-removed scoped file. Scoped configs self-remove; the
+orchestrator removes the original generated config the moment its bytes are retained
+and again on every exit.
 
 **`CONTROL_DB` and `TENANT_DB_DEFAULT` must be different physical D1 databases.** The
 shared deploy-config validator compares the two `database_id`s and refuses a
@@ -196,12 +202,13 @@ before Wrangler. Registry database metadata must match the deploy config's real
 once in the manifest, pinned to a digest of the tenant lane — which covers the
 once-migration effect probe) rather than an arbitrary digit string.
 
-**Wrangler receives private temporary files, never mutable preparation files**: both
-the canonical SQL and the validated deploy config are snapshotted, and the same
-private execution config serves the apply and every verification query, so the
-database written and the database verified cannot diverge. The five records apply as
-one atomic batch, are verified read-only with COUNT-only queries over every supplied
-field, and all generated files are removed on every exit path. Because verification
+**Wrangler receives private temporary files, never mutable preparation files**: the
+canonical SQL is snapshotted, and the apply and every post-bootstrap COUNT query each
+mint a fresh scoped config from the **same retained authority**, so the database
+written and the database verified cannot diverge — yet no reusable config path
+survives between the write and the verification. The five records apply as one atomic
+batch, are verified read-only with COUNT-only queries over every supplied field, and
+all generated files are removed on every exit path. Because verification
 runs after the batch commits, a verification failure is an operator-action state —
 not a rollback. Never apply the generated file with a raw `wrangler d1 execute` —
 that bypasses every gate.

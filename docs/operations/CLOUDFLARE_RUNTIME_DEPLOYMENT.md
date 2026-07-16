@@ -316,28 +316,36 @@ the contract that requires it. Full detail:
 
 ```text
 prepare generated config
-  → load + validate ONE config authority (retain its exact bytes)
-  → create ONE private execution config from it
-  → preflight            (that private config)
+  → load + validate ONE config authority (retain its exact bytes + sha256)
+  → stop trusting / remove the original generated config
+  → preflight            (a scoped config from the authority)
   → build Worker
-  → verify Worker artifacts   (that private config)
-  → verify remote D1 schemas  (READ-ONLY, same retained authority)
-  → deploy Worker             (that same private config)
-  → unconditional cleanup of BOTH the private and the original generated config
+  → verify Worker artifacts   (a scoped config from the authority)
+  → verify remote D1 schemas  (READ-ONLY, same authority; returns its digest)
+  → assert verification digest == retained authority digest
+  → deploy Worker             (a freshly created scoped config from the same bytes)
+  → unconditional cleanup (scoped configs self-remove; original removed on every exit)
 ```
 
 **The deploy config is authority-bearing** — it selects the physical databases and
 the Worker deployment configuration. Previously every step re-read
 `wrangler.deploy.json` independently, so the config verified remotely and the config
-deployed were two separate reads of a mutable file and could differ. The orchestrator
-now loads it **once** through the shared authority library
-(`scripts/lib/cfDeployConfigAuthority.mjs`), writes the exact retained bytes to a
-single private `0600`, exclusively-created `wrangler.deploy.deploy-exec-<random>.json`,
-and gives **every** step that one file. Remote verification runs **in-process against
-the same retained authority** rather than spawning a child that would snapshot the
-file a second time. Editing, replacing, or deleting the original after the snapshot
-cannot redirect verification or the upload, and deleting it does not break the
-pipeline. Wrangler never receives the original generated config.
+deployed were two separate reads of a mutable file and could differ. A later repair
+retained one private config but **reused its path** for every call — and a filesystem
+path is not itself immutable authority. The orchestrator now loads the config **once**
+through the shared authority library (`scripts/lib/cfDeployConfigAuthority.mjs`),
+retains its **exact bytes and their SHA-256**, and stops trusting the original file.
+Every step that needs a config mints its **own short-lived scoped config** from those
+exact bytes (exclusively created, read-only `0400`, removed the instant its one call
+returns — no long-lived execution config exists across the build). Remote verification
+runs **in-process against the same retained authority** and returns its digest;
+**before `wrangler deploy` the orchestrator asserts that digest equals its own
+retained digest.** Verification and the upload may use different ephemeral paths, but
+they execute **byte-for-byte identical** authority bytes — the guarantee is byte
+identity and a matching digest, **not** a false same-path claim. Editing, replacing,
+or deleting the original after the authority is retained cannot redirect verification
+or the upload, and deleting it does not break the pipeline. Wrangler never receives
+the original generated config, and no reusable private config is passed between calls.
 
 - **`CONTROL_DB` and `TENANT_DB_DEFAULT` must reference DIFFERENT physical D1
   databases.** The shared deploy-config validator compares the two `database_id`s and
