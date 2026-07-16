@@ -1,0 +1,46 @@
+{
+  "contract": "d1-operational-evidence",
+  "contract_version": "1",
+  "description": "Allowlisted shape for repository-controlled D1 operational evidence packs (P0-OPS-016, Issue #155). Evidence stores safe categories and digests only — never a database ID, database name, token, header, cookie, user email, provider subject, operator input, raw SQL value, application-row value, filesystem path, or raw command output. Unknown fields are rejected at every level.",
+  "environment_classes": ["staging", "production"],
+  "statuses": ["success", "failed"],
+  "operations": [
+    "migration_plan_verified",
+    "migration_apply_completed",
+    "remote_schema_verified",
+    "bootstrap_apply_completed",
+    "bootstrap_counts_verified",
+    "worker_preflight_completed",
+    "worker_deploy_completed"
+  ],
+  "required_successful_sequence": [
+    "migration_plan_verified",
+    "migration_apply_completed",
+    "remote_schema_verified",
+    "bootstrap_apply_completed",
+    "bootstrap_counts_verified",
+    "worker_preflight_completed",
+    "worker_deploy_completed"
+  ],
+  "hard_prerequisites": {
+    "remote_schema_verified": ["migration_apply_completed"],
+    "bootstrap_counts_verified": ["bootstrap_apply_completed"],
+    "worker_deploy_completed": ["remote_schema_verified"]
+  },
+  "fields": {
+    "top": ["evidence_version", "evidence_id", "environment_class", "created_at", "repository", "toolchain", "authority", "contracts", "operations", "chain"],
+    "repository": ["commit_sha", "dirty_tree"],
+    "toolchain": ["node_version", "wrangler_version"],
+    "authority": ["sha256", "control_tenant_physically_distinct"],
+    "contracts": ["migration_manifest_sha256", "migration_plan_digest", "schema_contract_sha256", "expected_schema_version"],
+    "operation": ["sequence", "operation", "status", "started_at", "completed_at", "authority_sha256", "result_digest", "safe_categories"],
+    "chain": ["previous_record_sha256", "evidence_sha256"]
+  },
+  "limits": {
+    "max_file_bytes": 262144,
+    "max_operations": 16,
+    "max_safe_categories_per_operation": 32,
+    "max_safe_category_length": 48,
+    "max_string_length": 256
+  }
+}
