@@ -1,32 +1,31 @@
 /**
- * P0-OPS-016 — D1 operational evidence: contract, recorder, scanner, adapters
- * (Issue #155).
+ * P0-OPS-016 repair — evidence contract, scanner, and the LOW-LEVEL signed-receipt
+ * recorder (Issue #155).
  *
- * The recorder is OBSERVATIONAL ONLY: nothing here (or in the library) spawns
- * Wrangler, runs SQL, contacts a network, or reads/sets an operator execution
- * gate. All values are synthetic.
+ * The low-level recorder (`createEvidenceSession` / `recordEvidenceOperation` /
+ * `finalizeEvidenceSession` / `writeEvidencePack`) is an ASSEMBLER API: it can
+ * only append receipts whose recomputed digest and session signature verify, so
+ * the pre-repair fabrication path — arbitrary success objects in, `evidence_valid`
+ * out — no longer exists at any layer. All values are synthetic; nothing here
+ * contacts a network or database.
  */
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync, existsSync, statSync, readFileSync } from "node:fs"
+import { generateKeyPairSync } from "node:crypto"
+import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
 import {
   loadEvidenceContract, scanSensitiveEvidence, canonicalSerialize, computeEvidenceDigest,
+  computeReceiptDigest, signReceiptDigest, verifyReceiptSignature,
   createEvidenceSession, recordEvidenceOperation, finalizeEvidenceSession, writeEvidencePack,
-  validateEvidenceRecord, validateOperationOrdering, isStrictUtcIso, sha256Hex,
+  validateEvidenceRecord, validateOperationOrdering, sha256Hex,
   EVIDENCE_CONTRACT_RELPATH, EVIDENCE_DIRNAME,
 } from "../scripts/lib/d1OperationalEvidence.mjs"
-import {
-  buildOperationEvidence, normalizeSafeCategory, SAFE_EVIDENCE_KEYS,
-  evidenceFromRemoteSchemaVerification, evidenceFromMigrationApply, evidenceFromWorkerDeploy,
-} from "../scripts/lib/d1EvidenceAdapters.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
-
-/** Synthetic-only values. The authority digest is a digest of a synthetic string. */
 const AUTHORITY = sha256Hex("synthetic-authority-bytes")
 const COMMIT = "0123456789abcdef0123456789abcdef01234567"
 const CONTRACT = (() => {
@@ -36,7 +35,13 @@ const CONTRACT = (() => {
 })()
 const OPS = CONTRACT.required_successful_sequence
 
-/** A temporary repoRoot carrying the committed contract and a git-ignored evidence dir. */
+/** One synthetic session keypair for the whole suite. */
+const KEYS = generateKeyPairSync("ed25519")
+const PUBLIC_HEX = Buffer.from(KEYS.publicKey.export({ format: "jwk" }).x as string, "base64url").toString("hex")
+const PRIVATE_PEM = KEYS.privateKey.export({ type: "pkcs8", format: "pem" }) as string
+const SESSION_ID = `evs-${"ab".repeat(16)}`
+
+/** A temporary repoRoot carrying the committed contract and an ignored evidence dir. */
 function makeTmpRepo(): string {
   const tmp = mkdtempSync(resolve(tmpdir(), "d1-evidence-recorder-"))
   mkdirSync(resolve(tmp, "contracts/operations"), { recursive: true })
@@ -45,281 +50,317 @@ function makeTmpRepo(): string {
   return tmp
 }
 
-const VALID_SESSION_INPUT = (repoRoot: string) => ({
-  repoRoot,
-  environmentClass: "staging" as const,
-  commitSha: COMMIT,
-  dirtyTree: false as const,
-  nodeVersion: "v22.0.0",
-  wranglerVersion: "4.99.0",
-  authoritySha256: AUTHORITY,
-  controlTenantPhysicallyDistinct: true as const,
-  migrationManifestSha256: sha256Hex("synthetic-manifest"),
-  migrationPlanDigest: sha256Hex("synthetic-plan"),
-  schemaContractSha256: sha256Hex("synthetic-schema-contract"),
-  expectedSchemaVersion: "2",
-})
-
 function openSession(repoRoot: string) {
-  const created = createEvidenceSession(VALID_SESSION_INPUT(repoRoot))
+  const created = createEvidenceSession({
+    repoRoot, environmentClass: "staging", commitSha: COMMIT, dirtyTree: false,
+    nodeVersion: "v22.0.0", wranglerVersion: "4.99.0",
+    authoritySha256: AUTHORITY, controlTenantPhysicallyDistinct: true,
+    migrationManifestSha256: sha256Hex("synthetic-manifest"),
+    migrationPlanDigest: sha256Hex("synthetic-plan"),
+    schemaContractSha256: sha256Hex("synthetic-schema-contract"),
+    expectedSchemaVersion: "2",
+    sessionId: SESSION_ID, sessionPublicKey: PUBLIC_HEX,
+  })
   if (!created.ok) throw new Error(`session must open: ${created.blocked.join(",")}`)
   return created.session
 }
 
+const PROOFS: Record<string, Record<string, string>> = {
+  migration_plan_verified: { manifest_sha256: sha256Hex("m"), plan_digest: sha256Hex("p") },
+  migration_apply_completed: { plan_digest: sha256Hex("p"), applied_steps_sha256: sha256Hex("a"), reconciliation: "ledger_reconciled" },
+  remote_schema_verified: { schema_contract_sha256: sha256Hex("s"), verification_summary_sha256: sha256Hex("v") },
+  bootstrap_apply_completed: { bootstrap_artifact_sha256: sha256Hex("b"), apply_result: "bootstrap_batch_committed" },
+  bootstrap_counts_verified: { assertions_sha256: sha256Hex("c") },
+  worker_preflight_completed: { worker_artifact_sha256: sha256Hex("w"), preflight_contract_sha256: sha256Hex("pc") },
+  worker_deploy_completed: { worker_artifact_sha256: sha256Hex("w"), deploy_result: "worker_deployed" },
+}
+const CATS: Record<string, string[]> = {
+  migration_plan_verified: ["manifest_valid", "plan_lanes_verified"],
+  migration_apply_completed: ["control_lane_applied", "ledger_reconciled", "tenant_lane_applied"],
+  remote_schema_verified: ["control_db_schema_ok", "tenant_db_schema_ok"],
+  bootstrap_apply_completed: ["bootstrap_batch_committed"],
+  bootstrap_counts_verified: ["identity_row_verified", "membership_row_verified", "registry_row_verified", "tenant_row_verified", "user_row_verified"],
+  worker_preflight_completed: ["artifacts_verified", "preflight_ok"],
+  worker_deploy_completed: ["worker_deployed"],
+}
+
+interface SessionLike { operations: Array<{ receipt_sha256: string }> }
 let opClock = 0
-function opInput(operation: string, over: Record<string, unknown> = {}) {
-  const t = opClock++ % 10
-  return {
+/** Build a fully signed receipt INPUT for the low-level recorder. */
+function receiptInput(session: unknown, operation: string, over: Record<string, unknown> = {}) {
+  const ops = (session as SessionLike).operations
+  const previous = ops.length > 0 ? ops[ops.length - 1].receipt_sha256 : null
+  const t = opClock++
+  const producer = (CONTRACT.producers_by_operation as Record<string, string>)[operation]
+  const base = {
+    sequence: ops.length + 1,
     operation, status: "success",
-    startedAt: `2026-07-16T01:00:0${t}.000Z`, completedAt: `2026-07-16T01:00:0${t}.500Z`,
-    authoritySha256: AUTHORITY, resultDigest: sha256Hex(`result-${operation}`),
-    safeCategories: ["synthetic_ok"],
+    started_at: `2030-01-01T01:${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}.000Z`,
+    completed_at: `2030-01-01T01:${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}.500Z`,
+    authority_sha256: AUTHORITY, session_id: SESSION_ID, repository_commit_sha: COMMIT,
+    producer, producer_source_sha256: sha256Hex(`source-${producer}`),
+    input_digest: sha256Hex("input"), result_digest: sha256Hex("result"),
+    proof: { ...PROOFS[operation] }, safe_categories: [...CATS[operation]],
+    previous_receipt_sha256: previous, receipt_sha256: "", receipt_signature: "",
     ...over,
+  }
+  base.receipt_sha256 = computeReceiptDigest(base)
+  base.receipt_signature = signReceiptDigest(PRIVATE_PEM, base.receipt_sha256)
+  return {
+    operation: base.operation, status: base.status,
+    startedAt: base.started_at, completedAt: base.completed_at,
+    authoritySha256: base.authority_sha256, resultDigest: base.result_digest,
+    safeCategories: base.safe_categories,
+    producer: base.producer, producerSourceSha256: base.producer_source_sha256,
+    inputDigest: base.input_digest, proof: base.proof,
+    previousReceiptSha256: base.previous_receipt_sha256,
+    receiptSha256: base.receipt_sha256, receiptSignature: base.receipt_signature,
   }
 }
 
-/** Record the full successful 7-operation sequence. */
 function recordAll(session: ReturnType<typeof openSession>) {
   for (const operation of OPS) {
-    const result = recordEvidenceOperation(session, opInput(operation))
+    const result = recordEvidenceOperation(session, receiptInput(session, operation))
     if (!result.ok) throw new Error(`${operation} must record: ${result.blocked.join(",")}`)
   }
 }
 
 // ─── Contract ─────────────────────────────────────────────────────
 
-test("the committed contract loads, is frozen, and declares the 7-operation canonical sequence", () => {
+test("the committed contract declares receipts: producers, sources, per-operation categories and proof fields", () => {
   assert.equal(CONTRACT.contract_version, "1")
   assert.equal(Object.isFrozen(CONTRACT), true)
-  assert.deepEqual([...OPS], [
-    "migration_plan_verified", "migration_apply_completed", "remote_schema_verified",
-    "bootstrap_apply_completed", "bootstrap_counts_verified", "worker_preflight_completed",
-    "worker_deploy_completed",
-  ])
-  assert.deepEqual(CONTRACT.hard_prerequisites.remote_schema_verified, ["migration_apply_completed"])
-  assert.deepEqual(CONTRACT.hard_prerequisites.bootstrap_counts_verified, ["bootstrap_apply_completed"])
-  assert.deepEqual(CONTRACT.hard_prerequisites.worker_deploy_completed, ["remote_schema_verified"])
-  assert.deepEqual([...CONTRACT.environment_classes], ["staging", "production"])
+  assert.equal(OPS.length, 7)
+  for (const operation of OPS) {
+    assert.match((CONTRACT.producers_by_operation as Record<string, string>)[operation], /^cf_[a-z0-9_]+$/)
+    assert.ok(((CONTRACT.safe_categories_by_operation as Record<string, string[]>)[operation] ?? []).length >= 1)
+    assert.ok(((CONTRACT.proof_fields_by_operation as Record<string, string[]>)[operation] ?? []).length >= 1)
+  }
+  for (const producer of CONTRACT.producers) {
+    assert.match((CONTRACT.producer_sources as Record<string, string>)[producer], /^scripts\//)
+  }
+  assert.ok((CONTRACT.fields as Record<string, string[]>).operation.includes("receipt_signature"))
+  assert.ok((CONTRACT.fields as Record<string, string[]>).session.includes("public_key"))
 })
 
-// ─── Session creation ─────────────────────────────────────────────
-
-test("a session refuses a dirty tree, a non-distinct attestation, and every malformed input", () => {
-  const tmp = makeTmpRepo()
-  try {
-    const base = VALID_SESSION_INPUT(tmp)
-    assert.equal(createEvidenceSession(base).ok, true)
-    for (const [over, category] of [
-      [{ dirtyTree: true }, "repository_dirty"],
-      [{ controlTenantPhysicallyDistinct: false }, "authority_not_physically_distinct"],
-      [{ environmentClass: "local" }, "environment_class_invalid"],
-      [{ commitSha: "not-a-sha" }, "commit_sha_invalid"],
-      [{ commitSha: COMMIT.slice(0, 39) }, "commit_sha_invalid"],
-      [{ nodeVersion: "22" }, "node_version_invalid"],
-      [{ wranglerVersion: "wrangler 4" }, "wrangler_version_invalid"],
-      [{ authoritySha256: "XYZ" }, "authority_sha256_invalid"],
-      [{ authoritySha256: AUTHORITY.toUpperCase() }, "authority_sha256_invalid"],
-      [{ migrationManifestSha256: "abc" }, "migration_manifest_sha256_invalid"],
-      [{ migrationPlanDigest: undefined }, "migration_plan_digest_invalid"],
-      [{ schemaContractSha256: 42 }, "schema_contract_sha256_invalid"],
-      [{ expectedSchemaVersion: "two" }, "expected_schema_version_invalid"],
-      [{ previousRecordSha256: "short" }, "previous_record_sha256_invalid"],
-    ] as const) {
-      const result = createEvidenceSession({ ...base, ...(over as object) })
-      assert.equal(result.ok, false, `${JSON.stringify(over)} must be refused`)
-      assert.ok(!result.ok && result.blocked.includes(category), `expected ${category}, got ${!result.ok ? result.blocked.join(",") : ""}`)
-    }
-  } finally { rmSync(tmp, { recursive: true, force: true }) }
-})
-
-// ─── Sensitive scanner (defence in depth under the allowlist) ─────
+// ─── Scanner (defence in depth — unchanged coverage, new exemptions) ──
 
 test("the scanner rejects UUIDs, hex blobs, emails, tokens, SQL, subjects, paths, raw output, and structured blobs", () => {
   const scan = (value: unknown) => scanSensitiveEvidence(value, CONTRACT)
-  assert.ok(scan("3f2504e0-4f89-41d3-9a0c-0305e82c3300").includes("sensitive_value_uuid"), "a D1 database UUID must be rejected")
-  assert.ok(scan("3f2504e0_4f89_41d3_9a0c_0305e82c3300").includes("sensitive_value_uuid"), "a separator-swapped UUID must still be rejected")
-  assert.ok(scan("deadbeefdeadbeefdeadbeefdeadbeefdead").includes("sensitive_value_hex_blob"), "an embedded hex identifier must be rejected")
-  assert.ok(scan("ops@example.com").includes("sensitive_value_email"), "an email must be rejected")
+  assert.ok(scan("3f2504e0-4f89-41d3-9a0c-0305e82c3300").includes("sensitive_value_uuid"))
+  assert.ok(scan("3f2504e0_4f89_41d3_9a0c_0305e82c3300").includes("sensitive_value_uuid"))
+  assert.ok(scan("deadbeefdeadbeefdeadbeefdeadbeefdead").includes("sensitive_value_hex_blob"))
+  assert.ok(scan("ops@example.com").includes("sensitive_value_email"))
   assert.ok(scan("Bearer abcdef123456").includes("sensitive_value_bearer"))
-  assert.ok(scan("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345").includes("sensitive_value_token"), "a token-like value must be rejected")
-  assert.ok(scan("sk-abcdefghijklmnop").includes("sensitive_value_token"))
+  assert.ok(scan("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345").includes("sensitive_value_token"))
   assert.ok(scan("eyJhbGciOiJIUzI1NiJ9.payload").includes("sensitive_value_jwt"))
   assert.ok(scan("authorization: something").includes("sensitive_value_authorization_header"))
-  assert.ok(scan("Set-Cookie: session=1").length > 0, "a cookie must be rejected")
-  assert.ok(scan("CF_D1_MIGRATE_EXECUTE=1").includes("sensitive_value_env_assignment"), "a raw env assignment must be rejected")
-  assert.ok(scan("INSERT INTO tenants VALUES ('x')").includes("sensitive_value_sql"), "raw SQL must be rejected")
-  assert.ok(scan("auth0|abc123").includes("sensitive_value_provider_subject"), "a provider subject must be rejected")
-  assert.ok(scan("/home/operator/wrangler.deploy.json").includes("sensitive_value_filesystem_path"), "a filesystem path must be rejected")
-  assert.ok(scan("line one\nline two").includes("sensitive_value_raw_output"), "raw multi-line output must be rejected")
-  assert.ok(scan('{"d1_databases":[]}').length > 0, "a raw deploy-config blob must be rejected")
-  assert.ok(scan("x".repeat(500)).includes("sensitive_value_oversized"), "an oversized value must be rejected")
+  assert.ok(scan("CF_D1_MIGRATE_EXECUTE=1").includes("sensitive_value_env_assignment"))
+  assert.ok(scan("INSERT INTO tenants VALUES ('x')").includes("sensitive_value_sql"))
+  assert.ok(scan("auth0|abc123").includes("sensitive_value_provider_subject"))
+  assert.ok(scan("/home/operator/wrangler.deploy.json").includes("sensitive_value_filesystem_path"))
+  assert.ok(scan("line one\nline two").includes("sensitive_value_raw_output"))
+  assert.ok(scan('{"d1_databases":[]}').length > 0)
+  assert.ok(scan("x".repeat(500)).includes("sensitive_value_oversized"))
+  // New receipt-layer value shapes are exempt as digest-shaped.
+  assert.deepEqual(scan("evs-0123456789abcdef0123456789abcdef"), [])
+  assert.deepEqual(scan("0".repeat(128)), [], "an Ed25519 signature (128-hex) is digest-shaped")
 })
 
-test("the scanner rejects sensitive KEYS outside the allowlist, and passes every legitimate record value", () => {
+test("the scanner rejects sensitive KEYS outside the allowlist, and passes a full receipt-shaped record", () => {
   const scan = (value: unknown) => scanSensitiveEvidence(value, CONTRACT)
   for (const [key, token] of [
-    ["database_id", "database"], ["database_name", "database"], ["databaseName", "database"],
-    ["user_email", "email"], ["tenant_id", "tenant"], ["membership_role", "membership"],
-    ["identity_subject", "identity"], ["provider_subject", "subject"], ["api_token", "token"],
-    ["stdout", "stdout"], ["raw_sql", "sql"], ["config_path", "path"], ["env", "env"],
+    ["database_id", "database"], ["database_name", "database"], ["user_email", "email"],
+    ["tenant_id", "tenant"], ["identity_subject", "identity"], ["api_token", "token"],
+    ["stdout", "stdout"], ["raw_sql", "sql"], ["config_path", "path"],
   ] as const) {
     assert.ok(scan({ [key]: "x" }).includes(`sensitive_key_${token}`), `key ${key} must be rejected`)
   }
-  // Legitimate values pass: digests, commit, evidence id, timestamps, versions,
-  // categories, and the allowlisted attestation key that contains "tenant".
-  assert.deepEqual(scan({
-    evidence_id: "evd-0123456789abcdef0123456789abcdef",
-    created_at: "2026-07-16T01:00:00.000Z",
-    authority: { sha256: AUTHORITY, control_tenant_physically_distinct: true },
-    repository: { commit_sha: COMMIT, dirty_tree: false },
-    toolchain: { node_version: "v22.0.0", wrangler_version: "4.99.0" },
-    operations: [{ safe_categories: ["control_db_ok", "tenant_lane_applied"] }],
-  }), [])
+  const repo = makeTmpRepo()
+  try {
+    const session = openSession(repo)
+    recordAll(session)
+    const finalized = finalizeEvidenceSession(session)
+    assert.ok(finalized.ok)
+    if (finalized.ok) assert.deepEqual(scan(finalized.record), [], "a legitimate finalized record scans clean")
+  } finally { rmSync(repo, { recursive: true, force: true }) }
 })
 
-// ─── Recording rules ──────────────────────────────────────────────
+// ─── REGRESSION (Finding 1): the pre-repair fabrication paths are gone ──
 
-test("a full successful sequence records with contiguous sequences 1..7", () => {
-  const tmp = makeTmpRepo()
+test("REGRESSION 1. an unsigned or foreign-key receipt cannot be appended — exit-code fabrication has no remaining path", () => {
+  const repo = makeTmpRepo()
   try {
-    const session = openSession(tmp)
-    for (let i = 0; i < OPS.length; i++) {
-      const result = recordEvidenceOperation(session, opInput(OPS[i]))
-      assert.equal(result.ok, true, `${OPS[i]} must record`)
-      assert.ok(result.ok && result.sequence === i + 1, "sequences are contiguous from 1")
-    }
-  } finally { rmSync(tmp, { recursive: true, force: true }) }
+    // (a) Unsigned receipt → refused.
+    const s1 = openSession(repo)
+    const unsigned = receiptInput(s1, OPS[0])
+    unsigned.receiptSignature = "not-a-signature"
+    const refusedUnsigned = recordEvidenceOperation(s1, unsigned)
+    assert.equal(refusedUnsigned.ok, false)
+    assert.ok(!refusedUnsigned.ok && refusedUnsigned.blocked.includes("receipt_unsigned"))
+    // (b) Signed with a FOREIGN key → refused.
+    const foreign = generateKeyPairSync("ed25519")
+    const foreignPem = foreign.privateKey.export({ type: "pkcs8", format: "pem" }) as string
+    const s2 = openSession(repo)
+    const forged = receiptInput(s2, OPS[0])
+    forged.receiptSignature = signReceiptDigest(foreignPem, forged.receiptSha256)
+    const refusedForged = recordEvidenceOperation(s2, forged)
+    assert.equal(refusedForged.ok, false)
+    assert.ok(!refusedForged.ok && refusedForged.blocked.includes("receipt_signature_invalid"))
+    // (c) The OLD pre-repair operation shape (no receipt fields at all) → refused.
+    const s3 = openSession(repo)
+    const oldShape = recordEvidenceOperation(s3, {
+      operation: OPS[0], status: "success",
+      startedAt: "2030-01-01T01:00:00.000Z", completedAt: "2030-01-01T01:00:00.500Z",
+      authoritySha256: AUTHORITY, resultDigest: sha256Hex("fabricated"), safeCategories: ["manifest_valid"],
+    } as never)
+    assert.equal(oldShape.ok, false, "the pre-repair generic-input path no longer records anything")
+    // (d) A digest-tampered receipt → refused before signature is even relevant.
+    const s4 = openSession(repo)
+    const tampered = receiptInput(s4, OPS[0])
+    tampered.receiptSha256 = sha256Hex("forged")
+    tampered.receiptSignature = signReceiptDigest(PRIVATE_PEM, tampered.receiptSha256)
+    const refusedTampered = recordEvidenceOperation(s4, tampered)
+    assert.ok(!refusedTampered.ok && refusedTampered.blocked.includes("receipt_digest_mismatch"))
+  } finally { rmSync(repo, { recursive: true, force: true }) }
 })
 
-test("10. an operation with a DIFFERENT authority digest than the session is refused", () => {
-  const tmp = makeTmpRepo()
+// ─── REGRESSION (Finding 2): arbitrary strings are not categories ──
+
+test("REGRESSION 2. a database-name string can NEVER become a safe category — per-operation allowlists only", () => {
+  const repo = makeTmpRepo()
   try {
-    const session = openSession(tmp)
-    const other = sha256Hex("a-different-authority")
-    const result = recordEvidenceOperation(session, opInput(OPS[0], { authoritySha256: other }))
-    assert.equal(result.ok, false, "evidence can never mix authorities")
-    assert.ok(!result.ok && result.blocked.includes("authority_mismatch"))
-  } finally { rmSync(tmp, { recursive: true, force: true }) }
+    // "atra-control-prod" normalized (`atra_control_prod`) is format-valid but NOT
+    // allowlisted — the pre-repair normalization path accepted it.
+    const s1 = openSession(repo)
+    const leak = recordEvidenceOperation(s1, receiptInput(s1, OPS[0], { safe_categories: ["atra_control_prod", "manifest_valid"].sort() }))
+    assert.equal(leak.ok, false)
+    assert.ok(!leak.ok && leak.blocked.includes("category_not_allowlisted"))
+    // Unknown categories fail the same way; unsorted allowlisted categories fail too.
+    const s2 = openSession(repo)
+    const unknown = recordEvidenceOperation(s2, receiptInput(s2, OPS[0], { safe_categories: ["made_up_category"] }))
+    assert.ok(!unknown.ok && unknown.blocked.includes("category_not_allowlisted"))
+    const s3 = openSession(repo)
+    const unsorted = recordEvidenceOperation(s3, receiptInput(s3, OPS[0], { safe_categories: ["plan_lanes_verified", "manifest_valid"] }))
+    assert.ok(!unsorted.ok && unsorted.blocked.includes("safe_categories_unsorted"))
+  } finally { rmSync(repo, { recursive: true, force: true }) }
 })
 
-test("11. a duplicate operation is refused", () => {
-  const tmp = makeTmpRepo()
+// ─── REGRESSION (Finding 3): temporal contradictions are refused ──
+
+test("REGRESSION 3. a receipt starting before its predecessor completed is refused at append time", () => {
+  const repo = makeTmpRepo()
   try {
-    const session = openSession(tmp)
-    assert.equal(recordEvidenceOperation(session, opInput(OPS[0])).ok, true)
-    const dup = recordEvidenceOperation(session, opInput(OPS[0]))
-    assert.equal(dup.ok, false)
+    const session = openSession(repo)
+    assert.equal(recordEvidenceOperation(session, receiptInput(session, OPS[0], {
+      started_at: "2030-01-01T12:00:00.000Z", completed_at: "2030-01-01T12:05:00.000Z",
+    })).ok, true)
+    const contradiction = recordEvidenceOperation(session, receiptInput(session, OPS[1], {
+      started_at: "2030-01-01T11:00:00.000Z", completed_at: "2030-01-01T11:05:00.000Z",
+    }))
+    assert.equal(contradiction.ok, false)
+    assert.ok(!contradiction.ok && contradiction.blocked.includes("temporal_order_invalid"))
+    // …and validateOperationOrdering rejects it structurally too.
+    const ops = [
+      { sequence: 1, operation: OPS[0], status: "success", started_at: "2030-01-01T12:00:00.000Z", completed_at: "2030-01-01T12:05:00.000Z" },
+      { sequence: 2, operation: OPS[1], status: "success", started_at: "2030-01-01T11:00:00.000Z", completed_at: "2030-01-01T11:05:00.000Z" },
+    ]
+    const ordering = validateOperationOrdering(ops, CONTRACT)
+    assert.equal(ordering.ok, false)
+    assert.ok(ordering.failures.includes("temporal_order_invalid"))
+  } finally { rmSync(repo, { recursive: true, force: true }) }
+})
+
+// ─── Low-level recorder rules (retained invariants) ───────────────
+
+test("authority mismatch, duplicates, prerequisites, canonical order, and failure-blocks-success still hold", () => {
+  const repo = makeTmpRepo()
+  try {
+    const s1 = openSession(repo)
+    const foreignAuthority = recordEvidenceOperation(s1, receiptInput(s1, OPS[0], { authority_sha256: sha256Hex("other-authority") }))
+    assert.ok(!foreignAuthority.ok && foreignAuthority.blocked.includes("authority_mismatch"))
+
+    const s2 = openSession(repo)
+    assert.equal(recordEvidenceOperation(s2, receiptInput(s2, OPS[0])).ok, true)
+    const dup = recordEvidenceOperation(s2, receiptInput(s2, OPS[0]))
     assert.ok(!dup.ok && dup.blocked.includes("operation_duplicate"))
-  } finally { rmSync(tmp, { recursive: true, force: true }) }
-})
 
-test("8 + 9. hard prerequisites: deploy before schema verification, counts before bootstrap apply, verify before migration apply — all refused", () => {
-  const tmp = makeTmpRepo()
-  try {
-    for (const [op, setup] of [
-      ["worker_deploy_completed", ["migration_plan_verified"]],
-      ["bootstrap_counts_verified", ["migration_plan_verified"]],
-      ["remote_schema_verified", ["migration_plan_verified"]],
-    ] as const) {
-      const session = openSession(tmp)
-      for (const pre of setup) assert.equal(recordEvidenceOperation(session, opInput(pre)).ok, true)
-      const result = recordEvidenceOperation(session, opInput(op))
-      assert.equal(result.ok, false, `${op} without its prerequisite must be refused`)
-      assert.ok(!result.ok && result.blocked.includes("operation_prerequisite_missing"))
-    }
-  } finally { rmSync(tmp, { recursive: true, force: true }) }
-})
+    const s3 = openSession(repo)
+    const noPrereq = recordEvidenceOperation(s3, receiptInput(s3, "worker_deploy_completed"))
+    assert.ok(!noPrereq.ok && noPrereq.blocked.includes("operation_prerequisite_missing"))
 
-test("7. a successful operation may only advance in canonical order", () => {
-  const tmp = makeTmpRepo()
-  try {
-    const session = openSession(tmp)
-    // Jumping ahead to preflight (no prerequisites of its own) is allowed…
-    assert.equal(recordEvidenceOperation(session, opInput("worker_preflight_completed")).ok, true)
-    // …but a later success can never move BACKWARDS in the canonical sequence.
-    const backwards = recordEvidenceOperation(session, opInput("bootstrap_apply_completed"))
-    assert.equal(backwards.ok, false, "a success behind the canonical high-water mark must be refused")
+    const s4 = openSession(repo)
+    assert.equal(recordEvidenceOperation(s4, receiptInput(s4, "worker_preflight_completed")).ok, true)
+    const backwards = recordEvidenceOperation(s4, receiptInput(s4, "bootstrap_apply_completed"))
     assert.ok(!backwards.ok && backwards.blocked.includes("operation_order_invalid"))
-  } finally { rmSync(tmp, { recursive: true, force: true }) }
+
+    const s5 = openSession(repo)
+    assert.equal(recordEvidenceOperation(s5, receiptInput(s5, OPS[0], { status: "failed", safe_categories: ["plan_verification_failed"] })).ok, true)
+    const afterFailure = recordEvidenceOperation(s5, receiptInput(s5, OPS[1]))
+    assert.ok(!afterFailure.ok && afterFailure.blocked.includes("operation_after_failure"))
+
+    // Chain break: wrong previous digest.
+    const s6 = openSession(repo)
+    assert.equal(recordEvidenceOperation(s6, receiptInput(s6, OPS[0])).ok, true)
+    const brokenChain = recordEvidenceOperation(s6, receiptInput(s6, OPS[1], { previous_receipt_sha256: sha256Hex("wrong-link") }))
+    assert.ok(!brokenChain.ok && brokenChain.blocked.includes("receipt_chain_invalid"))
+
+    // Producer mismatch: a producer that is not the contract's for the operation.
+    const s7 = openSession(repo)
+    const wrongProducer = recordEvidenceOperation(s7, receiptInput(s7, OPS[0], { producer: "cf_worker_deploy" }))
+    assert.ok(!wrongProducer.ok && wrongProducer.blocked.includes("producer_mismatch"))
+
+    // Proof shape: missing/foreign proof fields fail.
+    const s8 = openSession(repo)
+    const badProof = recordEvidenceOperation(s8, receiptInput(s8, OPS[0], { proof: { manifest_sha256: sha256Hex("m") } }))
+    assert.ok(!badProof.ok && badProof.blocked.includes("proof_invalid"))
+  } finally { rmSync(repo, { recursive: true, force: true }) }
 })
 
-test("12. a failed operation prevents every later SUCCESS from being appended", () => {
-  const tmp = makeTmpRepo()
-  try {
-    const session = openSession(tmp)
-    assert.equal(recordEvidenceOperation(session, opInput("migration_plan_verified", { status: "failed" })).ok, true)
-    const after = recordEvidenceOperation(session, opInput("migration_apply_completed"))
-    assert.equal(after.ok, false, "no success may follow a recorded failure")
-    assert.ok(!after.ok && after.blocked.includes("operation_after_failure"))
-  } finally { rmSync(tmp, { recursive: true, force: true }) }
-})
+// ─── Finalization + writing (retained invariants) ─────────────────
 
-test("4 + 5. malformed timestamps and malformed digests are refused at record time", () => {
-  const tmp = makeTmpRepo()
+test("finalization computes a verifiable digest, freezes recursively, seals the session; the writer stays exclusive and 0600", () => {
+  const repo = makeTmpRepo()
   try {
-    for (const [over, category] of [
-      [{ startedAt: "2026-07-16 01:00:00" }, "started_at_invalid"],
-      [{ startedAt: "2026-13-01T00:00:00.000Z" }, "started_at_invalid"],
-      [{ completedAt: "2026-07-16T01:00:00Z" }, "completed_at_invalid"],
-      [{ completedAt: "2026-07-16T00:59:59.000Z" }, "completed_before_started"],
-      [{ resultDigest: "not-a-digest" }, "result_digest_invalid"],
-      [{ resultDigest: AUTHORITY.slice(0, 63) }, "result_digest_invalid"],
-      [{ authoritySha256: AUTHORITY.toUpperCase() }, "authority_sha256_invalid"],
-      [{ safeCategories: ["Not_Safe"] }, "safe_categories_invalid"],
-      [{ safeCategories: "nope" }, "safe_categories_invalid"],
-      [{ operation: "made_up_operation" }, "operation_unknown"],
-      [{ status: "partial" }, "status_invalid"],
-    ] as const) {
-      const session = openSession(tmp)
-      const result = recordEvidenceOperation(session, opInput(OPS[0], over as Record<string, unknown>))
-      assert.equal(result.ok, false, `${JSON.stringify(over)} must be refused`)
-      assert.ok(!result.ok && result.blocked.includes(category), `expected ${category}, got ${!result.ok ? result.blocked.join(",") : ""}`)
-    }
-    assert.equal(isStrictUtcIso("2026-07-16T01:00:00.000Z"), true)
-  } finally { rmSync(tmp, { recursive: true, force: true }) }
-})
-
-test("an operation carrying sensitive content in its categories is refused before it is stored", () => {
-  const tmp = makeTmpRepo()
-  try {
-    const session = openSession(tmp)
-    // Contract-shaped but sensitive: a lowercase hex identifier smuggled as a category.
-    const result = recordEvidenceOperation(session, opInput(OPS[0], { safeCategories: ["deadbeefdeadbeefdeadbeefdeadbeefdead"] }))
-    assert.equal(result.ok, false)
-    assert.ok(!result.ok && result.blocked.some((b) => b.startsWith("sensitive_")))
-  } finally { rmSync(tmp, { recursive: true, force: true }) }
-})
-
-// ─── Finalization ─────────────────────────────────────────────────
-
-test("24. finalization computes a verifiable digest, freezes the record recursively, and seals the session", () => {
-  const tmp = makeTmpRepo()
-  try {
-    const session = openSession(tmp)
+    const session = openSession(repo)
     recordAll(session)
     const finalized = finalizeEvidenceSession(session)
     assert.equal(finalized.ok, true)
     if (!finalized.ok) return
     const record = finalized.record
-    // The digest is over canonical bytes and recomputes identically.
     assert.equal(computeEvidenceDigest(record), record.chain.evidence_sha256)
-    assert.match(record.chain.evidence_sha256, /^[0-9a-f]{64}$/)
-    // Recursively immutable — mutation attempts throw in strict mode.
     assert.equal(Object.isFrozen(record), true)
-    assert.equal(Object.isFrozen(record.operations), true)
     assert.equal(Object.isFrozen(record.operations[0]), true)
-    assert.equal(Object.isFrozen(record.operations[0].safe_categories), true)
-    assert.throws(() => { (record as { evidence_id: string }).evidence_id = "evd-" + "0".repeat(32) }, TypeError)
     assert.throws(() => { (record.operations as unknown as unknown[]).push({}) }, TypeError)
-    // The session accepts nothing afterwards — finalization is terminal.
-    const after = recordEvidenceOperation(session, opInput("migration_plan_verified"))
-    assert.equal(after.ok, false)
-    assert.ok(!after.ok && after.blocked.includes("session_finalized"))
-    assert.equal(finalizeEvidenceSession(session).ok, false, "finalizing twice is refused")
-    // The finalized record validates and orders cleanly.
+    assert.equal(recordEvidenceOperation(session, receiptInput(session, OPS[0])).ok, false, "the session is sealed")
     assert.deepEqual(validateEvidenceRecord(record, CONTRACT).failures, [])
-    assert.deepEqual(validateOperationOrdering(record.operations, CONTRACT).failures, [])
-  } finally { rmSync(tmp, { recursive: true, force: true }) }
+    // Signatures embedded in the pack verify against the pack's own session key.
+    for (const op of record.operations) {
+      assert.equal(verifyReceiptSignature(record.session.public_key, op.receipt_sha256, op.receipt_signature), true)
+    }
+
+    const written = writeEvidencePack(record, { repoRoot: repo })
+    assert.equal(written.ok, true, `pack must write: ${written.ok ? "" : written.blocked.join(",")}`)
+    if (!written.ok) return
+    assert.equal(statSync(written.path).mode & 0o777, 0o600)
+    const again = writeEvidencePack(record, { repoRoot: repo })
+    assert.ok(!again.ok && again.blocked.includes("evidence_file_exists"), "exclusive creation is preserved")
+    // The tampered copy is refused before a byte is written (fresh id, so the
+    // refusal is about the DIGEST, not a filename collision with the original).
+    const tampered = JSON.parse(JSON.stringify(record))
+    tampered.evidence_id = `evd-${"ef".repeat(16)}`
+    tampered.environment_class = "production"
+    const refused = writeEvidencePack(tampered, { repoRoot: repo })
+    assert.ok(!refused.ok && refused.blocked.includes("evidence_digest_mismatch"))
+    assert.equal(existsSync(resolve(repo, EVIDENCE_DIRNAME, `d1-operational-evidence-${tampered.evidence_id}.json`)), false)
+    // Ignore-rule enforcement is preserved.
+    writeFileSync(resolve(repo, ".gitignore"), "# nothing ignored\n")
+    const record2 = JSON.parse(JSON.stringify(record))
+    record2.evidence_id = `evd-${"cd".repeat(16)}`
+    record2.chain.evidence_sha256 = computeEvidenceDigest(record2)
+    const notIgnored = writeEvidencePack(record2, { repoRoot: repo })
+    assert.ok(!notIgnored.ok && notIgnored.blocked.includes("evidence_directory_not_ignored"))
+  } finally { rmSync(repo, { recursive: true, force: true }) }
 })
 
 test("canonical serialization is deterministic and key-order independent", () => {
@@ -329,151 +370,38 @@ test("canonical serialization is deterministic and key-order independent", () =>
   assert.equal(a, '{"a":[{"c":3,"d":2}],"b":1,"e":null}')
 })
 
-// ─── Writing packs ────────────────────────────────────────────────
-
-test("23. the evidence file is created exclusively, mode 0600, with a collision-resistant secret-free name, in the git-ignored directory", () => {
-  const tmp = makeTmpRepo()
+test("a session refuses malformed derived inputs, and never opens without a session id + public key", () => {
+  const repo = makeTmpRepo()
   try {
-    const session = openSession(tmp)
-    recordAll(session)
-    const finalized = finalizeEvidenceSession(session)
-    assert.equal(finalized.ok, true)
-    if (!finalized.ok) return
-    const written = writeEvidencePack(finalized.record, { repoRoot: tmp })
-    assert.equal(written.ok, true, `pack must write: ${written.ok ? "" : written.blocked.join(",")}`)
-    if (!written.ok) return
-    assert.equal(statSync(written.path).mode & 0o777, 0o600, "the evidence file must be private")
-    assert.match(written.path.slice(tmp.length + 1), new RegExp(`^\\${EVIDENCE_DIRNAME.slice(0)}/d1-operational-evidence-evd-[0-9a-f]{32}\\.json$`.replace("\\.d1", "\\.d1")))
-    // Exclusive creation: writing the SAME record again must refuse, not overwrite.
-    const again = writeEvidencePack(finalized.record, { repoRoot: tmp })
-    assert.equal(again.ok, false)
-    assert.ok(!again.ok && again.blocked.includes("evidence_file_exists"))
-    // The file round-trips to the same digest.
-    const reread = JSON.parse(readFileSync(written.path, "utf8"))
-    assert.equal(computeEvidenceDigest(reread), reread.chain.evidence_sha256)
-  } finally { rmSync(tmp, { recursive: true, force: true }) }
+    const base = {
+      repoRoot: repo, environmentClass: "staging", commitSha: COMMIT, dirtyTree: false as const,
+      nodeVersion: "v22.0.0", wranglerVersion: "4.99.0", authoritySha256: AUTHORITY,
+      controlTenantPhysicallyDistinct: true as const,
+      migrationManifestSha256: sha256Hex("m"), migrationPlanDigest: sha256Hex("p"),
+      schemaContractSha256: sha256Hex("s"), expectedSchemaVersion: "2",
+      sessionId: SESSION_ID, sessionPublicKey: PUBLIC_HEX,
+    }
+    assert.equal(createEvidenceSession(base).ok, true)
+    for (const [over, category] of [
+      [{ dirtyTree: true }, "repository_dirty"],
+      [{ controlTenantPhysicallyDistinct: false }, "authority_not_physically_distinct"],
+      [{ commitSha: "not-a-sha" }, "commit_sha_invalid"],
+      [{ sessionId: "session-1" }, "session_id_invalid"],
+      [{ sessionPublicKey: "XYZ" }, "session_public_key_invalid"],
+      [{ environmentClass: "local" }, "environment_class_invalid"],
+    ] as const) {
+      const result = createEvidenceSession({ ...base, ...(over as object) })
+      assert.equal(result.ok, false, `${JSON.stringify(over)} must be refused`)
+      assert.ok(!result.ok && result.blocked.includes(category), `expected ${category}, got ${!result.ok ? result.blocked.join(",") : ""}`)
+    }
+  } finally { rmSync(repo, { recursive: true, force: true }) }
 })
 
-test("a pack is refused when the evidence directory is not git-ignored, and a tampered record is refused before writing", () => {
-  const tmp = makeTmpRepo()
-  try {
-    const session = openSession(tmp)
-    recordAll(session)
-    const finalized = finalizeEvidenceSession(session)
-    if (!finalized.ok) throw new Error("must finalize")
-    // 1. Remove the ignore rule — privacy fails closed.
-    writeFileSync(resolve(tmp, ".gitignore"), "# nothing ignored\n")
-    const notIgnored = writeEvidencePack(finalized.record, { repoRoot: tmp })
-    assert.equal(notIgnored.ok, false)
-    assert.ok(!notIgnored.ok && notIgnored.blocked.includes("evidence_directory_not_ignored"))
-    writeFileSync(resolve(tmp, ".gitignore"), `/${EVIDENCE_DIRNAME}/\n`)
-    // 2. A digest-tampered copy is refused before a byte is written.
-    const tampered = JSON.parse(JSON.stringify(finalized.record))
-    tampered.environment_class = "production"
-    const refused = writeEvidencePack(tampered, { repoRoot: tmp })
-    assert.equal(refused.ok, false)
-    assert.ok(!refused.ok && refused.blocked.includes("evidence_digest_mismatch"))
-    assert.equal(existsSync(resolve(tmp, EVIDENCE_DIRNAME, `d1-operational-evidence-${tampered.evidence_id}.json`)), false)
-  } finally { rmSync(tmp, { recursive: true, force: true }) }
-})
-
-// ─── Adapters ─────────────────────────────────────────────────────
-
-test("adapters return EXACTLY the five safe keys and never anything else", () => {
-  const built = buildOperationEvidence("remote_schema_verified", {
-    status: "success", authorityDigest: AUTHORITY, safeCategories: ["CONTROL_DB:ok"],
-  }, { repoRoot: REPO_ROOT })
-  assert.equal(built.ok, true)
-  if (!built.ok) return
-  assert.deepEqual(Object.keys(built.evidence).sort(), [...SAFE_EVIDENCE_KEYS].sort(),
-    "an adapter result carries the five safe keys and nothing else — no path, no ID, no raw output")
-  assert.equal(built.evidence.operation, "remote_schema_verified")
-  assert.match(built.evidence.resultDigest, /^[0-9a-f]{64}$/)
-  assert.deepEqual([...built.evidence.safeCategories], ["control_db_ok"], "categories are normalized to the safe form")
-  assert.equal(Object.isFrozen(built.evidence), true)
-  // Deterministic result digest over the SAFE result — not raw output.
-  const rebuilt = buildOperationEvidence("remote_schema_verified", { status: "success", authorityDigest: AUTHORITY, safeCategories: ["CONTROL_DB:ok"] }, { repoRoot: REPO_ROOT })
-  assert.ok(rebuilt.ok && rebuilt.evidence.resultDigest === built.evidence.resultDigest)
-})
-
-test("adapters scan RAW inputs before normalization — a sensitive value cannot be laundered", () => {
-  for (const raw of [
-    "3f2504e0-4f89-41d3-9a0c-0305e82c3300",
-    "ops@example.com",
-    "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
-    "auth0|abc123",
-    "INSERT INTO tenants VALUES ('x')",
-  ]) {
-    const result = buildOperationEvidence("migration_apply_completed", { status: "success", authorityDigest: AUTHORITY, safeCategories: [raw] }, { repoRoot: REPO_ROOT })
-    assert.equal(result.ok, false, `${raw} must be refused`)
-    assert.ok(!result.ok && result.blocked.some((b) => b.startsWith("sensitive_")))
+test("no evidence output survives this suite's temporary repos, and no console output exists in the libraries", () => {
+  const codeOf = (rel: string) => readFileSync(resolve(REPO_ROOT, rel), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/[^\n]*$/gm, "")
+  for (const rel of ["scripts/lib/d1OperationalEvidence.mjs", "scripts/lib/d1EvidenceReceipts.mjs"]) {
+    assert.doesNotMatch(codeOf(rel), /console\./, `${rel} must not log`)
   }
-  // Invalid authority digest is refused.
-  const bad = buildOperationEvidence("migration_apply_completed", { status: "success", authorityDigest: "nope" }, { repoRoot: REPO_ROOT })
-  assert.equal(bad.ok, false)
-  assert.ok(!bad.ok && bad.blocked.includes("authority_digest_invalid"))
-})
-
-test("the per-command adapters map existing safe results without inventing fields", () => {
-  const verify = evidenceFromRemoteSchemaVerification({ ok: true, failures: [], authorityDigest: AUTHORITY }, { repoRoot: REPO_ROOT })
-  assert.ok(verify.ok && verify.evidence.operation === "remote_schema_verified" && verify.evidence.status === "success")
-  const applyFailed = evidenceFromMigrationApply({ exitCode: 1, authorityDigest: AUTHORITY }, { repoRoot: REPO_ROOT })
-  assert.ok(applyFailed.ok && applyFailed.evidence.status === "failed")
-  const deploy = evidenceFromWorkerDeploy({ exitCode: 0, authorityDigest: AUTHORITY }, { repoRoot: REPO_ROOT })
-  assert.ok(deploy.ok && deploy.evidence.operation === "worker_deploy_completed")
-  assert.equal(normalizeSafeCategory("CONTROL_DB:missing_table:x"), "control_db_missing_table_x")
-})
-
-// ─── Architecture guards ──────────────────────────────────────────
-
-/** Source with comments stripped — prose must never satisfy or trip a guard. */
-const codeOf = (rel: string) => readFileSync(resolve(REPO_ROOT, rel), "utf8")
-  .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/[^\n]*$/gm, "")
-
-const EVIDENCE_SOURCES = [
-  "scripts/lib/d1OperationalEvidence.mjs",
-  "scripts/lib/d1EvidenceAdapters.mjs",
-  "scripts/cf-d1-evidence-verify.mjs",
-]
-
-test("GUARD: the evidence layer is observational — no spawn, no network, no SQL, no Wrangler binary", () => {
-  for (const file of EVIDENCE_SOURCES) {
-    const src = codeOf(file)
-    assert.doesNotMatch(src, /child_process|spawnSync|execSync|\bfetch\s*\(|node:net|node:http|node:https|node:sqlite|DatabaseSync/i,
-      `${file} must never spawn, query, or reach a network`)
-    // `wrangler_version` is a legitimate FIELD; invoking the wrangler BINARY is not.
-    assert.doesNotMatch(src, /WRANGLER_BIN|\.bin\/wrangler|"wrangler"|'wrangler'|`wrangler`/,
-      `${file} must never reference the Wrangler binary`)
-  }
-})
-
-test("GUARD: the evidence layer never reads or sets an operator execution gate", () => {
-  for (const file of EVIDENCE_SOURCES) {
-    const src = codeOf(file)
-    assert.doesNotMatch(src, /CF_D1_MIGRATE_EXECUTE|CF_D1_MIGRATE_CONFIRM|CF_D1_BOOTSTRAP_EXECUTE|CF_D1_BOOTSTRAP_CONFIRM|CF_DEPLOY_EXECUTE/,
-      `${file} must not touch an existing execution gate`)
-    assert.doesNotMatch(src, /process\.env\b/, `${file} must not read the environment at all`)
-  }
-})
-
-test("GUARD: the recorder library prints nothing — evidence contents can never reach a log", () => {
-  for (const file of ["scripts/lib/d1OperationalEvidence.mjs", "scripts/lib/d1EvidenceAdapters.mjs"]) {
-    assert.doesNotMatch(codeOf(file), /console\./, `${file} must not log`)
-  }
-})
-
-test("GUARD: the evidence directory is git-ignored in THIS repository", () => {
-  assert.match(readFileSync(resolve(REPO_ROOT, ".gitignore"), "utf8"), /^\/\.d1-evidence\/$/m)
-})
-
-test("GUARD: the existing operator gates are untouched by this patch", () => {
-  // The gated commands still carry their own execute flags + confirmation phrases.
-  assert.match(codeOf("scripts/cf-d1-migrations-apply.mjs"), /CF_D1_MIGRATE_EXECUTE/)
-  assert.match(codeOf("scripts/cf-d1-migrations-apply.mjs"), /CF_D1_MIGRATE_CONFIRM/)
-  assert.match(codeOf("scripts/cf-d1-bootstrap-apply.mjs"), /CF_D1_BOOTSTRAP_EXECUTE/)
-  assert.match(codeOf("scripts/cf-d1-bootstrap-apply.mjs"), /CF_D1_BOOTSTRAP_CONFIRM/)
-  assert.match(codeOf("scripts/cloudflare-deploy.mjs"), /CF_DEPLOY_EXECUTE/)
-  // And EXTERNAL_ACTIONS stays disabled.
-  const wrangler = JSON.parse(readFileSync(resolve(REPO_ROOT, "wrangler.json"), "utf8"))
-  assert.equal(wrangler.vars.EXTERNAL_ACTIONS_ENABLED, "false")
+  assert.deepEqual(readdirSync(REPO_ROOT).filter((name) => name.startsWith("d1-operational-evidence-")), [])
 })

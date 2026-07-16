@@ -52,6 +52,7 @@ import {
   loadValidatedDeployConfigAuthority, withPrivateExecutionConfig,
 } from "./lib/cfDeployConfigAuthority.mjs"
 import { verifyRemoteSchemasWithAuthority } from "./cf-d1-schema-verify-remote.mjs"
+import { beginEvidenceOperation, emitWorkerDeployReceipt } from "./lib/d1EvidenceReceipts.mjs"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(__dirname, "..")
@@ -166,6 +167,12 @@ function main() {
   }
 
   let exitCode = 1
+  // Evidence session (optional): a deploy receipt exists ONLY for a real gated
+  // deploy attempt (CF_DEPLOY_EXECUTE=1) — an offline run performs no deploy and
+  // therefore emits nothing. The boundary opens after the authority is retained.
+  const evidenceSessionDir = process.env.CF_D1_EVIDENCE_SESSION_DIR
+  let retainedAuthority = null
+  let evidenceBegun = null
   try {
     // Step 2: ONE authority for the whole pipeline — its exact bytes and digest.
     const authority = loadValidatedDeployConfigAuthority({ configPath: generatedConfig, repoRoot: REPO_ROOT, allowPlaceholderIds: false })
@@ -177,6 +184,8 @@ function main() {
       // Stop trusting the original the moment its exact bytes are retained: nothing
       // downstream reads it, and every Wrangler call runs a fresh scoped config from
       // the authority. Editing, replacing, or deleting it now cannot redirect a step.
+      retainedAuthority = authority.authority
+      evidenceBegun = evidenceSessionDir && execute ? beginEvidenceOperation() : null
       rmSync(generatedConfig, { force: true })
       exitCode = runPipeline(authority.authority, execute)
     }
@@ -188,6 +197,18 @@ function main() {
     // even if the authority load threw before it was removed. Scoped execution
     // configs remove themselves as each of their calls returns.
     rmSync(generatedConfig, { force: true })
+  }
+
+  // Command-bound receipt from THIS result path, only when a gated deploy actually
+  // ran. The emitter binds the receipt to the real built Worker artifact bytes and
+  // derives status from the pipeline outcome — no exit-code parameter exists.
+  if (evidenceSessionDir && execute && retainedAuthority !== null && evidenceBegun !== null) {
+    const receipt = emitWorkerDeployReceipt(evidenceSessionDir, {
+      repoRoot: REPO_ROOT, authority: retainedAuthority, begun: evidenceBegun,
+      deployResult: { deployed: exitCode === 0 },
+    })
+    if (receipt.ok) console.log("evidence: receipt recorded (worker_deploy_completed)")
+    else console.error(`evidence: receipt FAILED — ${receipt.blocked.join(", ")}`)
   }
   process.exit(exitCode)
 }

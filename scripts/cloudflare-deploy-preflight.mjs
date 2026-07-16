@@ -26,6 +26,8 @@ import {
   buildConfigWithIds,
   SYNTHETIC_D1_IDS,
 } from "./lib/cfDeployConfig.mjs"
+import { loadValidatedDeployConfigAuthority } from "./lib/cfDeployConfigAuthority.mjs"
+import { beginEvidenceOperation, emitWorkerPreflightReceipt } from "./lib/d1EvidenceReceipts.mjs"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(__dirname, "..")
@@ -65,6 +67,11 @@ function main() {
   }
   const args = parsed.args
   const failures = []
+
+  // Evidence session (optional): the boundary opens before the checks run; the
+  // receipt is emitted after the result is known, from this real result path.
+  const evidenceSessionDir = process.env.CF_D1_EVIDENCE_SESSION_DIR
+  const evidenceBegun = evidenceSessionDir ? beginEvidenceOperation() : null
 
   if (args.config) {
     // ── Validate a resolved deploy config ──
@@ -106,6 +113,21 @@ function main() {
       configPath: `${REPO_ROOT}/wrangler.deploy.synthetic.json`,
     })
     for (const f of synthRes.failures) failures.push(`synthetic:${f}`)
+  }
+
+  // Command-bound receipt from THIS result path. A successful receipt requires
+  // the validated deploy-config authority (--config) AND --check-artifacts with a
+  // real built Worker artifact — the emitter derives everything else itself.
+  if (evidenceSessionDir) {
+    const authority = args.config
+      ? loadValidatedDeployConfigAuthority({ configPath: resolve(process.cwd(), args.config), repoRoot: REPO_ROOT, allowPlaceholderIds: false })
+      : { ok: false }
+    const receipt = emitWorkerPreflightReceipt(evidenceSessionDir, {
+      repoRoot: REPO_ROOT, authority: authority.ok ? authority.authority : null, begun: evidenceBegun,
+      preflightResult: { ok: failures.length === 0, failures, checkedArtifacts: args.checkArtifacts },
+    })
+    if (receipt.ok) console.log("evidence: receipt recorded (worker_preflight_completed)")
+    else console.error(`evidence: receipt FAILED — ${receipt.blocked.join(", ")}`)
   }
 
   if (failures.length > 0) {

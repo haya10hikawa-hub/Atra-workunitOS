@@ -52,6 +52,8 @@ import {
   removeBootstrapSql, readOperatorInput, buildBootstrapSql, parseArtifactHeader,
 } from "./cf-d1-bootstrap-prepare.mjs"
 import { verifyBootstrapVia } from "./lib/d1BootstrapVerify.mjs"
+import { sha256Hex } from "./lib/d1OperationalEvidence.mjs"
+import { beginEvidenceOperation, emitBootstrapApplyReceipt, emitBootstrapCountsReceipt } from "./lib/d1EvidenceReceipts.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 export const BOOTSTRAP_CONFIRM_PHRASE = "APPLY_PRODUCTION_CONTROL_BOOTSTRAP"
@@ -364,6 +366,14 @@ function main() {
 
   const values = readOperatorInput(process.env, REPO_ROOT).values
   let exitCode = 0
+  // Evidence session (optional): the execution boundary opens AFTER every gate, so
+  // a refused run can never carry a receipt. Two receipts are emitted from this
+  // command's real result paths: the atomic batch outcome, then the COUNT check.
+  const evidenceSessionDir = process.env.CF_D1_EVIDENCE_SESSION_DIR
+  const applyBegun = evidenceSessionDir ? beginEvidenceOperation() : null
+  let batchCommitted = false
+  let countsBegun = null
+  let countsOutcome = null
   // The retained authority — NOT a reusable config path — decides WHICH database the
   // bytes hit. The apply and every verification query each mint their own short-lived
   // scoped config from these exact bytes, so the database written and the database
@@ -375,9 +385,12 @@ function main() {
     // ONE invocation = ONE atomic batch: all five records, or none. The bytes are
     // the ones validation retained — never re-read from the mutable artifact path.
     applyBootstrapFile(authority, gates.canonicalSql)
+    batchCommitted = true
+    countsBegun = evidenceSessionDir ? beginEvidenceOperation() : null
 
     // Read-only, category-level verification. Counts only; no row values.
     const verified = verifyBootstrapVia((sql) => remoteCount(authority, sql), values)
+    countsOutcome = { ok: verified.ok === true, failures: Array.isArray(verified.failures) ? verified.failures : [] }
     if (!verified.ok) {
       // HONEST STATE: the five INSERTs were COMMITTED by the batch above; this
       // read-only check runs afterwards. A failure here is NOT an atomic rollback —
@@ -400,6 +413,26 @@ function main() {
     // as each call returns; here only the repository-root preparation artifact is
     // removed, unconditionally.
     removeBootstrapSql()
+  }
+
+  // Command-bound receipts, emitted only from THIS result path once each outcome
+  // is known. The batch receipt binds the canonical artifact digest that was
+  // actually executed; the counts receipt records allowlisted boolean assertions —
+  // never a row value. Neither takes a status or exit-code parameter.
+  if (evidenceSessionDir) {
+    const applyReceipt = emitBootstrapApplyReceipt(evidenceSessionDir, {
+      repoRoot: REPO_ROOT, authority, begun: applyBegun,
+      bootstrapResult: { committed: batchCommitted, canonicalSqlSha256: sha256Hex(gates.canonicalSql) },
+    })
+    if (applyReceipt.ok) console.log("evidence: receipt recorded (bootstrap_apply_completed)")
+    else console.error(`evidence: receipt FAILED — ${applyReceipt.blocked.join(", ")}`)
+    if (countsBegun !== null && countsOutcome !== null) {
+      const countsReceipt = emitBootstrapCountsReceipt(evidenceSessionDir, {
+        repoRoot: REPO_ROOT, authority, begun: countsBegun, countsResult: countsOutcome,
+      })
+      if (countsReceipt.ok) console.log("evidence: receipt recorded (bootstrap_counts_verified)")
+      else console.error(`evidence: receipt FAILED — ${countsReceipt.blocked.join(", ")}`)
+    }
   }
   process.exit(exitCode)
 }

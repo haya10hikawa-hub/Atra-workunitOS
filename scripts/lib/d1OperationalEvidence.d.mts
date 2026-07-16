@@ -31,10 +31,17 @@ export interface EvidenceContract {
   readonly operations: readonly EvidenceOperationName[]
   readonly required_successful_sequence: readonly EvidenceOperationName[]
   readonly hard_prerequisites: Readonly<Record<string, readonly EvidenceOperationName[]>>
+  readonly producers: readonly string[]
+  readonly producers_by_operation: Readonly<Record<string, string>>
+  readonly producer_sources: Readonly<Record<string, string>>
+  readonly safe_categories_by_operation: Readonly<Record<string, readonly string[]>>
+  readonly proof_fields_by_operation: Readonly<Record<string, readonly string[]>>
+  readonly proof_category_values: Readonly<Record<string, readonly string[]>>
   readonly fields: Readonly<Record<string, readonly string[]>>
   readonly limits: EvidenceContractLimits
 }
 
+/** Every operation entry is a COMMAND-BOUND, session-signed receipt. */
 export interface EvidenceOperationRecord {
   readonly sequence: number
   readonly operation: EvidenceOperationName
@@ -42,8 +49,17 @@ export interface EvidenceOperationRecord {
   readonly started_at: string
   readonly completed_at: string
   readonly authority_sha256: string
+  readonly session_id: string
+  readonly repository_commit_sha: string
+  readonly producer: string
+  readonly producer_source_sha256: string
+  readonly input_digest: string
   readonly result_digest: string
+  readonly proof: Readonly<Record<string, string>>
   readonly safe_categories: readonly string[]
+  readonly previous_receipt_sha256: string | null
+  readonly receipt_sha256: string
+  readonly receipt_signature: string
 }
 
 export interface D1OperationalEvidenceRecord {
@@ -51,6 +67,7 @@ export interface D1OperationalEvidenceRecord {
   readonly evidence_id: string
   readonly environment_class: EvidenceEnvironmentClass
   readonly created_at: string
+  readonly session: { readonly session_id: string; readonly public_key: string }
   readonly repository: { readonly commit_sha: string; readonly dirty_tree: false }
   readonly toolchain: { readonly node_version: string; readonly wrangler_version: string }
   readonly authority: { readonly sha256: string; readonly control_tenant_physically_distinct: true }
@@ -83,13 +100,16 @@ export interface CreateEvidenceSessionInput {
   schemaContractSha256: string
   expectedSchemaVersion: string
   previousRecordSha256?: string | null
+  sessionId: string
+  sessionPublicKey: string
   now?: () => Date
 }
 
 /**
- * Recorder inputs are UNTRUSTED and validated at runtime — the declared types are
- * deliberately wide (`string`, `unknown`) so callers and tests can exercise the
- * fail-closed paths; the runtime enforces the strict enums and formats.
+ * LOW-LEVEL assembler input: a full command-issued receipt. Inputs are UNTRUSTED
+ * and validated at runtime (digest recomputed, signature verified against the
+ * session public key) — the declared types are deliberately wide so tests can
+ * exercise the fail-closed paths.
  */
 export interface RecordEvidenceOperationInput {
   operation: EvidenceOperationName | string
@@ -99,14 +119,29 @@ export interface RecordEvidenceOperationInput {
   authoritySha256: string
   resultDigest: string
   safeCategories?: string[] | unknown
+  producer: string
+  producerSourceSha256: string
+  inputDigest: string
+  proof: Record<string, string> | unknown
+  previousReceiptSha256: string | null
+  receiptSha256: string
+  receiptSignature: string
 }
 
 export type EvidenceResult<T> = ({ ok: true } & T) | { ok: false; blocked: string[] }
 
 export declare const EVIDENCE_CONTRACT_RELPATH: string
 export declare const EVIDENCE_DIRNAME: string
+/** Strict shared formats (session ids, digests, signatures, timestamps, …). */
+export declare const EVIDENCE_FORMATS: Readonly<Record<string, RegExp>>
 
 export declare function sha256Hex(value: string | Uint8Array): string
+/** Receipt digest: canonical bytes of the receipt minus its digest + signature. */
+export declare function computeReceiptDigest(receipt: unknown): string
+/** Sign a receipt digest with the session private key (PKCS8 PEM) → 128-hex. */
+export declare function signReceiptDigest(privateKeyPem: string, receiptSha256: string): string
+/** Verify a receipt signature against the session public key (64-hex raw Ed25519). */
+export declare function verifyReceiptSignature(publicKeyHex: string, receiptSha256: string, signatureHex: string): boolean
 export declare function deepFreezeEvidence<T>(value: T): Readonly<T>
 export declare function isStrictUtcIso(value: unknown): boolean
 export declare function loadEvidenceContract(repoRoot: string | undefined): EvidenceResult<{ contract: EvidenceContract }>
@@ -116,7 +151,8 @@ export declare function canonicalSerialize(value: unknown): string
 export declare function computeEvidenceDigest(record: unknown): string
 export declare function validateEvidenceRecord(record: unknown, contract: EvidenceContract): { ok: boolean; failures: string[] }
 export declare function validateOperationOrdering(operations: unknown, contract: EvidenceContract): { ok: boolean; failures: string[] }
-export declare function createEvidenceSession(input?: Partial<CreateEvidenceSessionInput>): EvidenceResult<{ session: EvidenceSession }>
+/** Inputs are UNTRUSTED and runtime-validated; the declared type is deliberately wide. */
+export declare function createEvidenceSession(input?: Partial<Record<keyof CreateEvidenceSessionInput, unknown>>): EvidenceResult<{ session: EvidenceSession }>
 export declare function recordEvidenceOperation(session: EvidenceSession, input?: Partial<RecordEvidenceOperationInput>): EvidenceResult<{ sequence: number }>
 export declare function finalizeEvidenceSession(session: EvidenceSession): EvidenceResult<{ record: D1OperationalEvidenceRecord }>
 export declare function writeEvidencePack(record: D1OperationalEvidenceRecord, options?: { repoRoot?: string }): EvidenceResult<{ path: string }>

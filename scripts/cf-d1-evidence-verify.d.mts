@@ -11,6 +11,7 @@ export interface EvidenceVerifyResult {
 
 /**
  * Verify one evidence pack from an explicitly supplied path, entirely offline.
- * `ok: true` means exactly `["evidence_valid"]`.
+ * `ok: true` means exactly `["evidence_valid"]`. When `sessionDir` is supplied,
+ * the pack is additionally anchored to that initialized session's manifest.
  */
-export declare function verifyEvidencePackAtPath(path: string, options?: { repoRoot?: string }): EvidenceVerifyResult
+export declare function verifyEvidencePackAtPath(path: string, options?: { repoRoot?: string; sessionDir?: string | null }): EvidenceVerifyResult

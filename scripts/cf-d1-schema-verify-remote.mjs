@@ -21,6 +21,7 @@ import { KNOWN_BINDINGS } from "./lib/d1MigrationManifest.mjs"
 import {
   loadValidatedDeployConfigAuthority, withPrivateExecutionConfig,
 } from "./lib/cfDeployConfigAuthority.mjs"
+import { beginEvidenceOperation, emitRemoteSchemaVerificationReceipt } from "./lib/d1EvidenceReceipts.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const WRANGLER_BIN = resolve(REPO_ROOT, "node_modules/.bin/wrangler")
@@ -118,10 +119,26 @@ function main() {
     console.error(`cf:d1:schema:verify:remote: STOPPED — gate(s) not satisfied: ${gates.blocked.join(", ")}`)
     process.exit(1)
   }
+  // Evidence session (optional): the execution boundary starts after the gates,
+  // immediately before the verification runs.
+  const evidenceSessionDir = process.env.CF_D1_EVIDENCE_SESSION_DIR
+  const evidenceBegun = evidenceSessionDir ? beginEvidenceOperation() : null
+
   // One retained authority → a fresh scoped config per query → every Control and
   // Tenant introspection. Each scoped config is removed as its own call returns.
   const result = verifyRemoteSchemasWithAuthority(gates.configAuthority, { repoRoot: REPO_ROOT })
   if (!result.ok) console.error(`cf:d1:schema:verify:remote: FAIL — ${result.failures.join(", ")}`)
+
+  // Command-bound receipt from THIS result path: the emitter consumes the real
+  // verification result (whose authorityDigest must equal the session authority)
+  // and derives status itself — no exit code, no caller-supplied timestamps.
+  if (evidenceSessionDir) {
+    const receipt = emitRemoteSchemaVerificationReceipt(evidenceSessionDir, {
+      repoRoot: REPO_ROOT, authority: gates.configAuthority, begun: evidenceBegun, verificationResult: result,
+    })
+    if (receipt.ok) console.log("evidence: receipt recorded (remote_schema_verified)")
+    else console.error(`evidence: receipt FAILED — ${receipt.blocked.join(", ")}`)
+  }
   process.exit(result.ok ? 0 : 1)
 }
 

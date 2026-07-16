@@ -39,6 +39,7 @@ import {
 import {
   CREATE_HISTORY_SQL, MIGRATION_HISTORY_TABLE, reconcileFromState, buildAtomicMigrationBatchSql,
 } from "./lib/d1MigrationLedger.mjs"
+import { beginEvidenceOperation, emitMigrationApplyReceipt } from "./lib/d1EvidenceReceipts.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 export const MIGRATE_CONFIRM_PHRASE = "APPLY_PRODUCTION_D1_MIGRATIONS"
@@ -262,6 +263,11 @@ function main() {
   // EVERY gate passed — only now may Wrangler be reached.
   executionAuthorized = true
 
+  // Evidence session (optional, operator-supplied): the execution boundary starts
+  // HERE — after every gate — so no receipt can exist for a run the gates refused.
+  const evidenceSessionDir = process.env.CF_D1_EVIDENCE_SESSION_DIR
+  const evidenceBegun = evidenceSessionDir ? beginEvidenceOperation() : null
+
   // The retained authority — NOT a reusable config path — is threaded to every lane.
   // Each Wrangler call derives its own short-lived config from these exact bytes and
   // removes it immediately, so the operator's mutable configPath is never handed to
@@ -272,6 +278,22 @@ function main() {
   } catch (err) {
     console.error(`cf:d1:migrations:apply: FAILED — ${err instanceof Error ? err.message : "apply_failed"}`)
     exitCode = 1
+  }
+
+  // Command-bound receipt, emitted ONLY from this real result path once the
+  // outcome is known. The emitter derives status from the applied plan (recomputed
+  // from the repository) — there is no exit-code parameter to fabricate.
+  if (evidenceSessionDir) {
+    const manifest = loadManifest(REPO_ROOT)
+    const appliedPlan = exitCode === 0 && manifest.ok
+      ? KNOWN_BINDINGS.flatMap((binding) => buildPlan(manifest.manifest, binding))
+      : []
+    const receipt = emitMigrationApplyReceipt(evidenceSessionDir, {
+      repoRoot: REPO_ROOT, authority: gates.configAuthority, begun: evidenceBegun,
+      applyResult: { completed: exitCode === 0, appliedPlan },
+    })
+    if (receipt.ok) console.log("evidence: receipt recorded (migration_apply_completed)")
+    else console.error(`evidence: receipt FAILED — ${receipt.blocked.join(", ")}`)
   }
   process.exit(exitCode)
 }
