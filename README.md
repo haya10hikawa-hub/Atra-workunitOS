@@ -116,11 +116,107 @@ npm run cf:deploy:dry-run   # wrangler deploy --dry-run, no upload
 # Real deploy: supply IDs via env, then run the guarded orchestrator.
 export CLOUDFLARE_CONTROL_DB_ID=<uuid>
 export CLOUDFLARE_TENANT_DB_DEFAULT_ID=<uuid>
-CF_DEPLOY_EXECUTE=1 npm run cf:deploy   # prepare → preflight → build → verify → deploy
+# prepare → preflight → build → verify artifacts → verify remote D1 schema (read-only) → deploy
+CF_DEPLOY_EXECUTE=1 npm run cf:deploy
 ```
 
 Real D1 IDs are never committed: they are assembled at deploy time into an
 untracked, git-ignored `wrangler.deploy.json`.
+
+**Worker deploy never applies database migrations** — a real deploy first requires a
+successful *read-only* remote D1 schema verification.
+
+## D1 migrations & bootstrap
+
+`migrations/manifest.json` is the canonical source of truth for the two migration
+lanes (immutable, SHA-256 pinned, append-only). Full guide:
+[docs/operations/CLOUDFLARE_D1_SETUP.md §6 + §10](docs/operations/CLOUDFLARE_D1_SETUP.md).
+
+```text
+CONTROL_DB
+  0001_control_db.sql                     replay_safe
+  0004_control_auth_workspace.sql         replay_safe
+
+TENANT_DB_DEFAULT
+  0002_tenant_core.sql                    replay_safe
+  0003_tenant_persistence_foundation.sql  replay_safe
+  0005_tenant_scoped_indexes.sql          replay_safe
+  0006_action_preview_creator.sql         once
+```
+
+Every committed migration is in exactly one lane; there is no `deferred` escape
+hatch. **`replay_safe`** migrations are `IF NOT EXISTS`-guarded and re-run every
+time. **`once`** migrations are not raw-re-runnable (SQLite has no
+`ADD COLUMN IF NOT EXISTS`), so they are applied a single time and recorded in the
+`__atra_d1_migrations` ledger, which makes replaying a lane safe. `0006` is required:
+Action Preview creation always writes `created_by_user_id`, so a clean bootstrap
+includes it and supports **Action Preview and Approval**, not just WorkUnit.
+
+```bash
+npm run cf:d1:migrations:check     # manifest, paths, digests, lanes, SQL safety (offline)
+npm run cf:d1:migrations:plan      # ordered plan (no database IDs, no SQL)
+npm run cf:d1:bootstrap:local      # isolated fresh bootstrap + idempotence + local fixture
+npm run cf:d1:schema:verify:local  # verify both schemas against the schema contract
+```
+
+Production migration apply is **operator-gated** (`--remote` + a validated generated
+config + `CF_D1_MIGRATE_EXECUTE=1` + `CF_D1_MIGRATE_CONFIRM=APPLY_PRODUCTION_D1_MIGRATIONS`)
+and is never part of `cf:deploy`.
+
+The production Control DB bootstrap is repository-controlled and follows
+`prepare → inspect safe plan → gated apply → read-only verification → cleanup`, via
+`cf:d1:bootstrap:prepare` then `cf:d1:bootstrap:apply` (`--remote` + a validated
+config + `CF_D1_BOOTSTRAP_EXECUTE=1` +
+`CF_D1_BOOTSTRAP_CONFIRM=APPLY_PRODUCTION_CONTROL_BOOTSTRAP`).
+
+**The deploy config is authority-bearing** — it selects the physical databases and
+the Worker deployment configuration. Authority is the **retained exact bytes and their
+SHA-256**, not a filesystem path (a path is a mutable file that could be altered
+between calls). One shared library loads and validates it **once** and retains those
+bytes plus their digest. Every Wrangler invocation then gets its **own short-lived
+scoped config**, written from the exact bytes (exclusively created, read-only `0400`),
+verified to hash to the retained digest, and removed the instant its one call returns
+— `withPrivateExecutionConfig` never returns or reuses a path. Every remote command —
+`cf:d1:migrations:apply`, `cf:d1:schema:verify:remote`, `cf:d1:bootstrap:apply`, and
+`cf:deploy` — derives every call from one retained authority; Wrangler never sees the
+original mutable path or a reusable private config. The deploy orchestrator verifies
+in-process and, **before uploading, asserts the verification digest equals its retained
+digest**: verification and upload may use different ephemeral paths but execute
+byte-for-byte identical bytes — byte identity, not a false same-path claim. Editing,
+replacing, or deleting the original after validation cannot redirect anything, nor can
+mutating a prior call's already-removed scoped file. Scoped configs self-remove; the
+orchestrator removes the original generated config the moment its bytes are retained
+and again on every exit.
+
+**`CONTROL_DB` and `TENANT_DB_DEFAULT` must be different physical D1 databases.** The
+shared deploy-config validator compares the two `database_id`s and refuses a
+collision before any database access, so every command inherits it — `CONTROL_DB is
+never tenant-data storage` is an architecture guarantee, not a naming convention.
+Database names are validated and must be distinct too.
+
+The **prepared artifact is a reviewable plan, not execution authority**: apply
+reconstructs the canonical SQL from the operator environment at apply time and
+compares the whole file byte-for-byte, so a stale or tampered artifact fails closed
+before Wrangler. Registry database metadata must match the deploy config's real
+`TENANT_DB_DEFAULT` binding, and the registry `schema_version` is canonical (declared
+once in the manifest, pinned to a digest of the tenant lane — which covers the
+once-migration effect probe) rather than an arbitrary digit string.
+
+**Wrangler receives private temporary files, never mutable preparation files**: the
+canonical SQL is snapshotted, and the apply and every post-bootstrap COUNT query each
+mint a fresh scoped config from the **same retained authority**, so the database
+written and the database verified cannot diverge — yet no reusable config path
+survives between the write and the verification. The five records apply as one atomic
+batch, are verified read-only with COUNT-only queries over every supplied field, and
+all generated files are removed on every exit path. Because verification
+runs after the batch commits, a verification failure is an operator-action state —
+not a rollback. Never apply the generated file with a raw `wrangler d1 execute` —
+that bypasses every gate.
+
+**Worker deploy never applies migrations and never writes bootstrap records**; it
+only verifies the remote schema read-only. D1 data rollback is **separate** from
+Worker rollback. FakeD1 and `cf:deploy:dry-run` are **not** production-readiness
+proof — Issue #155 remains open until authorized remote evidence is reviewed.
 
 After `cf:build`, clean generated artifacts before committing:
 

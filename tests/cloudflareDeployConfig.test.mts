@@ -386,3 +386,115 @@ test("preflight accepts valid argument combinations", () => {
   assert.equal(p.ok, true)
   assert.equal(p.ok && (p.args as { config?: string | null } | undefined)?.config, "wrangler.deploy.json")
 })
+
+// ─── Physical D1 separation (shared invariant) ──────────────────
+
+/**
+ * `CONTROL_DB is never tenant-data storage` is an ARCHITECTURE guarantee. The
+ * control registry holds tenants/users/identities and decides which database a
+ * tenant's data lives in — so assigning ONE physical database to both approved
+ * bindings would put tenant rows inside the control registry and let a tenant
+ * migration lane rewrite the control schema. Validating each id on its own cannot
+ * see that, which is why the rule lives in the SHARED validator every command uses.
+ *
+ * Synthetic UUIDs only.
+ */
+const SAME_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3300"
+const OTHER_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+const validate = (config: unknown) => validateDeployConfig(config, { repoRoot: REPO_ROOT, allowPlaceholderIds: false })
+/** Rebuild the committed base with explicit ids and (optionally) names. */
+function configWith({ controlId = SYNTHETIC_D1_IDS.CONTROL_DB, tenantId = SYNTHETIC_D1_IDS.TENANT_DB_DEFAULT, controlName, tenantName }:
+  { controlId?: string; tenantId?: string; controlName?: string; tenantName?: string }): LooseConfig {
+  const cfg = buildConfigWithIds(baseConfig, { CONTROL_DB: controlId, TENANT_DB_DEFAULT: tenantId }) as LooseConfig
+  for (const db of cfg.d1_databases) {
+    if (db.binding === "CONTROL_DB" && controlName !== undefined) db.database_name = controlName
+    if (db.binding === "TENANT_DB_DEFAULT" && tenantName !== undefined) db.database_name = tenantName
+  }
+  return cfg
+}
+
+test("1. distinct valid Control and Tenant D1 IDs pass", () => {
+  assert.deepEqual(validate(configWith({ controlId: SAME_ID, tenantId: OTHER_ID })).failures, [])
+})
+
+test("2 + 3. identical valid IDs fail — even when the database names differ", () => {
+  assert.ok(validate(configWith({ controlId: SAME_ID, tenantId: SAME_ID })).failures
+    .includes("d1_database_id_collision:CONTROL_DB:TENANT_DB_DEFAULT"))
+  // Distinct names cannot rescue one physical database serving both bindings.
+  assert.ok(validate(configWith({ controlId: SAME_ID, tenantId: SAME_ID, controlName: "ctl-db", tenantName: "tenant-db" })).failures
+    .includes("d1_database_id_collision:CONTROL_DB:TENANT_DB_DEFAULT"))
+})
+
+test("4 + 5. a missing Control or Tenant binding fails", () => {
+  for (const missing of ["CONTROL_DB", "TENANT_DB_DEFAULT"]) {
+    const cfg = validDeployConfig() as LooseConfig
+    cfg.d1_databases = cfg.d1_databases.filter((d) => d.binding !== missing)
+    assert.ok(validate(cfg).failures.includes(`d1_binding_missing:${missing}`), `${missing} must be required`)
+  }
+})
+
+test("6 + 7. a duplicated Control or Tenant binding fails", () => {
+  for (const dup of ["CONTROL_DB", "TENANT_DB_DEFAULT"]) {
+    const cfg = validDeployConfig() as LooseConfig
+    const entry = cfg.d1_databases.find((d) => d.binding === dup)!
+    cfg.d1_databases = [...cfg.d1_databases, { ...entry }]
+    assert.ok(validate(cfg).failures.includes(`d1_binding_duplicate:${dup}`), `a duplicated ${dup} must fail closed`)
+  }
+})
+
+test("8 + 9 + 10. a malformed, empty, or placeholder database name fails", () => {
+  for (const [name, reason] of [
+    ["", "empty"],
+    ["bad name!@#", "malformed"],
+    ["Upper-Case", "malformed"],
+    ["x".repeat(80), "malformed"],
+    ["REPLACE_WITH_NAME", "placeholder"],
+    ["todo-fill-me", "placeholder"],
+  ] as const) {
+    assert.ok(validate(configWith({ controlName: name })).failures.includes(`d1_name_${reason}:CONTROL_DB`), `name ${JSON.stringify(name)} must fail as ${reason}`)
+  }
+  // A missing name is `empty`, never silently accepted.
+  const cfg = validDeployConfig() as LooseConfig
+  delete cfg.d1_databases.find((d) => d.binding === "TENANT_DB_DEFAULT")!.database_name
+  assert.ok(validate(cfg).failures.includes("d1_name_empty:TENANT_DB_DEFAULT"))
+  // The committed names are real and pass.
+  assert.deepEqual(validate(validDeployConfig()).failures, [])
+})
+
+test("11. ambiguous duplicate database names fail", () => {
+  // Wrangler resolves a binding by id, so an alias would not by itself misroute —
+  // but two bindings sharing one name make every operator-facing artifact (plan
+  // output, wrangler prompts, the bootstrap registry row that must match
+  // TENANT_DB_DEFAULT) ambiguous about which database is meant. Fail closed.
+  assert.ok(validate(configWith({ controlName: "same-db", tenantName: "same-db" })).failures
+    .includes("d1_database_name_collision:CONTROL_DB:TENANT_DB_DEFAULT"))
+  assert.deepEqual(validate(configWith({ controlName: "ctl-db", tenantName: "tenant-db" })).failures, [])
+})
+
+test("12. no D1 separation failure contains an ID or a database name value", () => {
+  const results = [
+    validate(configWith({ controlId: SAME_ID, tenantId: SAME_ID })),
+    validate(configWith({ controlName: "same-db", tenantName: "same-db" })),
+    validate(configWith({ controlName: "REPLACE_WITH_NAME" })),
+    validate(configWith({ controlName: "bad name!@#" })),
+  ]
+  for (const result of results) {
+    const serialized = JSON.stringify(result.failures)
+    for (const value of [SAME_ID, OTHER_ID, "same-db", "REPLACE_WITH_NAME", "bad name!@#", "workunit-tenant", "workunit-control-db"]) {
+      assert.equal(serialized.includes(value), false, `a failure must never echo ${value}`)
+    }
+    for (const f of result.failures as string[]) assert.match(f, /^[a-z0-9_]+(:[A-Z_]+)*$/, `reason ${f} must be a safe category`)
+  }
+})
+
+test("the ID-collision rule applies regardless of allowPlaceholderIds, and never fires on the committed placeholder base", () => {
+  // The rule is about CONCRETE ids, so it must not depend on the placeholder flag…
+  const collided = configWith({ controlId: SAME_ID, tenantId: SAME_ID })
+  for (const allowPlaceholderIds of [true, false]) {
+    assert.ok(validateDeployConfig(collided, { repoRoot: REPO_ROOT, allowPlaceholderIds }).failures
+      .includes("d1_database_id_collision:CONTROL_DB:TENANT_DB_DEFAULT"), `must fire with allowPlaceholderIds=${allowPlaceholderIds}`)
+  }
+  // …and the committed base (two DIFFERENT placeholder ids) must stay valid for the
+  // preflight self-check, which is what publishes a safe config.
+  assert.deepEqual(validateDeployConfig(baseConfig, { repoRoot: REPO_ROOT, allowPlaceholderIds: true }).failures, [])
+})

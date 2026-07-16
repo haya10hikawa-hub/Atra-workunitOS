@@ -129,6 +129,25 @@ export function validateD1Id(id) {
   return { ok: true }
 }
 
+// Cloudflare D1 database names: lowercase alphanumerics and dashes, bounded.
+export const D1_NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$/
+export const D1_NAME_MAX_LENGTH = 64
+
+/**
+ * Validate a D1 `database_name` as a bounded, non-placeholder, approved-charset
+ * name. Returns a safe reason category — never echoes the value.
+ *
+ * A name is not merely cosmetic: it is what an operator reads to tell the control
+ * registry from tenant storage, and what the bootstrap registry row must match.
+ */
+export function validateD1Name(name) {
+  if (typeof name !== "string" || name.length === 0) return { ok: false, reason: "empty" }
+  if (name.length > D1_NAME_MAX_LENGTH) return { ok: false, reason: "malformed" }
+  if (PLACEHOLDER_MARKERS.some((m) => name.toUpperCase().includes(m))) return { ok: false, reason: "placeholder" }
+  if (!D1_NAME_RE.test(name)) return { ok: false, reason: "malformed" }
+  return { ok: true }
+}
+
 // ─── Config parsing ──────────────────────────────────────────────
 
 /** Parse strict JSON config text. Fails closed on malformed input. */
@@ -246,6 +265,47 @@ export function validateDeployConfig(config, options = {}) {
     } else if (count > 1) {
       failures.push(`d1_binding_duplicate:${name}`)
     }
+  }
+
+  // ── Physical separation ──────────────────────────────────────
+  // `CONTROL_DB is never tenant-data storage` is an ARCHITECTURE guarantee, not a
+  // naming convention: the control registry holds tenants/users/identities and
+  // decides which database a tenant's data lives in. Validating each ID on its own
+  // cannot see that the same physical database was assigned to both bindings —
+  // which would put tenant rows inside the control registry and let a tenant lane
+  // migrate the control database. The two bindings must therefore be DIFFERENT
+  // physical databases, and this check belongs to the SHARED validator so every
+  // command (prepare, preflight, dry-run, deploy, migration apply, bootstrap apply,
+  // remote verification) inherits it.
+  //
+  // Deliberately independent of `allowPlaceholderIds`: the rule is about CONCRETE
+  // ids. It compares only once both bindings carry individually valid, non-
+  // placeholder ids, so the committed placeholder config is unaffected.
+  const controlEntry = dbs.find((d) => d && d.binding === "CONTROL_DB")
+  const tenantEntry = dbs.find((d) => d && d.binding === "TENANT_DB_DEFAULT")
+  if (controlEntry && tenantEntry
+    && validateD1Id(controlEntry.database_id).ok && validateD1Id(tenantEntry.database_id).ok
+    && controlEntry.database_id === tenantEntry.database_id) {
+    // Category only — never the id.
+    failures.push("d1_database_id_collision:CONTROL_DB:TENANT_DB_DEFAULT")
+  }
+
+  // Every required binding needs a real, bounded, non-placeholder name…
+  for (const binding of REQUIRED_D1_BINDINGS) {
+    const entry = dbs.find((d) => d && d.binding === binding)
+    if (!entry) continue // missing already reported
+    const res = validateD1Name(entry.database_name)
+    if (!res.ok) failures.push(`d1_name_${res.reason}:${binding}`)
+  }
+  // …and the two approved bindings must be distinguishable. Wrangler resolves a D1
+  // binding by id, so an alias would not by itself misroute — but two bindings
+  // sharing one name make every operator-facing artifact (plan output, wrangler
+  // prompts, the bootstrap registry row that must match `TENANT_DB_DEFAULT`)
+  // ambiguous about which database is meant. Fail closed on distinct names.
+  if (controlEntry && tenantEntry
+    && validateD1Name(controlEntry.database_name).ok && validateD1Name(tenantEntry.database_name).ok
+    && controlEntry.database_name === tenantEntry.database_name) {
+    failures.push("d1_database_name_collision:CONTROL_DB:TENANT_DB_DEFAULT")
   }
 
   if (!allowPlaceholderIds) {
