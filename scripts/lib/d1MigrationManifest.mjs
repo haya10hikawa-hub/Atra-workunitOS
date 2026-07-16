@@ -225,14 +225,33 @@ export function validateManifest(manifest, repoRoot) {
     if (!seenPaths.has(`${MIGRATIONS_PREFIX}${name}`)) failures.push(`migration_not_in_any_lane:${name}`)
   }
 
+  // The canonical tenant registry schema version, bound to the lane it describes.
+  validateRegistry(manifest, failures)
+
   return { ok: failures.length === 0, failures }
 }
 
-/** Committed `migrations/*.sql` basenames, sorted. Never reads file contents. */
+/**
+ * Committed migration basenames, sorted. Never reads file contents.
+ *
+ * Only conventionally NUMBERED migrations (`NNNN_name.sql`) count. That is the risk
+ * the completeness rule exists to close: a file that looks like part of the ordered
+ * sequence but is invisible to operations — exactly how 0006 shipped outside the
+ * lanes. A `migrations/` file that is not numbered is not part of the sequence and
+ * is inert unless a lane references it, in which case it is validated as a lane
+ * member anyway.
+ *
+ * It also keeps the rule from being non-deterministic: tests write transient
+ * `_scratch.sql` fixtures here, and the runner executes test files in parallel, so
+ * counting every `.sql` would make an unrelated suite's manifest validation fail
+ * depending on timing.
+ */
+const NUMBERED_MIGRATION_RE = /^\d{4}_[A-Za-z0-9_]+\.sql$/
+
 export function listCommittedMigrationFiles(repoRoot) {
   let entries
   try { entries = readdirSync(resolvePath(repoRoot, MIGRATIONS_DIR)) } catch { return [] }
-  return entries.filter((n) => n.endsWith(".sql")).sort()
+  return entries.filter((n) => NUMBERED_MIGRATION_RE.test(n)).sort()
 }
 
 // ─── Ordered plan ────────────────────────────────────────────────
@@ -292,6 +311,56 @@ export function scanMigrationSqlSafety(repoRoot, manifest) {
     for (const f of forbidden) if (f.re.test(sql)) failures.push(`forbidden_sql_${f.code}:${name}`)
   }
   return { ok: failures.length === 0, failures }
+}
+
+// ─── Registry schema version (canonical) ─────────────────────────
+
+/**
+ * The ONE canonical source of the tenant registry's `schema_version`.
+ *
+ * `tenant_databases.schema_version` must not be an arbitrary operator-supplied
+ * digit string: it names WHICH tenant schema the registry row claims the database
+ * has. The tenant resolver's bounded format check (digits, bounded length) is
+ * necessary but cannot tell a correct version from a plausible one.
+ *
+ * The version is PINNED alongside a digest of the tenant lane it describes, so the
+ * active migration plan cannot change without the version being reconsidered —
+ * `validateManifest` fails with `registry_plan_digest_mismatch` until both are
+ * updated together.
+ */
+export const REGISTRY_BINDING = "TENANT_DB_DEFAULT"
+const SCHEMA_VERSION_RE = /^[0-9]{1,10}$/
+
+/** Deterministic digest of a binding's ordered lane (safe: names + modes + digests). */
+export function computeRegistryPlanDigest(manifest, binding = REGISTRY_BINDING) {
+  const parts = buildPlan(manifest, binding).map((e) => `${e.sequence}:${e.name}:${e.apply}:${e.sha256}`)
+  return createHash("sha256").update(parts.join("\n")).digest("hex")
+}
+
+/**
+ * The canonical tenant registry schema version, or `null` when the manifest does
+ * not declare one (which `validateManifest` rejects). Never guessed or derived
+ * from operator input.
+ */
+export function tenantRegistrySchemaVersion(manifest) {
+  const declared = manifest && manifest.registry && manifest.registry[REGISTRY_BINDING]
+  const version = declared && declared.schemaVersion
+  return typeof version === "string" && SCHEMA_VERSION_RE.test(version) ? version : null
+}
+
+function validateRegistry(manifest, failures) {
+  const declared = manifest.registry && manifest.registry[REGISTRY_BINDING]
+  if (!declared || typeof declared !== "object") { failures.push(`registry_missing:${REGISTRY_BINDING}`); return }
+  if (tenantRegistrySchemaVersion(manifest) === null) failures.push(`registry_schema_version_invalid:${REGISTRY_BINDING}`)
+  if (typeof declared.planDigest !== "string" || !SHA256_RE.test(declared.planDigest)) {
+    failures.push(`registry_plan_digest_invalid:${REGISTRY_BINDING}`)
+    return
+  }
+  // The version is bound to the plan it describes: changing the active lane
+  // without reconsidering the registry schema version fails closed here.
+  if (computeRegistryPlanDigest(manifest, REGISTRY_BINDING) !== declared.planDigest) {
+    failures.push(`registry_plan_digest_mismatch:${REGISTRY_BINDING}`)
+  }
 }
 
 /** SHA-256 digest of the manifest's pinned-digest set (safe, ID-free). */

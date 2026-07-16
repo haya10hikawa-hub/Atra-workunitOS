@@ -359,11 +359,34 @@ approved repository-root location, and is no broader than `0600`;
 `CF_D1_BOOTSTRAP_EXECUTE=1`; `CF_D1_BOOTSTRAP_CONFIRM=APPLY_PRODUCTION_CONTROL_BOOTSTRAP`;
 and a valid manifest + Control DB schema contract.
 
-The five records are applied as **one atomic D1 batch** (all-or-nothing), verified
-read-only afterwards at category level (counts only — no IDs, email, subject, or row
-contents printed), and the generated SQL is removed on **every** exit path. Never run
-a raw `wrangler d1 execute` against the generated file: it bypasses every gate, the
-verification, and the cleanup.
+**The prepared artifact is a reviewable plan, not execution authority.** Apply
+independently reconstructs the canonical SQL from the operator environment at apply
+time and compares the **entire file** byte-for-byte, so a stale or tampered artifact
+— appended `DELETE`, a sixth `INSERT`, a changed email or database ID, reordered
+statements — fails closed before Wrangler. Failures are safe categories that never
+echo a value.
+
+**Registry metadata must match the actual binding**: `CF_D1_BOOTSTRAP_DATABASE_ID` /
+`_NAME` must equal the deploy config's real `TENANT_DB_DEFAULT` `database_id` /
+`database_name`; the Control DB's own ID is never accepted as tenant metadata.
+**Schema version is canonical**, not arbitrary: it must equal the manifest's
+`registry.TENANT_DB_DEFAULT.schemaVersion`, which is pinned to the tenant lane it
+describes.
+
+**Wrangler receives a private temporary canonical copy**, never the mutable
+repository-root artifact — closing the validate-then-execute window. The five records
+are applied as **one atomic D1 batch** (all-or-nothing), then verified read-only at
+category level with COUNT-only queries over **all** supplied fields (no IDs, email,
+subject, or row contents printed). Both the temporary execution file and the
+repository-root artifact are removed on **every** exit path.
+
+Because verification runs **after** the batch commits, a verification failure is an
+operator-action state (`bootstrap_verification_failed_after_commit`) — **not** a
+rollback. The records exist; the command exits non-zero, prints no values, requires
+operator investigation, and issues no compensating `DELETE`.
+
+Never run a raw `wrangler d1 execute` against the generated file: it bypasses every
+gate, the canonical binding, the verification, and the cleanup.
 
 ### Rollback limitations
 

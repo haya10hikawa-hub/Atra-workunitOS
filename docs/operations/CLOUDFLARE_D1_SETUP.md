@@ -596,7 +596,7 @@ cleanup. Use `cf:d1:bootstrap:apply`.
 ```bash
 CF_D1_BOOTSTRAP_TENANT_ID=... CF_D1_BOOTSTRAP_TENANT_NAME=... CF_D1_BOOTSTRAP_TENANT_SLUG=... \
 CF_D1_BOOTSTRAP_TENANT_STATUS=active \
-CF_D1_BOOTSTRAP_DATABASE_NAME=... CF_D1_BOOTSTRAP_DATABASE_ID=... CF_D1_BOOTSTRAP_SCHEMA_VERSION=1 \
+CF_D1_BOOTSTRAP_DATABASE_NAME=... CF_D1_BOOTSTRAP_DATABASE_ID=... CF_D1_BOOTSTRAP_SCHEMA_VERSION=2 \
 CF_D1_BOOTSTRAP_USER_ID=... CF_D1_BOOTSTRAP_USER_EMAIL=... \
 CF_D1_BOOTSTRAP_MEMBERSHIP_ID=... CF_D1_BOOTSTRAP_MEMBERSHIP_ROLE=owner CF_D1_BOOTSTRAP_MEMBERSHIP_STATUS=active \
 CF_D1_BOOTSTRAP_IDENTITY_ID=... CF_D1_BOOTSTRAP_IDENTITY_PROVIDER=jwt CF_D1_BOOTSTRAP_IDENTITY_SUBJECT=... \
@@ -607,6 +607,20 @@ Every value is **operator-provided with no implicit defaults**; a single missing
 variable fails closed. The role is allowlisted (`owner|manager|editor|viewer`),
 tenant and membership status must be **explicitly** `active`, and the database ID
 uses the **same UUID validation as the deployment config** (placeholders rejected).
+
+`CF_D1_BOOTSTRAP_SCHEMA_VERSION` is **canonical, not arbitrary**. It names *which*
+tenant schema the registry row claims the database has, so a bounded digit-format
+check (what the tenant resolver does — necessary, but not sufficient) cannot tell a
+correct version from a plausible one. It must equal the manifest's single canonical
+source (`registry.TENANT_DB_DEFAULT.schemaVersion`, currently **2** — the schema
+*including* `0006`/`created_by_user_id`). That version is pinned to a digest of the
+tenant lane it describes, so changing the active plan fails
+`cf:d1:migrations:check` with `registry_plan_digest_mismatch` until the version and
+digest are updated together.
+
+**The prepared artifact is a reviewable plan, not execution authority.** Preparing
+grants nothing: `cf:d1:bootstrap:apply` independently reconstructs the canonical SQL
+from the operator environment *at apply time* and refuses any difference (below).
 Output is written to the untracked repository-root `bootstrap.control.sql` with
 `0600` permissions. **No value is ever logged** (failures name only the field).
 Generated bootstrap SQL is git-ignored and must never be committed.
@@ -635,6 +649,48 @@ broader than `0600`; `CF_D1_BOOTSTRAP_EXECUTE=1`; the exact confirmation phrase;
 a valid manifest + Control DB schema contract. Operator input is **re-validated** at
 apply time — the command does not trust `prepare`.
 
+**Canonical artifact binding.** Those gates describe the *file*; this one describes
+the *bytes*. Apply reads the artifact (only after the path/type/mode checks pass,
+and only after a hard size cap), parses its bounded non-sensitive header (format
+version + one `generated_at` instant — no operator value), re-runs
+`buildBootstrapSql` against the **currently validated operator input** plus that
+timestamp, and compares the **entire file** byte-for-byte. Any difference fails
+closed:
+
+| Category | Meaning |
+| --- | --- |
+| `bootstrap_sql_unreadable` | the artifact could not be read |
+| `bootstrap_sql_too_large` | over the size cap — rejected **before** parsing |
+| `bootstrap_sql_format_invalid` | missing/unknown format version, or a non-canonical `generated_at` |
+| `bootstrap_sql_values_mismatch` | the bytes encode different values (stale or tampered) |
+| `bootstrap_sql_noncanonical` | content appended to, or removed from, the canonical bytes |
+
+No category ever contains the differing value, SQL, email, subject, database ID, or
+file contents. This is a **reconstruct-and-compare**, not a forbidden-keyword scan:
+it covers changed values, a replaced table name, an appended `DELETE`/`UPDATE`/sixth
+`INSERT`, a removed statement, reordered statements, and a stale artifact prepared
+from environment variables the operator has since changed — with no allow/deny list
+to outgrow. The header is not trusted as a digest; it supplies only the timestamp,
+and the executable bytes are independently regenerated from the environment.
+
+**Registry binding.** The registry row tells the runtime resolver which D1 database a
+tenant's data lives in, so the operator's metadata must describe the **actual**
+binding: `CF_D1_BOOTSTRAP_DATABASE_ID` must equal the validated deploy config's
+`TENANT_DB_DEFAULT.database_id`, and `CF_D1_BOOTSTRAP_DATABASE_NAME` its
+`database_name`. Compared in memory; failures are `tenant_database_id_mismatch` /
+`tenant_database_name_mismatch` and neither value is printed. Two individually valid
+UUIDs that differ are refused — and the **Control DB's own ID can never be stored as
+the tenant registry database ID**, which would point tenant data at the control
+registry itself.
+
+**No validate-then-execute window (TOCTOU).** Wrangler never receives
+`bootstrap.control.sql`. Validating the repository-root artifact and then handing
+Wrangler that same mutable path would leave a window in which the reviewed bytes and
+the executed bytes differ. Instead the canonical bytes **retained in memory from
+validation** are written to a fresh random private (`0600`) temporary file, and only
+that file is executed; the bytes are never re-read from the original path. The
+temporary directory is removed unconditionally.
+
 **Atomicity.** The five records are applied by **one** `wrangler d1 execute --file`
 invocation, which D1 runs as a **single implicit atomic batch**: all five commit, or
 none do. Verified against this repository's pinned Wrangler (4.99.0): D1 **rejects**
@@ -648,17 +704,42 @@ provider/subject — and any missing parent — fails closed with **zero new row
 #### 4. Read-only verification (automatic)
 
 After a successful write the command verifies the Control DB **read-only** and
-**category-level**: exactly one active tenant, one matching registry row, one user,
-one active membership, one auth identity, and all foreign keys resolving. Every query
-is a bare `SELECT COUNT(*)`; **no ID, email, subject, database ID, or row content is
-read or printed**. A failed verification returns failure and removes the generated
-SQL.
+**category-level**. Every query is a bare `SELECT COUNT(*) AS c`; the supplied values
+appear **only as escaped predicates**, never in a select list — so the only thing
+that can come back is an integer. **No ID, email, subject, database ID, or row
+content is read or printed.**
 
-#### 5. Cleanup (guaranteed)
+Each check requires exactly one row matching **all** supplied fields — counting by id
+alone would confirm almost nothing ("a tenant with this id exists" is true even if
+the bootstrap wrote the wrong database id or a stale schema version):
 
-The generated SQL is removed on **every** exit path — success, Wrangler failure,
-verification failure, refused gates, or an unexpected throw — and never before
-Wrangler has read it.
+| Category | Requires exactly one row matching |
+| --- | --- |
+| `tenant_row` | id, name, slug, status `active` |
+| `registry_row` | tenant_id, database_name, database_id, the **canonical** schema_version, status `active`, tenant FK resolves |
+| `user_row` | id, email |
+| `membership_row` | id, tenant_id, user_id, exact allowlisted role, status `active`, tenant + user FKs resolve |
+| `identity_row` | id, user_id, provider, provider_subject, email, user FK resolves |
+
+Failure output is category names only.
+
+#### 5. If verification fails — an operator-action state, not a rollback
+
+The five INSERTs are **committed** by the atomic batch *before* this read-only
+verification runs. A verification failure is therefore **not** a rollback: the
+records exist. The command reports `bootstrap_verification_failed_after_commit`,
+exits non-zero, removes all generated files, prints no record values, and states that
+**operator investigation is required**. It deliberately issues **no compensating
+`DELETE`** — automatic destructive repair of a state we do not understand is how a
+bad bootstrap becomes data loss. The canonical artifact binding makes this state
+exceptional rather than a routine stale-input path.
+
+#### 6. Cleanup (guaranteed)
+
+Both the temporary execution file and the repository-root preparation artifact are
+removed on **every** exit path — success, Wrangler failure, verification failure,
+refused gates, or an unexpected throw — and never before Wrangler has read the
+temporary file.
 
 ### Read-only remote schema verification
 

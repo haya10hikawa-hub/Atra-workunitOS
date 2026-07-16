@@ -5,12 +5,25 @@
 
 import type { DatabaseSync } from "node:sqlite"
 
-/** The operator-supplied identifiers a bootstrap wrote. Never logged. */
+/**
+ * The operator-supplied values a bootstrap wrote. EVERY field is used as an escaped
+ * COUNT predicate — never selected, never logged.
+ */
 export interface BootstrapVerifyValues {
   tenantId: string
+  tenantName: string
+  tenantSlug: string
+  databaseName: string
+  databaseId: string
+  /** The canonical registry schema version (see the manifest's `registry`). */
+  schemaVersion: string
   userId: string
+  userEmail: string
   membershipId: string
+  membershipRole: string
   identityId: string
+  identityProvider: string
+  identitySubject: string
 }
 
 /** A single category-level check. Each query returns exactly one integer `c`. */

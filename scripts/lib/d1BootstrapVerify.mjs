@@ -21,27 +21,63 @@
 /** Single-quote escape for SQL literals. */
 const lit = (v) => `'${String(v).replace(/'/g, "''")}'`
 
+/** The roles a membership may hold. Mirrors the bootstrap input allowlist. */
+const ALLOWED_ROLES = ["owner", "manager", "editor", "viewer"]
+
 /**
  * The ordered verification queries. Each yields exactly one integer column `c`,
- * expected to equal 1. The JOINs are what prove the foreign-key relationships
- * resolve; the status predicates prove tenant and membership are active.
+ * expected to equal 1.
+ *
+ * EVERY supplied field is a predicate. Counting a row that merely shares an id
+ * would confirm almost nothing: "one row with this tenant id exists" is true even
+ * if the bootstrap wrote the wrong name, the wrong database id, or a stale schema
+ * version. So each query matches on ALL of the fields the bootstrap supplied for
+ * that table, and the JOINs prove the foreign-key relationships resolve.
+ *
+ * The values appear ONLY as escaped predicates — never in a select list — so the
+ * only thing that can come back is the integer count.
  */
 export function buildVerificationQueries(values) {
   const t = lit(values.tenantId)
   const u = lit(values.userId)
   const m = lit(values.membershipId)
   const i = lit(values.identityId)
+  const roles = ALLOWED_ROLES.map(lit).join(",")
   return [
-    // Exactly one target tenant row exists, and it is active.
-    { category: "tenant_row", sql: `SELECT COUNT(*) AS c FROM tenants WHERE id = ${t} AND status = 'active';` },
-    // Exactly one matching registry row exists, active, and its tenant FK resolves.
-    { category: "registry_row", sql: `SELECT COUNT(*) AS c FROM tenant_databases td JOIN tenants tn ON tn.id = td.tenant_id WHERE td.tenant_id = ${t} AND td.status = 'active';` },
-    // Exactly one user exists.
-    { category: "user_row", sql: `SELECT COUNT(*) AS c FROM users WHERE id = ${u};` },
-    // Exactly one ACTIVE membership exists and both of its FKs resolve.
-    { category: "membership_row", sql: `SELECT COUNT(*) AS c FROM tenant_memberships tm JOIN tenants tn ON tn.id = tm.tenant_id JOIN users us ON us.id = tm.user_id WHERE tm.id = ${m} AND tm.tenant_id = ${t} AND tm.user_id = ${u} AND tm.status = 'active';` },
-    // Exactly one auth identity exists and its user FK resolves.
-    { category: "identity_row", sql: `SELECT COUNT(*) AS c FROM auth_identities ai JOIN users us ON us.id = ai.user_id WHERE ai.id = ${i} AND ai.user_id = ${u};` },
+    // Exactly one tenant: id, name, slug, active.
+    {
+      category: "tenant_row",
+      sql: `SELECT COUNT(*) AS c FROM tenants WHERE id = ${t} AND name = ${lit(values.tenantName)} AND slug = ${lit(values.tenantSlug)} AND status = 'active';`,
+    },
+    // Exactly one registry row: tenant_id, database_name, database_id, the CANONICAL
+    // schema_version, active — and its tenant foreign key resolves.
+    {
+      category: "registry_row",
+      sql: `SELECT COUNT(*) AS c FROM tenant_databases td JOIN tenants tn ON tn.id = td.tenant_id WHERE td.tenant_id = ${t}`
+        + ` AND td.database_name = ${lit(values.databaseName)} AND td.database_id = ${lit(values.databaseId)}`
+        + ` AND td.schema_version = ${lit(values.schemaVersion)} AND td.status = 'active';`,
+    },
+    // Exactly one user: id and email.
+    {
+      category: "user_row",
+      sql: `SELECT COUNT(*) AS c FROM users WHERE id = ${u} AND email = ${lit(values.userEmail)};`,
+    },
+    // Exactly one membership: id, tenant_id, user_id, the exact allowlisted role,
+    // active — and both foreign keys resolve.
+    {
+      category: "membership_row",
+      sql: `SELECT COUNT(*) AS c FROM tenant_memberships tm JOIN tenants tn ON tn.id = tm.tenant_id JOIN users us ON us.id = tm.user_id`
+        + ` WHERE tm.id = ${m} AND tm.tenant_id = ${t} AND tm.user_id = ${u}`
+        + ` AND tm.role = ${lit(values.membershipRole)} AND tm.role IN (${roles}) AND tm.status = 'active';`,
+    },
+    // Exactly one auth identity: id, user_id, provider, provider_subject, email —
+    // and its user foreign key resolves.
+    {
+      category: "identity_row",
+      sql: `SELECT COUNT(*) AS c FROM auth_identities ai JOIN users us ON us.id = ai.user_id WHERE ai.id = ${i} AND ai.user_id = ${u}`
+        + ` AND ai.provider = ${lit(values.identityProvider)} AND ai.provider_subject = ${lit(values.identitySubject)}`
+        + ` AND ai.email = ${lit(values.userEmail)};`,
+    },
   ]
 }
 

@@ -20,6 +20,9 @@ import {
   scanMigrationSqlSafety,
   manifestDigest,
   resolveMigrationPath,
+  computeRegistryPlanDigest,
+  listCommittedMigrationFiles,
+  tenantRegistrySchemaVersion,
   KNOWN_BINDINGS,
 } from "../scripts/lib/d1MigrationManifest.mjs"
 
@@ -109,6 +112,79 @@ test("a committed migration that is in NO lane fails validation (manifest is can
   // no longer covers every migration and must fail closed.
   m.lanes.TENANT_DB_DEFAULT = m.lanes.TENANT_DB_DEFAULT.filter((e: { path: string }) => !e.path.includes("0006"))
   assert.ok(failuresOf(m).includes("migration_not_in_any_lane:0006_action_preview_creator.sql"))
+})
+
+test("the completeness rule covers NUMBERED migrations — a new unlaned one fails, transient scratch files do not", () => {
+  // The risk it closes: a file that LOOKS like part of the ordered sequence but is
+  // invisible to operations (exactly how 0006 shipped outside the lanes).
+  const numbered = resolve(REPO_ROOT, "migrations/0009_unlaned_probe_test.sql")
+  try {
+    writeFileSync(numbered, "CREATE TABLE IF NOT EXISTS probe (id TEXT PRIMARY KEY);\n")
+    assert.ok(listCommittedMigrationFiles(REPO_ROOT).includes("0009_unlaned_probe_test.sql"))
+    assert.ok(failuresOf(base()).includes("migration_not_in_any_lane:0009_unlaned_probe_test.sql"),
+      "a numbered migration outside every lane must fail closed")
+  } finally {
+    rmSync(numbered, { force: true })
+  }
+  // A non-numbered file is not part of the sequence, so it cannot make an unrelated
+  // suite's validation fail depending on which tests happen to be running.
+  const scratch = resolve(REPO_ROOT, "migrations/_scratch_probe_test.sql")
+  try {
+    writeFileSync(scratch, "CREATE TABLE IF NOT EXISTS scratch (id TEXT PRIMARY KEY);\n")
+    assert.equal(listCommittedMigrationFiles(REPO_ROOT).includes("_scratch_probe_test.sql"), false)
+    assert.deepEqual(failuresOf(base()), [], "a transient scratch fixture must not break the committed manifest")
+  } finally {
+    rmSync(scratch, { force: true })
+  }
+})
+
+// ─── Canonical registry schema version ──────────────────────────
+
+test("the manifest declares ONE canonical tenant registry schema version, pinned to the lane it describes", () => {
+  const m = base()
+  assert.equal(tenantRegistrySchemaVersion(m), "2", "the canonical version must be declared")
+  assert.equal(m.registry.TENANT_DB_DEFAULT.planDigest, computeRegistryPlanDigest(m, "TENANT_DB_DEFAULT"))
+  assert.deepEqual(failuresOf(m), [])
+})
+
+test("changing the active migration plan without updating the canonical schema version FAILS", () => {
+  // The whole point of pinning: the version names WHICH tenant schema the registry
+  // row claims, so the plan cannot silently drift away from it.
+  for (const mutate of [
+    // Dropping a migration from the lane.
+    (m: { lanes: { TENANT_DB_DEFAULT: unknown[] } }) => { m.lanes.TENANT_DB_DEFAULT.pop() },
+    // Changing how a migration is applied.
+    (m: { lanes: { TENANT_DB_DEFAULT: Array<{ apply: string }> } }) => { m.lanes.TENANT_DB_DEFAULT[0].apply = "once" },
+    // Changing a migration's position in the lane.
+    (m: { lanes: { TENANT_DB_DEFAULT: Array<{ sequence: number }> } }) => { m.lanes.TENANT_DB_DEFAULT[3].sequence = 9 },
+  ]) {
+    const m = base()
+    mutate(m)
+    assert.ok(
+      failuresOf(m).includes("registry_plan_digest_mismatch:TENANT_DB_DEFAULT"),
+      "a plan change must force the canonical schema version to be reconsidered",
+    )
+  }
+  // Reordering the DECLARED entries without changing the plan is not a plan change
+  // (buildPlan sorts by sequence), so the digest is stable.
+  const stable = base()
+  assert.equal(computeRegistryPlanDigest(stable, "TENANT_DB_DEFAULT"), computeRegistryPlanDigest(base(), "TENANT_DB_DEFAULT"))
+})
+
+test("a missing or malformed canonical registry declaration fails validation", () => {
+  const missing = base()
+  delete missing.registry
+  assert.ok(failuresOf(missing).includes("registry_missing:TENANT_DB_DEFAULT"))
+
+  for (const bad of ["", "v2", "abc", "2.0", " 2", "12345678901"]) {
+    const m = base()
+    m.registry.TENANT_DB_DEFAULT.schemaVersion = bad
+    assert.ok(failuresOf(m).includes("registry_schema_version_invalid:TENANT_DB_DEFAULT"), `version ${JSON.stringify(bad)} must be refused`)
+    assert.equal(tenantRegistrySchemaVersion(m), null)
+  }
+  const badDigest = base()
+  badDigest.registry.TENANT_DB_DEFAULT.planDigest = "not-a-digest"
+  assert.ok(failuresOf(badDigest).includes("registry_plan_digest_invalid:TENANT_DB_DEFAULT"))
 })
 
 // ─── Structural rules ───────────────────────────────────────────
@@ -259,6 +335,15 @@ test("a newly appended valid migration is representable without rewriting old en
     const m = base()
     const before = JSON.parse(JSON.stringify(m.lanes.TENANT_DB_DEFAULT))
     m.lanes.TENANT_DB_DEFAULT.push({ sequence: 5, binding: "TENANT_DB_DEFAULT", path: "migrations/_appended_test.sql", sha256: digest, kind: "index", apply: "replay_safe" })
+
+    // Changing the active plan WITHOUT reconsidering the canonical registry schema
+    // version fails closed — the version is pinned to the lane it describes.
+    assert.deepEqual(validateManifest(m, REPO_ROOT).failures, ["registry_plan_digest_mismatch:TENANT_DB_DEFAULT"])
+
+    // Updating the registry declaration alongside the plan is what makes the append
+    // representable.
+    m.registry.TENANT_DB_DEFAULT.schemaVersion = String(Number(m.registry.TENANT_DB_DEFAULT.schemaVersion) + 1)
+    m.registry.TENANT_DB_DEFAULT.planDigest = computeRegistryPlanDigest(m, "TENANT_DB_DEFAULT")
     const result = validateManifest(m, REPO_ROOT)
     assert.deepEqual(result.failures, [])
     // Existing entries are untouched (append-only) — 0006's pinned digest included.

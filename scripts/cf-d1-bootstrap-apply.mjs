@@ -38,17 +38,27 @@
 import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
 import { spawnSync } from "node:child_process"
-import { existsSync, lstatSync, realpathSync } from "node:fs"
-import { loadManifest, validateManifest } from "./lib/d1MigrationManifest.mjs"
+import { existsSync, lstatSync, realpathSync, statSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { loadManifest, validateManifest, REGISTRY_BINDING } from "./lib/d1MigrationManifest.mjs"
 import { loadSchemaContract } from "./lib/d1SchemaContract.mjs"
 import { loadConfigFile, validateDeployConfig } from "./lib/cfDeployConfig.mjs"
-import { BOOTSTRAP_SQL_BASENAME, BOOTSTRAP_SQL_PATH, removeBootstrapSql, readOperatorInput } from "./cf-d1-bootstrap-prepare.mjs"
+import {
+  BOOTSTRAP_SQL_BASENAME, BOOTSTRAP_SQL_PATH, BOOTSTRAP_ARTIFACT_MAX_BYTES,
+  removeBootstrapSql, readOperatorInput, buildBootstrapSql, parseArtifactHeader,
+} from "./cf-d1-bootstrap-prepare.mjs"
 import { verifyBootstrapVia } from "./lib/d1BootstrapVerify.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 export const BOOTSTRAP_CONFIRM_PHRASE = "APPLY_PRODUCTION_CONTROL_BOOTSTRAP"
 /** The bootstrap may target this binding and NO other. */
 export const BOOTSTRAP_BINDING = "CONTROL_DB"
+/**
+ * The five INSERTs are COMMITTED by the atomic batch before the separate read-only
+ * verification runs. A verification failure is therefore NOT a rollback — the rows
+ * exist. This is an operator-action state, reported as such.
+ */
+export const VERIFICATION_FAILED_AFTER_COMMIT = "bootstrap_verification_failed_after_commit"
 const WRANGLER_BIN = resolve(REPO_ROOT, "node_modules/.bin/wrangler")
 
 // ─── Execution authorization latch ───────────────────────────────
@@ -96,6 +106,79 @@ export function inspectBootstrapArtifact(path = BOOTSTRAP_SQL_PATH, repoRoot = R
   return { ok: blocked.length === 0, blocked }
 }
 
+// ─── Canonical artifact binding ──────────────────────────────────
+
+/**
+ * Prove the artifact is EXACTLY the canonical SQL that the CURRENTLY validated
+ * operator input generates — and return those canonical bytes.
+ *
+ * WHY: every other gate describes the file (path, type, mode) but says nothing
+ * about the bytes Wrangler would execute. At the audited head a 0600 file at the
+ * approved path containing `DROP TABLE tenants;` passed every gate. A prepared
+ * artifact is a reviewable PLAN; authority comes from the operator environment.
+ *
+ * This is a reconstruct-and-compare, NOT a keyword scan: `buildBootstrapSql` is
+ * re-run against the current values plus the artifact's own parsed `generated_at`
+ * (the one thing that cannot be derived from the environment), and the ENTIRE byte
+ * sequence is compared. That covers changed values, replaced table names, appended
+ * or removed statements, and reordering, with no allow/deny list to outgrow.
+ *
+ * The header is not trusted as a digest: it supplies only the timestamp, and the
+ * executable bytes are independently reconstructed from the environment.
+ *
+ * Returns `{ ok, sql }` (the canonical bytes) or `{ ok:false, blocked }` — safe
+ * categories only, NEVER the differing value, SQL, or file contents.
+ */
+export function validateCanonicalArtifact({ values, path = BOOTSTRAP_SQL_PATH } = {}) {
+  // Size is bounded BEFORE the file is read or parsed.
+  let size
+  try { size = statSync(path).size } catch { return { ok: false, blocked: ["bootstrap_sql_unreadable"] } }
+  if (size > BOOTSTRAP_ARTIFACT_MAX_BYTES) return { ok: false, blocked: ["bootstrap_sql_too_large"] }
+
+  let actual
+  try { actual = readFileSync(path, "utf8") } catch { return { ok: false, blocked: ["bootstrap_sql_unreadable"] } }
+  // Re-check after reading: `statSync` and `readFileSync` are two syscalls, and the
+  // file could have grown between them. Still before anything is parsed.
+  if (Buffer.byteLength(actual) > BOOTSTRAP_ARTIFACT_MAX_BYTES) return { ok: false, blocked: ["bootstrap_sql_too_large"] }
+
+  // The bounded, non-sensitive header: format version + one generated_at instant.
+  const header = parseArtifactHeader(actual)
+  if (!header.ok) return { ok: false, blocked: [header.failure] }
+
+  // Reconstruct from CURRENT authority. A stale artifact — generated from values
+  // the operator has since changed — cannot survive this.
+  let expected
+  try { expected = buildBootstrapSql(values, header.generatedAt) } catch { return { ok: false, blocked: ["bootstrap_sql_format_invalid"] } }
+
+  if (actual === expected) return { ok: true, sql: expected }
+
+  // Classify WITHOUT leaking: content added or removed at the edges reads as
+  // non-canonical; a difference inside otherwise-identical structure reads as a
+  // value mismatch. Both fail closed identically — the distinction is only an
+  // operator hint, and neither category carries any value.
+  const noncanonical = actual.startsWith(expected) || expected.startsWith(actual)
+  return { ok: false, blocked: [noncanonical ? "bootstrap_sql_noncanonical" : "bootstrap_sql_values_mismatch"] }
+}
+
+/**
+ * The operator's registry metadata must describe the ACTUAL tenant binding.
+ *
+ * The registry row tells the runtime resolver which D1 database a tenant's data
+ * lives in. If it names a database that is not the deployment's real
+ * `TENANT_DB_DEFAULT`, every later tenant resolution is pointed at the wrong (or a
+ * non-existent) database — and supplying the CONTROL_DB id here would point tenant
+ * data at the control registry itself. Compared in memory; neither value is printed.
+ */
+export function evaluateRegistryBinding(values, config) {
+  const blocked = []
+  const tenant = (config && Array.isArray(config.d1_databases) ? config.d1_databases : [])
+    .find((d) => d && d.binding === REGISTRY_BINDING)
+  if (!tenant) return { ok: false, blocked: ["tenant_binding_missing"] }
+  if (values.databaseId !== tenant.database_id) blocked.push("tenant_database_id_mismatch")
+  if (values.databaseName !== tenant.database_name) blocked.push("tenant_database_name_mismatch")
+  return { ok: blocked.length === 0, blocked }
+}
+
 /** The requested target binding (defaults to CONTROL_DB). */
 export function parseBindingArg(argv) {
   const i = argv.indexOf("--binding")
@@ -108,11 +191,16 @@ function parseConfigArg(argv) {
 }
 
 /**
- * Evaluate EVERY gate. Returns `{ ok, blocked }` — safe reason codes only.
- * Pure: performs no SQL, no network, no Wrangler invocation, and logs nothing.
+ * Evaluate EVERY gate. Returns `{ ok, blocked, canonicalSql }` — safe reason codes
+ * only. `canonicalSql` is the validated canonical byte sequence, returned so the
+ * caller executes THOSE bytes rather than re-reading a mutable path.
+ *
+ * Pure apart from reading the artifact: no SQL, no network, no Wrangler
+ * invocation, and it logs nothing.
  */
 export function evaluateBootstrapGates({ env = process.env, argv = [], repoRoot = REPO_ROOT, configPath, sqlPath = BOOTSTRAP_SQL_PATH } = {}) {
   const blocked = []
+  let canonicalSql = null
   if (!argv.includes("--remote")) blocked.push("missing_remote_flag")
   if (env.CF_D1_BOOTSTRAP_EXECUTE !== "1") blocked.push("missing_execute_flag")
   if (env.CF_D1_BOOTSTRAP_CONFIRM !== BOOTSTRAP_CONFIRM_PHRASE) blocked.push("missing_confirmation")
@@ -120,6 +208,13 @@ export function evaluateBootstrapGates({ env = process.env, argv = [], repoRoot 
   // The bootstrap writes the control registry and may target NOTHING else.
   if (parseBindingArg(argv) !== BOOTSTRAP_BINDING) blocked.push("unsupported_binding")
 
+  // The operator input must still validate — the same strict rules `prepare` used,
+  // including the CANONICAL schema version. Resolved first: the registry binding
+  // and the canonical artifact both need the validated values.
+  const input = readOperatorInput(env, repoRoot)
+  if (!input.ok) blocked.push("operator_input_invalid")
+
+  let validatedConfig = null
   if (!configPath) blocked.push("missing_config")
   else {
     const cfg = loadConfigFile(configPath)
@@ -128,8 +223,12 @@ export function evaluateBootstrapGates({ env = process.env, argv = [], repoRoot 
       // allowPlaceholderIds:false ⇒ a placeholder/synthetic D1 id fails closed.
       const v = validateDeployConfig(cfg.config, { configPath, repoRoot, allowPlaceholderIds: false })
       if (!v.ok) blocked.push("deploy_config_invalid")
+      else validatedConfig = cfg.config
     }
   }
+
+  // The registry row must describe the deployment's REAL TENANT_DB_DEFAULT.
+  if (input.ok && validatedConfig) blocked.push(...evaluateRegistryBinding(input.values, validatedConfig).blocked)
 
   const loaded = loadManifest(repoRoot)
   if (!loaded.ok) blocked.push("manifest_unreadable")
@@ -139,26 +238,52 @@ export function evaluateBootstrapGates({ env = process.env, argv = [], repoRoot 
   if (!contract.ok) blocked.push("schema_contract_unreadable")
   else if (!contract.contract.databases || !contract.contract.databases[BOOTSTRAP_BINDING]) blocked.push("schema_contract_invalid")
 
-  // The generated artifact itself.
+  // The generated artifact's path/type/mode. Its BYTES are only read after these
+  // pass — never read something we have not first established is a plain private
+  // file at the approved location.
   const artifact = inspectBootstrapArtifact(sqlPath, repoRoot)
   if (!artifact.ok) blocked.push(...artifact.blocked)
+  else if (input.ok) {
+    // The executable bytes must BE the canonical SQL for the current authority.
+    const canonical = validateCanonicalArtifact({ values: input.values, path: sqlPath })
+    if (!canonical.ok) blocked.push(...canonical.blocked)
+    else canonicalSql = canonical.sql
+  }
 
-  // The operator input must still validate — the same strict rules `prepare` used.
-  const input = readOperatorInput(env)
-  if (!input.ok) blocked.push("operator_input_invalid")
-
-  return { ok: blocked.length === 0, blocked }
+  // Executable bytes are handed back ONLY when EVERY gate passed. Returning them
+  // alongside a blocked result would let a caller that forgets to check `ok`
+  // execute SQL whose registry binding, confirmation, or config was refused.
+  const ok = blocked.length === 0
+  return { ok, blocked, canonicalSql: ok ? canonicalSql : null }
 }
 
 // ─── Wrangler surfaces ───────────────────────────────────────────
 
-/** Apply the generated file as ONE atomic D1 batch. */
-function applyBootstrapFile(configPath, sqlPath) {
+/**
+ * Apply the VALIDATED CANONICAL BYTES as ONE atomic D1 batch.
+ *
+ * TOCTOU: Wrangler never receives `BOOTSTRAP_SQL_PATH`. Validating the repository-
+ * root artifact and then handing that same mutable path to Wrangler would leave a
+ * window in which the reviewed bytes and the executed bytes differ. Instead the
+ * canonical bytes retained from validation are written to a FRESH random private
+ * (0600) temporary file, and only that file is executed. The bytes are never
+ * re-read from the original path after validation.
+ *
+ * The temporary directory is removed unconditionally, on success or failure.
+ */
+function applyBootstrapFile(configPath, canonicalSql) {
   requireAuthorizedExecution()
-  const result = spawnSync(WRANGLER_BIN, ["d1", "execute", BOOTSTRAP_BINDING, "--file", sqlPath, "--remote", "--config", configPath], {
-    cwd: REPO_ROOT, stdio: "inherit",
-  })
-  if (result.status !== 0) throw new Error("wrangler_apply_failed")
+  const dir = mkdtempSync(resolve(tmpdir(), "d1-bootstrap-exec-"))
+  const executionFile = resolve(dir, "bootstrap.exec.sql")
+  try {
+    writeFileSync(executionFile, canonicalSql, { mode: 0o600 })
+    const result = spawnSync(WRANGLER_BIN, ["d1", "execute", BOOTSTRAP_BINDING, "--file", executionFile, "--remote", "--config", configPath], {
+      cwd: REPO_ROOT, stdio: "inherit",
+    })
+    if (result.status !== 0) throw new Error("wrangler_apply_failed")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 /** Read-only COUNT query. Output is captured (never inherited) so no value is printed. */
@@ -188,19 +313,34 @@ function main() {
     removeBootstrapSql()
     process.exit(1)
   }
+  // Defence in depth: `ok` implies the canonical bytes were produced, but never
+  // execute on an assumption — an empty artifact must fail closed, not apply "".
+  if (typeof gates.canonicalSql !== "string" || gates.canonicalSql.length === 0) {
+    console.error("cf:d1:bootstrap:apply: STOPPED before Wrangler — bootstrap_sql_noncanonical")
+    removeBootstrapSql()
+    process.exit(1)
+  }
   // EVERY gate passed — only now may Wrangler be reached.
   executionAuthorized = true
 
-  const values = readOperatorInput(process.env).values
+  const values = readOperatorInput(process.env, REPO_ROOT).values
   let exitCode = 0
   try {
-    // ONE invocation = ONE atomic batch: all five records, or none.
-    applyBootstrapFile(configPath, BOOTSTRAP_SQL_PATH)
+    // ONE invocation = ONE atomic batch: all five records, or none. The bytes are
+    // the ones validation retained — never re-read from the mutable artifact path.
+    applyBootstrapFile(configPath, gates.canonicalSql)
 
     // Read-only, category-level verification. Counts only; no row values.
     const verified = verifyBootstrapVia((sql) => remoteCount(configPath, sql), values)
     if (!verified.ok) {
-      console.error(`cf:d1:bootstrap:apply: FAILED post-bootstrap verification — ${verified.failures.join(", ")}`)
+      // HONEST STATE: the five INSERTs were COMMITTED by the batch above; this
+      // read-only check runs afterwards. A failure here is NOT an atomic rollback —
+      // the records exist and require operator investigation. No compensating
+      // DELETE is issued: destructive automatic repair of a state we do not
+      // understand is how a bad bootstrap becomes data loss.
+      console.error(`cf:d1:bootstrap:apply: FAILED — ${VERIFICATION_FAILED_AFTER_COMMIT} (${verified.failures.join(", ")})`)
+      console.error("The bootstrap batch was COMMITTED before this read-only verification ran, so the records were NOT rolled back.")
+      console.error("Operator investigation is required. This command issues no compensating DELETE.")
       exitCode = 1
     } else {
       console.log("cf:d1:bootstrap:apply: OK (atomic bootstrap applied; control registry verified: tenant, registry, user, membership, identity).")
@@ -211,7 +351,7 @@ function main() {
   } finally {
     // Guaranteed cleanup on EVERY path: success, Wrangler failure, verification
     // failure, or an unexpected throw. Only ever runs AFTER Wrangler has read the
-    // file, never before.
+    // (temporary) execution file, never before.
     removeBootstrapSql()
   }
   process.exit(exitCode)

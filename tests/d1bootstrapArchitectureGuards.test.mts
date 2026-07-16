@@ -29,6 +29,26 @@ const read = (rel: string) => readFileSync(resolve(REPO_ROOT, rel), "utf8")
  */
 const codeOf = (rel: string) => read(rel).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/[^\n]*$/gm, "")
 
+/** The brace-matched body of every `finally` block — there is more than one. */
+function finallyBodies(src: string): string[] {
+  const marker = "} finally {"
+  const out: string[] = []
+  let i = src.indexOf(marker)
+  while (i >= 0) {
+    let depth = 1
+    let j = i + marker.length
+    const start = j
+    while (j < src.length && depth > 0) {
+      if (src[j] === "{") depth++
+      else if (src[j] === "}") depth--
+      j++
+    }
+    out.push(src.slice(start, j - 1))
+    i = src.indexOf(marker, j)
+  }
+  return out
+}
+
 const D1_REPO_DIR = "app/lib/persistence/d1"
 const BOOTSTRAP_APPLY = "scripts/cf-d1-bootstrap-apply.mjs"
 const BOOTSTRAP_PREPARE = "scripts/cf-d1-bootstrap-prepare.mjs"
@@ -153,8 +173,124 @@ test("GUARD: bootstrap apply requires BOTH an execution flag and the exact confi
   assert.match(src, /env\.CF_D1_BOOTSTRAP_CONFIRM !== BOOTSTRAP_CONFIRM_PHRASE/)
   assert.match(src, /BOOTSTRAP_CONFIRM_PHRASE = "APPLY_PRODUCTION_CONTROL_BOOTSTRAP"/)
   assert.match(src, /argv\.includes\("--remote"\)/)
-  // The gate actually guards a write path — the whole point of this command.
-  assert.match(src, /applyBootstrapFile\(configPath, BOOTSTRAP_SQL_PATH\)/)
+  // The gate actually guards a write path — the whole point of this command — and
+  // what it executes is the canonical bytes validation retained.
+  assert.match(src, /applyBootstrapFile\(configPath, gates\.canonicalSql\)/)
+})
+
+// ─── GUARD: the artifact is bound to operator authority ──────────
+
+test("GUARD: Wrangler may never receive the repository-root artifact path", () => {
+  const src = codeOf(BOOTSTRAP_APPLY)
+  const start = src.indexOf("function applyBootstrapFile(")
+  assert.ok(start >= 0)
+  const body = src.slice(start, src.indexOf("\n}", start))
+  // Handing Wrangler the mutable repo-root path would reopen the validate→execute
+  // window: the reviewed bytes and the executed bytes could differ.
+  assert.doesNotMatch(body, /BOOTSTRAP_SQL_PATH/, "applyBootstrapFile must never pass the repository-root artifact to Wrangler")
+  assert.match(body, /--file", executionFile/, "Wrangler must receive the temporary execution file")
+  // The execution file is a FRESH PRIVATE temporary file built from the canonical
+  // bytes — never a copy re-read from the source path after validation.
+  assert.match(body, /mkdtempSync\(resolve\(tmpdir\(\)/, "the execution file must live in a fresh random temporary directory")
+  assert.match(body, /writeFileSync\(executionFile, canonicalSql, \{ mode: 0o600 \}\)/, "the execution file must be written 0600 from the canonical bytes")
+  assert.doesNotMatch(body, /readFileSync/, "the bytes must not be re-read from any path at execution time")
+  // main() executes the bytes validation retained.
+  assert.match(src, /applyBootstrapFile\(configPath, gates\.canonicalSql\)/)
+})
+
+test("GUARD: the artifact content is READ and regenerated from current validated values before execution", () => {
+  const src = codeOf(BOOTSTRAP_APPLY)
+  // Every other gate describes the file; this one describes the bytes.
+  assert.match(src, /export function validateCanonicalArtifact\(/)
+  assert.match(src, /const canonical = validateCanonicalArtifact\(\{ values: input\.values, path: sqlPath \}\)/,
+    "the gates must validate the artifact bytes against the CURRENT operator values")
+  // Reconstruct-and-compare, not a keyword scan.
+  assert.match(src, /expected = buildBootstrapSql\(values, header\.generatedAt\)/, "the expected bytes must be regenerated from current values")
+  assert.match(src, /if \(actual === expected\) return \{ ok: true, sql: expected \}/, "the WHOLE file must be compared")
+  // Size is bounded before parsing; the header only supplies the timestamp.
+  assert.match(src, /if \(size > BOOTSTRAP_ARTIFACT_MAX_BYTES\) return \{ ok: false, blocked: \["bootstrap_sql_too_large"\] \}/)
+  const sizeIdx = src.indexOf("BOOTSTRAP_ARTIFACT_MAX_BYTES")
+  const readIdx = src.indexOf("readFileSync(path, \"utf8\")")
+  assert.ok(sizeIdx > 0 && sizeIdx < readIdx, "the size cap must be enforced before the file is read")
+  // Every required safe category exists.
+  for (const category of ["bootstrap_sql_unreadable", "bootstrap_sql_too_large", "bootstrap_sql_format_invalid", "bootstrap_sql_values_mismatch", "bootstrap_sql_noncanonical"]) {
+    assert.ok(src.includes(category), `the safe category ${category} must exist`)
+  }
+})
+
+test("GUARD: extra SQL can never survive canonical comparison", () => {
+  // A full-byte equality is what makes an allow/deny keyword list unnecessary — and
+  // impossible to outgrow. Assert the comparison is equality over the whole file,
+  // never a prefix/substring/keyword test.
+  const src = codeOf(BOOTSTRAP_APPLY)
+  const start = src.indexOf("export function validateCanonicalArtifact(")
+  const body = src.slice(start, src.indexOf("\n}", start))
+  assert.match(body, /actual === expected/, "the comparison must be whole-file equality")
+  assert.doesNotMatch(body, /\.includes\(|\.indexOf\(|\bDELETE\b|\bDROP\b|forbidden/i, "canonical validation must not degrade into a keyword scan")
+  // Behavioural backstop: appended bytes are refused (proven in the gate suite).
+  assert.match(body, /noncanonical = actual\.startsWith\(expected\) \|\| expected\.startsWith\(actual\)/)
+})
+
+test("GUARD: operator database metadata must be compared to TENANT_DB_DEFAULT", () => {
+  const src = codeOf(BOOTSTRAP_APPLY)
+  assert.match(src, /export function evaluateRegistryBinding\(/)
+  assert.match(src, /d\.binding === REGISTRY_BINDING/, "the comparison must target the TENANT_DB_DEFAULT binding")
+  assert.match(src, /values\.databaseId !== tenant\.database_id/)
+  assert.match(src, /values\.databaseName !== tenant\.database_name/)
+  assert.match(src, /evaluateRegistryBinding\(input\.values, validatedConfig\)/, "the gates must run the registry binding check")
+  for (const category of ["tenant_database_id_mismatch", "tenant_database_name_mismatch", "tenant_binding_missing"]) {
+    assert.ok(src.includes(category), `${category} must exist`)
+  }
+})
+
+test("GUARD: the registry schema version must come from ONE canonical source", () => {
+  const prepare = codeOf(BOOTSTRAP_PREPARE)
+  // Never an arbitrary operator-supplied digit string.
+  assert.match(prepare, /tenantRegistrySchemaVersion\(loaded\.manifest\)/)
+  assert.match(prepare, /get\("CF_D1_BOOTSTRAP_SCHEMA_VERSION"\) !== canonicalVersion/, "the supplied version must equal the canonical one exactly")
+  assert.doesNotMatch(prepare, /SCHEMA_VERSION_RE/, "a bounded digit-format check is not sufficient for bootstrap correctness")
+  // The canonical version is declared once, in the manifest, pinned to its lane.
+  const m = manifest()
+  assert.ok(m.registry?.TENANT_DB_DEFAULT?.schemaVersion, "the manifest must declare the canonical registry schema version")
+  assert.ok(m.registry?.TENANT_DB_DEFAULT?.planDigest, "…pinned to the lane it describes")
+  // Changing the active plan without updating it fails.
+  const drifted = JSON.parse(JSON.stringify(m))
+  drifted.lanes.TENANT_DB_DEFAULT.pop()
+  assert.ok(validateManifest(drifted, REPO_ROOT).failures.includes("registry_plan_digest_mismatch:TENANT_DB_DEFAULT"),
+    "a migration-plan change must force the canonical schema version to be reconsidered")
+})
+
+test("GUARD: the registry/user/membership/identity COUNT queries verify every supplied field", () => {
+  const verify = codeOf("scripts/lib/d1BootstrapVerify.mjs")
+  const queryFor = (category: string) => {
+    const i = verify.indexOf(`category: "${category}"`)
+    assert.ok(i > 0, `${category} must exist`)
+    return verify.slice(i, verify.indexOf("},", i))
+  }
+  // Counting by id alone would confirm almost nothing.
+  for (const field of ["name =", "slug =", "status = 'active'"]) assert.ok(queryFor("tenant_row").includes(field), `tenant verification must check ${field}`)
+  for (const field of ["database_name =", "database_id =", "schema_version =", "status = 'active'", "JOIN tenants"]) {
+    assert.ok(queryFor("registry_row").includes(field), `registry verification must check ${field}`)
+  }
+  assert.ok(queryFor("user_row").includes("email ="), "user verification must check email")
+  for (const field of ["role =", "role IN", "status = 'active'", "JOIN tenants", "JOIN users"]) {
+    assert.ok(queryFor("membership_row").includes(field), `membership verification must check ${field}`)
+  }
+  for (const field of ["provider =", "provider_subject =", "email =", "JOIN users"]) {
+    assert.ok(queryFor("identity_row").includes(field), `identity verification must check ${field}`)
+  }
+})
+
+test("GUARD: a post-verification failure is reported as an operator-action state, never a rollback", () => {
+  const src = read(BOOTSTRAP_APPLY)
+  // The five INSERTs commit before verification runs, so calling this a rollback
+  // would be a lie that sends an operator looking for state that is really there.
+  assert.match(src, /VERIFICATION_FAILED_AFTER_COMMIT = "bootstrap_verification_failed_after_commit"/)
+  assert.match(src, /console\.error\(`cf:d1:bootstrap:apply: FAILED — \$\{VERIFICATION_FAILED_AFTER_COMMIT\}/)
+  assert.match(src, /COMMITTED before this read-only verification ran, so the records were NOT rolled back/)
+  assert.match(src, /Operator investigation is required/)
+  // No automatic destructive compensation.
+  assert.doesNotMatch(codeOf(BOOTSTRAP_APPLY), /\bDELETE FROM\b|\bDROP TABLE\b/i, "apply must never issue a compensating DELETE")
 })
 
 test("GUARD: the bootstrap can target ONLY the control registry", () => {
@@ -187,15 +323,18 @@ test("GUARD: the bootstrap SQL must have an atomic boundary and never weaken con
 
 test("GUARD: bootstrap apply can never leave the generated file behind", () => {
   const src = codeOf(BOOTSTRAP_APPLY)
-  const finallyIdx = src.indexOf("} finally {")
-  assert.ok(finallyIdx > 0, "cleanup must be in a finally-equivalent path")
-  const finallyBody = src.slice(finallyIdx + "} finally {".length, src.indexOf("}", finallyIdx + 12))
-  // The cleanup must be UNCONDITIONAL. A conditional call (e.g. only on success)
-  // would still contain the identifier while leaking the artifact after a Wrangler
-  // or verification failure, so presence alone is not enough to assert.
-  assert.match(finallyBody, /^\s*removeBootstrapSql\(\)\s*$/m, "the finally cleanup must be an unconditional statement")
-  assert.doesNotMatch(finallyBody, /\bif\s*\(/, "the finally cleanup must not be conditional")
-  assert.doesNotMatch(finallyBody, /&&|\?\./, "the finally cleanup must not be short-circuited")
+  // BOTH cleanup paths — the temporary execution file and the repository-root
+  // preparation artifact — must be unconditional. A conditional call (e.g. only on
+  // success) would still contain the identifier while leaking the file after a
+  // Wrangler or verification failure, so presence alone is not enough to assert.
+  const bodies = finallyBodies(src)
+  assert.equal(bodies.length, 2, "apply must clean up the temporary execution file AND the repository-root artifact")
+  for (const body of bodies) {
+    assert.doesNotMatch(body, /\bif\s*\(/, "no finally cleanup may be conditional")
+    assert.doesNotMatch(body, /&&|\?\./, "no finally cleanup may be short-circuited")
+  }
+  assert.ok(bodies.some((b) => /^\s*rmSync\(dir, \{ recursive: true, force: true \}\)\s*$/m.test(b)), "the temporary execution directory must always be removed")
+  assert.ok(bodies.some((b) => /^\s*removeBootstrapSql\(\)\s*$/m.test(b)), "the repository-root artifact must always be removed")
   // A refused apply also removes a stale artifact…
   assert.match(src.slice(src.indexOf("if (!gates.ok)"), src.indexOf("executionAuthorized = true")), /removeBootstrapSql\(\)/)
   // …and preparation failure removes stale output too: both the invalid-input path

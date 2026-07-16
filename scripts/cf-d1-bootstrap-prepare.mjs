@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
 import { writeFileSync, rmSync, existsSync } from "node:fs"
 import { validateD1Id } from "./lib/cfDeployConfig.mjs"
+import { loadManifest, tenantRegistrySchemaVersion } from "./lib/d1MigrationManifest.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 export const BOOTSTRAP_SQL_BASENAME = "bootstrap.control.sql"
@@ -54,7 +55,6 @@ export const REQUIRED_ENV = [
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
 const DB_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
-const SCHEMA_VERSION_RE = /^[0-9]{1,10}$/
 const EMAIL_RE = /^[^\s@'"\\]+@[^\s@'"\\]+\.[^\s@'"\\]+$/
 const NAME_RE = /^[^\r\n'"\\]{1,128}$/
 const SUBJECT_RE = /^[A-Za-z0-9][A-Za-z0-9._:@|-]{0,255}$/
@@ -63,7 +63,7 @@ const SUBJECT_RE = /^[A-Za-z0-9][A-Za-z0-9._:@|-]{0,255}$/
  * Strictly validate operator input. Returns `{ ok, values }` or `{ ok:false,
  * failures }` — failures are safe FIELD-NAME categories and never echo a value.
  */
-export function readOperatorInput(env) {
+export function readOperatorInput(env, repoRoot = REPO_ROOT) {
   const failures = []
   const get = (k) => (typeof env[k] === "string" ? env[k] : undefined)
 
@@ -77,7 +77,6 @@ export function readOperatorInput(env) {
   check("CF_D1_BOOTSTRAP_TENANT_NAME", NAME_RE)
   check("CF_D1_BOOTSTRAP_TENANT_SLUG", SLUG_RE)
   check("CF_D1_BOOTSTRAP_DATABASE_NAME", DB_NAME_RE)
-  check("CF_D1_BOOTSTRAP_SCHEMA_VERSION", SCHEMA_VERSION_RE)
   check("CF_D1_BOOTSTRAP_USER_ID", ID_RE)
   check("CF_D1_BOOTSTRAP_USER_EMAIL", EMAIL_RE)
   check("CF_D1_BOOTSTRAP_MEMBERSHIP_ID", ID_RE)
@@ -93,6 +92,15 @@ export function readOperatorInput(env) {
   // Database id uses the SAME validation as the deployment config (UUID, non-placeholder).
   const dbId = validateD1Id(get("CF_D1_BOOTSTRAP_DATABASE_ID"))
   if (!dbId.ok) failures.push(`invalid:CF_D1_BOOTSTRAP_DATABASE_ID:${dbId.reason}`)
+
+  // The registry's schema_version is CANONICAL, not an arbitrary digit string: it
+  // names which tenant schema the registry row claims the database has. A bounded
+  // format check cannot tell a correct version from a plausible one, so it must
+  // equal the manifest's single canonical source exactly.
+  const loaded = loadManifest(repoRoot)
+  const canonicalVersion = loaded.ok ? tenantRegistrySchemaVersion(loaded.manifest) : null
+  if (canonicalVersion === null) failures.push("invalid:CF_D1_BOOTSTRAP_SCHEMA_VERSION:canonical_version_unavailable")
+  else if (get("CF_D1_BOOTSTRAP_SCHEMA_VERSION") !== canonicalVersion) failures.push("invalid:CF_D1_BOOTSTRAP_SCHEMA_VERSION:not_canonical")
 
   if (failures.length > 0) return { ok: false, failures }
 
@@ -120,8 +128,64 @@ export function readOperatorInput(env) {
 
 const lit = (v) => `'${String(v).replace(/'/g, "''")}'`
 
+// ─── Canonical artifact format ───────────────────────────────────
+
 /**
- * Build the ordered control-registry bootstrap SQL as ONE ATOMIC OPERATION.
+ * The artifact format version. `apply` refuses any other version rather than
+ * guessing how to reconstruct older bytes.
+ */
+export const BOOTSTRAP_ARTIFACT_VERSION = 1
+export const BOOTSTRAP_ARTIFACT_MAGIC = "-- atra-bootstrap-artifact"
+/**
+ * Hard size cap, enforced BEFORE the artifact is parsed. The canonical artifact is
+ * a few hundred bytes; anything near this is not something we generated.
+ */
+export const BOOTSTRAP_ARTIFACT_MAX_BYTES = 16 * 1024
+
+/** Exactly the shape `Date.prototype.toISOString()` emits, in UTC. */
+const ISO_UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+
+/** True only for a canonical ISO-8601 UTC instant that round-trips exactly. */
+export function isCanonicalTimestamp(value) {
+  if (typeof value !== "string" || !ISO_UTC_RE.test(value)) return false
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value
+}
+
+/**
+ * Parse the artifact's bounded, NON-SENSITIVE metadata header. It carries only a
+ * format version and one `generated_at` instant — never an operator value — and it
+ * exists so `apply` can reconstruct the exact canonical bytes (the timestamp is the
+ * only part of the SQL that `apply` cannot derive from the environment).
+ *
+ * Returns `{ ok, version, generatedAt }` or `{ ok:false, failure }` — a safe
+ * category, never file contents.
+ */
+export function parseArtifactHeader(text) {
+  if (typeof text !== "string") return { ok: false, failure: "bootstrap_sql_format_invalid" }
+  const lines = text.split("\n")
+  const magic = new RegExp(`^${BOOTSTRAP_ARTIFACT_MAGIC} v(\\d{1,3})$`).exec(lines[0] ?? "")
+  if (!magic) return { ok: false, failure: "bootstrap_sql_format_invalid" }
+  const version = Number(magic[1])
+  if (version !== BOOTSTRAP_ARTIFACT_VERSION) return { ok: false, failure: "bootstrap_sql_format_invalid" }
+  const stamp = /^-- generated_at: (.+)$/.exec(lines[1] ?? "")
+  if (!stamp || !isCanonicalTimestamp(stamp[1])) return { ok: false, failure: "bootstrap_sql_format_invalid" }
+  return { ok: true, version, generatedAt: stamp[1] }
+}
+
+/**
+ * Build the COMPLETE canonical bootstrap artifact — header included — as ONE
+ * ATOMIC OPERATION.
+ *
+ * This function is the single definition of what a valid artifact IS. `prepare`
+ * writes its output; `apply` re-runs it against the CURRENTLY validated operator
+ * values plus the artifact's own parsed `generated_at`, and compares the whole file
+ * byte-for-byte. A prepared file is therefore a reviewable plan, never execution
+ * authority: authority comes from the operator environment at apply time.
+ *
+ * Because the comparison is over the entire byte sequence, it covers changed
+ * values, a replaced table name, appended or removed statements, and reordering —
+ * without ever scanning for "forbidden" keywords.
  *
  * ATOMICITY (verified against pinned Wrangler 4.99.0, not assumed):
  *   All five INSERTs live in ONE file, applied by ONE `wrangler d1 execute --file`
@@ -138,7 +202,11 @@ const lit = (v) => `'${String(v).replace(/'/g, "''")}'`
 export function buildBootstrapSql(values, now = new Date().toISOString()) {
   const t = lit(now)
   return [
+    `${BOOTSTRAP_ARTIFACT_MAGIC} v${BOOTSTRAP_ARTIFACT_VERSION}`,
+    `-- generated_at: ${now}`,
     "-- P0-PERSIST-015 operator bootstrap (GENERATED, UNTRACKED, 0600). Do not commit.",
+    "-- A reviewable PLAN, not execution authority: cf:d1:bootstrap:apply reconstructs",
+    "-- these exact bytes from the operator environment and refuses any difference.",
     "-- ATOMIC: these five INSERTs are applied as ONE wrangler `d1 execute --file`",
     "-- invocation = ONE implicit D1 batch transaction (all-or-nothing).",
     "-- No BEGIN/COMMIT: D1 rejects explicit transaction control (verified).",

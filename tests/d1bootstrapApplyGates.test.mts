@@ -12,31 +12,78 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { writeFileSync, rmSync, mkdtempSync, symlinkSync, chmodSync, readFileSync } from "node:fs"
+import { writeFileSync, rmSync, mkdtempSync, symlinkSync, chmodSync, readFileSync, existsSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
 import {
-  evaluateBootstrapGates, inspectBootstrapArtifact, parseBindingArg,
-  BOOTSTRAP_CONFIRM_PHRASE, BOOTSTRAP_BINDING,
+  evaluateBootstrapGates, inspectBootstrapArtifact, parseBindingArg, validateCanonicalArtifact,
+  evaluateRegistryBinding, BOOTSTRAP_CONFIRM_PHRASE, BOOTSTRAP_BINDING, VERIFICATION_FAILED_AFTER_COMMIT,
 } from "../scripts/cf-d1-bootstrap-apply.mjs"
-import { BOOTSTRAP_SQL_BASENAME, buildBootstrapSql } from "../scripts/cf-d1-bootstrap-prepare.mjs"
+import { BOOTSTRAP_SQL_BASENAME, buildBootstrapSql, BOOTSTRAP_ARTIFACT_MAX_BYTES } from "../scripts/cf-d1-bootstrap-prepare.mjs"
 import { SYNTHETIC_D1_IDS } from "../scripts/lib/cfDeployConfig.mjs"
+import { loadManifest, tenantRegistrySchemaVersion } from "../scripts/lib/d1MigrationManifest.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const APPLY_SRC = resolve(REPO_ROOT, "scripts/cf-d1-bootstrap-apply.mjs")
 
-/** A complete, valid operator environment. Test-only synthetic values. */
-const VALID_ENV = Object.freeze({
+/**
+ * The body of every `finally` block in `src`, brace-matched. Used to assert that
+ * EVERY cleanup path is unconditional — searching for the first `} finally {` is
+ * not enough once there is more than one.
+ */
+export function finallyBodies(src: string): string[] {
+  const marker = "} finally {"
+  const out: string[] = []
+  let i = src.indexOf(marker)
+  while (i >= 0) {
+    let depth = 1
+    let j = i + marker.length
+    const start = j
+    while (j < src.length && depth > 0) {
+      if (src[j] === "{") depth++
+      else if (src[j] === "}") depth--
+      j++
+    }
+    out.push(src.slice(start, j - 1))
+    i = src.indexOf(marker, j)
+  }
+  return out
+}
+
+/** A fixed instant, so a canonical artifact is byte-reproducible in tests. */
+const GENERATED_AT = "2026-07-16T00:00:00.000Z"
+
+/** The ONE canonical registry schema version — never a hand-picked digit string. */
+function canonicalSchemaVersion(): string {
+  const loaded = loadManifest(REPO_ROOT)
+  if (!loaded.ok) throw new Error(`manifest unreadable: ${loaded.error}`)
+  const version = tenantRegistrySchemaVersion(loaded.manifest)
+  if (version === null) throw new Error("the manifest must declare a canonical registry schema version")
+  return version
+}
+
+/** The committed config's TENANT_DB_DEFAULT name — the registry must describe THIS. */
+function tenantBindingName(): string {
+  const base = JSON.parse(readFileSync(resolve(REPO_ROOT, "wrangler.json"), "utf8"))
+  return base.d1_databases.find((d: { binding: string }) => d.binding === "TENANT_DB_DEFAULT").database_name
+}
+
+/**
+ * A complete, valid operator environment. Test-only synthetic values.
+ * The registry metadata deliberately matches the synthetic deploy config's REAL
+ * TENANT_DB_DEFAULT binding, and the schema version is the canonical one.
+ */
+const VALID_ENV: Readonly<Record<string, string>> = Object.freeze({
   CF_D1_BOOTSTRAP_EXECUTE: "1",
   CF_D1_BOOTSTRAP_CONFIRM: BOOTSTRAP_CONFIRM_PHRASE,
   CF_D1_BOOTSTRAP_TENANT_ID: "acme",
   CF_D1_BOOTSTRAP_TENANT_NAME: "Acme",
   CF_D1_BOOTSTRAP_TENANT_SLUG: "acme",
   CF_D1_BOOTSTRAP_TENANT_STATUS: "active",
-  CF_D1_BOOTSTRAP_DATABASE_NAME: "acme-db",
-  CF_D1_BOOTSTRAP_DATABASE_ID: "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
-  CF_D1_BOOTSTRAP_SCHEMA_VERSION: "1",
+  CF_D1_BOOTSTRAP_DATABASE_NAME: tenantBindingName(),
+  CF_D1_BOOTSTRAP_DATABASE_ID: SYNTHETIC_D1_IDS.TENANT_DB_DEFAULT,
+  CF_D1_BOOTSTRAP_SCHEMA_VERSION: canonicalSchemaVersion(),
   CF_D1_BOOTSTRAP_USER_ID: "user-1",
   CF_D1_BOOTSTRAP_USER_EMAIL: "ops@example.com",
   CF_D1_BOOTSTRAP_MEMBERSHIP_ID: "mem-1",
@@ -45,6 +92,16 @@ const VALID_ENV = Object.freeze({
   CF_D1_BOOTSTRAP_IDENTITY_ID: "ident-1",
   CF_D1_BOOTSTRAP_IDENTITY_PROVIDER: "jwt",
   CF_D1_BOOTSTRAP_IDENTITY_SUBJECT: "auth0|abc123",
+})
+
+/** The canonical values `VALID_ENV` denotes (what `readOperatorInput` would yield). */
+const VALID_VALUES = Object.freeze({
+  tenantId: "acme", tenantName: "Acme", tenantSlug: "acme", tenantStatus: "active",
+  databaseName: VALID_ENV.CF_D1_BOOTSTRAP_DATABASE_NAME, databaseId: VALID_ENV.CF_D1_BOOTSTRAP_DATABASE_ID,
+  schemaVersion: VALID_ENV.CF_D1_BOOTSTRAP_SCHEMA_VERSION,
+  userId: "user-1", userEmail: "ops@example.com", membershipId: "mem-1",
+  membershipRole: "owner", membershipStatus: "active", identityId: "ident-1",
+  identityProvider: "jwt", identitySubject: "auth0|abc123",
 })
 
 /**
@@ -60,31 +117,29 @@ function withSyntheticConfig(fn: (configPath: string) => void, ids: Record<strin
   try { fn(TEST_CONFIG_PATH) } finally { rmSync(TEST_CONFIG_PATH, { force: true }) }
 }
 
-/** Write a valid 0600 bootstrap artifact at the approved location, then clean up. */
-function withArtifact(fn: (sqlPath: string) => void) {
+/**
+ * Write a 0600 bootstrap artifact at the approved location, then clean up.
+ * `sql` defaults to the CANONICAL artifact for VALID_VALUES; tests pass tampered
+ * or stale bytes to prove the canonical binding refuses them.
+ */
+function withArtifact(fn: (sqlPath: string) => void, sql: string = buildBootstrapSql(VALID_VALUES, GENERATED_AT)) {
   const sqlPath = resolve(REPO_ROOT, BOOTSTRAP_SQL_BASENAME)
   try {
-    writeFileSync(sqlPath, buildBootstrapSql({
-      tenantId: "acme", tenantName: "Acme", tenantSlug: "acme", tenantStatus: "active",
-      databaseName: "acme-db", databaseId: "3f2504e0-4f89-41d3-9a0c-0305e82c3301", schemaVersion: "1",
-      userId: "user-1", userEmail: "ops@example.com", membershipId: "mem-1",
-      membershipRole: "owner", membershipStatus: "active", identityId: "ident-1",
-      identityProvider: "jwt", identitySubject: "auth0|abc123",
-    }), { mode: 0o600 })
+    writeFileSync(sqlPath, sql, { mode: 0o600 })
     fn(sqlPath)
   } finally {
     rmSync(sqlPath, { force: true })
   }
 }
 
-const gatesFor = (over: Record<string, unknown> = {}, envOver: Record<string, string | undefined> = {}) => {
-  let out!: { ok: boolean; blocked: string[] }
+const gatesFor = (over: Record<string, unknown> = {}, envOver: Record<string, string | undefined> = {}, sql?: string) => {
+  let out!: { ok: boolean; blocked: string[]; canonicalSql: string | null }
   withSyntheticConfig((configPath) => {
     withArtifact((sqlPath) => {
       out = evaluateBootstrapGates({
         env: { ...VALID_ENV, ...envOver }, argv: ["--remote"], repoRoot: REPO_ROOT, configPath, sqlPath, ...over,
       })
-    })
+    }, sql)
   })
   return out
 }
@@ -93,6 +148,200 @@ const gatesFor = (over: Record<string, unknown> = {}, envOver: Record<string, st
 
 test("bootstrap apply: every gate satisfied → allowed (nothing is executed here)", () => {
   assert.deepEqual(gatesFor().blocked, [])
+})
+
+// ─── Canonical artifact binding (1–10) ───────────────────────────
+
+/** The canonical artifact for the current authority, at the approved path. */
+const canonicalArtifact = () => buildBootstrapSql(VALID_VALUES, GENERATED_AT)
+
+/** Evaluate ONLY the canonical-artifact gate against arbitrary bytes. */
+function canonicalFor(sql: string, values: Record<string, string> = VALID_VALUES) {
+  let out!: { ok: boolean; blocked?: string[]; sql?: string }
+  withArtifact((sqlPath) => { out = validateCanonicalArtifact({ values, path: sqlPath }) }, sql)
+  return out
+}
+
+test("1. the EXACT canonical artifact for the current values passes", () => {
+  const result = canonicalFor(canonicalArtifact())
+  assert.equal(result.ok, true, `the canonical artifact must be accepted: ${result.blocked?.join(",")}`)
+  assert.equal(result.sql, canonicalArtifact(), "validation returns the canonical bytes to execute")
+  assert.deepEqual(gatesFor().blocked, [], "and every gate passes end to end")
+})
+
+test("the FULL gate evaluation refuses a tampered artifact — the canonical check is wired in, not merely present", () => {
+  // Distinct from the direct-call tests above: this proves `evaluateBootstrapGates`
+  // actually consults the canonical binding. A gate that exists but is never called
+  // would still let `DROP TABLE tenants;` through, which is precisely how the
+  // audited head behaved.
+  for (const [label, sql] of [
+    ["appended DELETE", canonicalArtifact() + "\nDELETE FROM tenants;\n"],
+    ["appended sixth INSERT", canonicalArtifact() + "\nINSERT INTO auth_identities (id,user_id,provider,provider_subject,email,created_at,updated_at) VALUES ('x','user-1','jwt','attacker','a@b.c','t','t');\n"],
+    ["entirely unrelated SQL", "DROP TABLE tenants;\n"],
+    ["stale values", buildBootstrapSql({ ...VALID_VALUES, userEmail: "previous@example.com" }, GENERATED_AT)],
+  ] as const) {
+    const gates = gatesFor({}, {}, sql)
+    assert.equal(gates.ok, false, `${label} must be refused by the full gate evaluation`)
+    assert.ok(gates.blocked.some((b) => b.startsWith("bootstrap_sql_")), `${label} must be refused by the canonical binding, got ${gates.blocked.join(",")}`)
+    assert.equal(gates.canonicalSql, null, `${label}: no bytes may be handed to Wrangler`)
+  }
+})
+
+test("2. a STALE artifact generated from different values fails before Wrangler", () => {
+  // The operator changed the environment after preparing. The prepared file is a
+  // plan, not authority — it cannot survive a change of authority.
+  for (const stale of [
+    { ...VALID_VALUES, tenantId: "previous-tenant" },
+    { ...VALID_VALUES, tenantName: "Previous Name" },
+    { ...VALID_VALUES, tenantSlug: "previous-slug" },
+    { ...VALID_VALUES, membershipRole: "viewer" },
+    { ...VALID_VALUES, userId: "previous-user" },
+  ]) {
+    const result = canonicalFor(buildBootstrapSql(stale, GENERATED_AT))
+    assert.equal(result.ok, false, `a stale artifact (${Object.keys(stale)}) must be refused`)
+    assert.deepEqual(result.blocked, ["bootstrap_sql_values_mismatch"])
+  }
+})
+
+test("3. an artifact with a changed database ID fails before Wrangler", () => {
+  const tampered = buildBootstrapSql({ ...VALID_VALUES, databaseId: "3f2504e0-4f89-41d3-9a0c-0305e82c3399" }, GENERATED_AT)
+  assert.deepEqual(canonicalFor(tampered).blocked, ["bootstrap_sql_values_mismatch"])
+})
+
+test("4. an artifact with a changed user email fails before Wrangler", () => {
+  const tampered = buildBootstrapSql({ ...VALID_VALUES, userEmail: "attacker@evil.example" }, GENERATED_AT)
+  assert.deepEqual(canonicalFor(tampered).blocked, ["bootstrap_sql_values_mismatch"])
+})
+
+test("5. an artifact with a changed provider subject fails before Wrangler", () => {
+  const tampered = buildBootstrapSql({ ...VALID_VALUES, identitySubject: "auth0|attacker" }, GENERATED_AT)
+  assert.deepEqual(canonicalFor(tampered).blocked, ["bootstrap_sql_values_mismatch"])
+})
+
+test("6. an artifact with APPENDED SQL fails before Wrangler", () => {
+  // At the audited head every one of these passed all gates.
+  for (const appended of [
+    "\nDELETE FROM tenants;\n",
+    "\nUPDATE tenant_memberships SET role = 'owner';\n",
+    "\nINSERT INTO auth_identities (id,user_id,provider,provider_subject,email,created_at,updated_at) VALUES ('x','user-1','jwt','attacker','a@b.c','t','t');\n",
+    "\n-- harmless looking comment\nDROP TABLE tenants;\n",
+    "\n",
+  ]) {
+    const result = canonicalFor(canonicalArtifact() + appended)
+    assert.equal(result.ok, false, `appended ${JSON.stringify(appended)} must be refused`)
+    assert.deepEqual(result.blocked, ["bootstrap_sql_noncanonical"])
+  }
+})
+
+test("7. an artifact with a REMOVED statement fails before Wrangler", () => {
+  const lines = canonicalArtifact().split("\n")
+  const withoutMembership = lines.filter((l) => !l.startsWith("INSERT INTO tenant_memberships")).join("\n")
+  assert.equal(canonicalFor(withoutMembership).ok, false, "a removed statement must be refused")
+  // Truncation at the end reads as non-canonical; a removal in the middle changes
+  // the byte stream. Either way it fails closed.
+  const truncated = canonicalArtifact().slice(0, 200)
+  assert.equal(canonicalFor(truncated).ok, false)
+})
+
+test("8. REORDERED statements fail before Wrangler", () => {
+  // The same five statement types, in a different order: identity before its user.
+  const lines = canonicalArtifact().split("\n")
+  const inserts = lines.filter((l) => l.startsWith("INSERT INTO "))
+  const header = lines.filter((l) => !l.startsWith("INSERT INTO "))
+  const reordered = [...header.slice(0, -1), inserts[4], inserts[0], inserts[1], inserts[2], inserts[3], ""].join("\n")
+  const result = canonicalFor(reordered)
+  assert.equal(result.ok, false, "reordered statements must be refused")
+  assert.deepEqual(result.blocked, ["bootstrap_sql_values_mismatch"])
+})
+
+test("9. an OVERSIZED artifact fails before it is parsed", () => {
+  const huge = canonicalArtifact() + "\n" + "-- padding".repeat(BOOTSTRAP_ARTIFACT_MAX_BYTES)
+  assert.ok(Buffer.byteLength(huge) > BOOTSTRAP_ARTIFACT_MAX_BYTES)
+  assert.deepEqual(canonicalFor(huge).blocked, ["bootstrap_sql_too_large"])
+})
+
+test("a replaced table name and a malformed/absent header fail before Wrangler", () => {
+  // A replaced table name is just a byte difference — no keyword list needed.
+  const renamed = canonicalArtifact().replace("INSERT INTO tenant_memberships", "INSERT INTO tenant_admins")
+  assert.equal(canonicalFor(renamed).ok, false)
+  // Entirely foreign SQL has no canonical header at all.
+  assert.deepEqual(canonicalFor("DROP TABLE tenants;\n").blocked, ["bootstrap_sql_format_invalid"])
+  for (const bad of [
+    "-- atra-bootstrap-artifact v2\n-- generated_at: 2026-07-16T00:00:00.000Z\n",
+    "-- atra-bootstrap-artifact v1\n-- generated_at: not-a-timestamp\n",
+    "-- atra-bootstrap-artifact v1\n-- generated_at: 2026-07-16T00:00:00Z\n",
+    "-- atra-bootstrap-artifact v1\n",
+    "",
+  ]) {
+    assert.deepEqual(canonicalFor(bad).blocked, ["bootstrap_sql_format_invalid"], `header ${JSON.stringify(bad)} must be refused`)
+  }
+})
+
+test("10. no artifact-mismatch failure contains the differing value, SQL, or file contents", () => {
+  const secrets = ["attacker@evil.example", "auth0|attacker", "previous-tenant", "DROP TABLE", "DELETE FROM", "tenant_admins", "ops@example.com", VALID_VALUES.databaseId]
+  const results = [
+    canonicalFor(buildBootstrapSql({ ...VALID_VALUES, userEmail: "attacker@evil.example" }, GENERATED_AT)),
+    canonicalFor(buildBootstrapSql({ ...VALID_VALUES, identitySubject: "auth0|attacker" }, GENERATED_AT)),
+    canonicalFor(buildBootstrapSql({ ...VALID_VALUES, tenantId: "previous-tenant" }, GENERATED_AT)),
+    canonicalFor(canonicalArtifact() + "\nDROP TABLE tenants;\n"),
+    canonicalFor(canonicalArtifact().replace("INSERT INTO tenant_memberships", "INSERT INTO tenant_admins")),
+    canonicalFor("DELETE FROM tenants;\n"),
+  ]
+  for (const result of results) {
+    const serialized = JSON.stringify(result.blocked)
+    assert.match(serialized, /^\["[a-z0-9_]+"\]$/, `only a safe category may be returned: ${serialized}`)
+    for (const secret of secrets) assert.equal(serialized.includes(secret), false, `a failure must never echo ${secret}`)
+  }
+})
+
+// ─── Registry binding to the deploy config (16–18) ───────────────
+
+test("16. the operator database ID must equal the deploy config's TENANT_DB_DEFAULT id", () => {
+  // Both are individually valid, non-placeholder UUIDs — but they differ, so the
+  // registry row would point tenant data at a database this deployment does not use.
+  const other = "3f2504e0-4f89-41d3-9a0c-0305e82c3399"
+  assert.notEqual(other, SYNTHETIC_D1_IDS.TENANT_DB_DEFAULT)
+  const gates = gatesFor({}, { CF_D1_BOOTSTRAP_DATABASE_ID: other },
+    buildBootstrapSql({ ...VALID_VALUES, databaseId: other }, GENERATED_AT))
+  assert.ok(gates.blocked.includes("tenant_database_id_mismatch"), `expected a mismatch, got ${gates.blocked.join(",")}`)
+  assert.equal(gates.canonicalSql, null, "nothing may be handed to Wrangler")
+})
+
+test("17. the operator database NAME must equal the deploy config's TENANT_DB_DEFAULT name", () => {
+  const gates = gatesFor({}, { CF_D1_BOOTSTRAP_DATABASE_NAME: "some-other-db" },
+    buildBootstrapSql({ ...VALID_VALUES, databaseName: "some-other-db" }, GENERATED_AT))
+  assert.ok(gates.blocked.includes("tenant_database_name_mismatch"))
+})
+
+test("18. the Control DB's own ID can NEVER be stored as the tenant registry database ID", () => {
+  // The realistic operator slip: pasting the CONTROL_DB id into the tenant registry
+  // row would point every tenant's data at the control registry itself.
+  const controlId = SYNTHETIC_D1_IDS.CONTROL_DB
+  assert.notEqual(controlId, SYNTHETIC_D1_IDS.TENANT_DB_DEFAULT)
+  const gates = gatesFor({}, { CF_D1_BOOTSTRAP_DATABASE_ID: controlId },
+    buildBootstrapSql({ ...VALID_VALUES, databaseId: controlId }, GENERATED_AT))
+  assert.ok(gates.blocked.includes("tenant_database_id_mismatch"), "the Control DB id must never be accepted as tenant metadata")
+  assert.equal(gates.ok, false)
+})
+
+test("the registry binding comparison is in-memory and never echoes either value", () => {
+  const config = { d1_databases: [{ binding: "TENANT_DB_DEFAULT", database_id: "aaaaaaaa-0000-4000-8000-000000000001", database_name: "real-tenant" }] }
+  const result = evaluateRegistryBinding({ databaseId: "bbbbbbbb-0000-4000-8000-000000000002", databaseName: "wrong-name" }, config)
+  assert.deepEqual(result.blocked, ["tenant_database_id_mismatch", "tenant_database_name_mismatch"])
+  const serialized = JSON.stringify(result.blocked)
+  for (const value of ["aaaaaaaa-0000-4000-8000-000000000001", "bbbbbbbb-0000-4000-8000-000000000002", "real-tenant", "wrong-name"]) {
+    assert.equal(serialized.includes(value), false, `must never echo ${value}`)
+  }
+  // A config with no tenant binding at all fails closed rather than passing.
+  assert.deepEqual(evaluateRegistryBinding({ databaseId: "x", databaseName: "y" }, { d1_databases: [] }).blocked, ["tenant_binding_missing"])
+})
+
+test("19. an incorrect schema version fails before Wrangler", () => {
+  const wrong = String(Number(canonicalSchemaVersion()) + 1)
+  const gates = gatesFor({}, { CF_D1_BOOTSTRAP_SCHEMA_VERSION: wrong },
+    buildBootstrapSql({ ...VALID_VALUES, schemaVersion: wrong }, GENERATED_AT))
+  assert.ok(gates.blocked.includes("operator_input_invalid"), "a non-canonical schema version must be refused")
+  assert.equal(gates.canonicalSql, null)
 })
 
 // ─── 1, 2, 3. execute flag / confirmation / --remote ─────────────
@@ -199,6 +448,90 @@ test("a missing bootstrap SQL stops before Wrangler", () => {
   })
 })
 
+// ─── TOCTOU: what Wrangler actually receives (11–14) ─────────────
+
+/**
+ * The apply command's Wrangler invocation, exercised WITHOUT Wrangler: the source
+ * is loaded with `spawnSync`, `mkdtempSync`, and the temp root stubbed, so the
+ * exact `--file` argument and its bytes can be observed. Nothing is executed.
+ */
+function driveApplyBootstrapFile(canonicalSql: string, options: { failWrangler?: boolean } = {}) {
+  const src = readFileSync(APPLY_SRC, "utf8")
+  const start = src.indexOf("function applyBootstrapFile(")
+  const end = src.indexOf("\n}", start) + 2
+  const body = src.slice(start, end)
+
+  // Everything observable must be captured DURING the stubbed invocation: the
+  // temporary directory is gone by the time the call returns (that is the point).
+  const observed: { file?: string; bytesAtExec?: string; existedAtExec?: boolean; modeAtExec?: number } = {}
+  let tempRoot = ""
+  const harness = new Function("deps", `
+    const { spawnSync, mkdtempSync, writeFileSync, rmSync, resolve, tmpdir, requireAuthorizedExecution, WRANGLER_BIN, REPO_ROOT, BOOTSTRAP_BINDING } = deps
+    ${body}
+    return applyBootstrapFile
+  `)({
+    spawnSync: (_bin: string, args: string[]) => {
+      const i = args.indexOf("--file")
+      const file = args[i + 1]
+      observed.file = file
+      observed.existedAtExec = existsSync(file)
+      observed.bytesAtExec = readFileSync(file, "utf8")
+      observed.modeAtExec = statSync(file).mode & 0o777
+      return { status: options.failWrangler ? 1 : 0 }
+    },
+    mkdtempSync: (p: string) => { tempRoot = mkdtempSync(p); return tempRoot },
+    writeFileSync, rmSync, resolve, tmpdir,
+    requireAuthorizedExecution: () => {},
+    WRANGLER_BIN: "/nonexistent/wrangler", REPO_ROOT, BOOTSTRAP_BINDING,
+  })
+
+  let threw: Error | null = null
+  try { harness("config.json", canonicalSql) } catch (err) { threw = err as Error }
+  return { observed, tempRoot, threw }
+}
+
+test("11. Wrangler receives a TEMPORARY canonical file — never the repository-root artifact", () => {
+  const canonical = canonicalArtifact()
+  withArtifact(() => {
+    const { observed } = driveApplyBootstrapFile(canonical)
+    const approved = resolve(REPO_ROOT, BOOTSTRAP_SQL_BASENAME)
+    assert.ok(observed.file, "Wrangler must receive a --file argument")
+    assert.notEqual(observed.file, approved, "Wrangler must NEVER receive the mutable repository-root artifact")
+    assert.equal(observed.file!.startsWith(REPO_ROOT + "/"), false, "the execution file must live outside the repository")
+    assert.equal(observed.bytesAtExec, canonical, "the executed bytes are the validated canonical bytes")
+    // A fresh PRIVATE file, readable only by the operator.
+    assert.equal(observed.modeAtExec, 0o600, "the execution file must be 0600")
+    const second = driveApplyBootstrapFile(canonical)
+    assert.notEqual(second.observed.file, observed.file, "each apply must use a fresh temporary directory")
+  })
+})
+
+test("12. mutating the repository-root artifact AFTER validation cannot alter the executed bytes", () => {
+  const canonical = canonicalArtifact()
+  withArtifact((sqlPath) => {
+    // Validation happened; now the artifact is rewritten in the window before
+    // execution. The apply executes the bytes it retained, not the file.
+    writeFileSync(sqlPath, canonical + "\nDROP TABLE tenants;\n", { mode: 0o600 })
+    const { observed } = driveApplyBootstrapFile(canonical)
+    assert.equal(observed.bytesAtExec, canonical, "the executed bytes must be the retained canonical bytes")
+    assert.doesNotMatch(observed.bytesAtExec!, /DROP TABLE/, "a post-validation mutation must not reach Wrangler")
+  })
+})
+
+test("13. the temporary execution file is removed after success", () => {
+  const { observed, tempRoot } = driveApplyBootstrapFile(canonicalArtifact())
+  assert.equal(observed.existedAtExec, true, "the file must exist while Wrangler reads it")
+  assert.equal(existsSync(tempRoot), false, "the temporary directory must be removed after success")
+  assert.equal(existsSync(observed.file!), false)
+})
+
+test("14. the temporary execution file is removed after Wrangler FAILURE", () => {
+  const { observed, tempRoot, threw } = driveApplyBootstrapFile(canonicalArtifact(), { failWrangler: true })
+  assert.equal(threw?.message, "wrangler_apply_failed")
+  assert.equal(existsSync(tempRoot), false, "the temporary directory must be removed after a Wrangler failure")
+  assert.equal(existsSync(observed.file!), false)
+})
+
 // ─── 8. only CONTROL_DB ──────────────────────────────────────────
 
 test("8. the command can target ONLY CONTROL_DB", () => {
@@ -260,14 +593,41 @@ test("10. the generated SQL is removed on EVERY exit path (finally-equivalent)",
   // and the cleanup there must be UNCONDITIONAL — a call guarded by "only on
   // success" would still mention removeBootstrapSql while leaking the artifact
   // after a Wrangler failure.
-  const finallyIdx = src.indexOf("} finally {")
-  assert.ok(finallyIdx > 0, "apply must have a finally-equivalent cleanup path")
-  const finallyBody = src.slice(finallyIdx + "} finally {".length, src.indexOf("}", finallyIdx + 12))
-  assert.match(finallyBody, /^\s*removeBootstrapSql\(\)\s*$/m, "the finally cleanup must be unconditional")
-  assert.doesNotMatch(finallyBody.replace(/\/\/[^\n]*/g, ""), /\bif\s*\(/, "the finally cleanup must not be conditional")
-  // Cleanup must never precede the Wrangler invocation that reads the file.
-  const applyIdx = src.indexOf("applyBootstrapFile(configPath, BOOTSTRAP_SQL_PATH)")
-  assert.ok(applyIdx > 0 && applyIdx < finallyIdx, "the artifact must only be removed after Wrangler has read it")
+  const bodies = finallyBodies(src)
+  assert.equal(bodies.length, 2, "apply has exactly two finally paths: the temporary execution file, and the repository-root artifact")
+  for (const body of bodies) {
+    assert.doesNotMatch(body.replace(/\/\/[^\n]*/g, ""), /\bif\s*\(/, "no finally cleanup may be conditional")
+  }
+  // The temporary execution directory is removed unconditionally…
+  assert.ok(bodies.some((b) => /^\s*rmSync\(dir, \{ recursive: true, force: true \}\)\s*$/m.test(b)), "the temporary execution directory must be removed unconditionally")
+  // …and so is the repository-root preparation artifact.
+  assert.ok(bodies.some((b) => /^\s*removeBootstrapSql\(\)\s*$/m.test(b)), "the repository-root artifact must be removed unconditionally")
+  // Cleanup runs only after the apply has been attempted — never before.
+  const applyIdx = src.indexOf("applyBootstrapFile(configPath, gates.canonicalSql)")
+  assert.ok(applyIdx > 0, "apply must execute the retained canonical bytes")
+  assert.ok(applyIdx < src.lastIndexOf("removeBootstrapSql()"), "the artifact must only be removed after the apply has been attempted")
+})
+
+test("a post-verification failure is reported HONESTLY as an operator-action state, not a rollback", () => {
+  const src = readFileSync(APPLY_SRC, "utf8")
+  // The five INSERTs are committed by the atomic batch BEFORE the read-only
+  // verification runs. Calling that a rollback would send an operator looking for
+  // state that is really there.
+  assert.equal(VERIFICATION_FAILED_AFTER_COMMIT, "bootstrap_verification_failed_after_commit")
+  const applyIdx = src.indexOf("applyBootstrapFile(configPath, gates.canonicalSql)")
+  const verifyIdx = src.indexOf("verifyBootstrapVia(")
+  assert.ok(applyIdx > 0 && verifyIdx > applyIdx, "verification runs AFTER the batch commits — that is why this state exists")
+
+  const branch = src.slice(src.indexOf("if (!verified.ok)"), src.indexOf("} else {", src.indexOf("if (!verified.ok)")))
+  assert.match(branch, /VERIFICATION_FAILED_AFTER_COMMIT/, "the failure must name the post-commit category")
+  assert.match(branch, /NOT rolled back/, "it must state the records were not rolled back")
+  assert.match(branch, /Operator investigation is required/)
+  assert.match(branch, /exitCode = 1/, "it must exit non-zero")
+  // Only category names are reported — never a row value.
+  assert.doesNotMatch(branch, /\bvalues\b/, "the post-commit failure must not print operator values")
+  // And no automatic destructive compensation anywhere in the command.
+  assert.doesNotMatch(src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/[^\n]*$/gm, ""), /\bDELETE FROM\b|\bDROP TABLE\b/i,
+    "apply must never issue a compensating DELETE for a state it does not understand")
 })
 
 test("Wrangler is unreachable until every gate passes (runtime latch, not source ordering)", () => {

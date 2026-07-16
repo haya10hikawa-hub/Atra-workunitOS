@@ -18,12 +18,22 @@ import { evaluateApplyGates, buildApplyCommands, MIGRATE_CONFIRM_PHRASE } from "
 import { evaluateRemoteVerifyGates } from "../scripts/cf-d1-schema-verify-remote.mjs"
 import {
   readOperatorInput, buildBootstrapSql, writeBootstrapSql, removeBootstrapSql,
-  REQUIRED_ENV, ALLOWED_ROLES, BOOTSTRAP_SQL_BASENAME,
+  REQUIRED_ENV, ALLOWED_ROLES,
 } from "../scripts/cf-d1-bootstrap-prepare.mjs"
 import { assertEvidenceSafe, buildEvidence } from "../scripts/cf-d1-evidence.mjs"
 import { SYNTHETIC_D1_IDS } from "../scripts/lib/cfDeployConfig.mjs"
+import { loadManifest, tenantRegistrySchemaVersion } from "../scripts/lib/d1MigrationManifest.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+
+/** The ONE canonical registry schema version, from the manifest. */
+function canonicalSchemaVersion(): string {
+  const loaded = loadManifest(REPO_ROOT)
+  if (!loaded.ok) throw new Error(`manifest unreadable: ${loaded.error}`)
+  const version = tenantRegistrySchemaVersion(loaded.manifest)
+  if (version === null) throw new Error("the manifest must declare a canonical registry schema version")
+  return version
+}
 const TEST_CONFIG_PATH = resolve(REPO_ROOT, "wrangler.deploy.gatetest.json")
 
 /** Assert the operator input is REFUSED and return its safe failure codes. */
@@ -142,7 +152,9 @@ const SYNTHETIC_OPERATOR_ENV = {
   CF_D1_BOOTSTRAP_TENANT_STATUS: "active",
   CF_D1_BOOTSTRAP_DATABASE_NAME: "synthetic-tenant-db",
   CF_D1_BOOTSTRAP_DATABASE_ID: SYNTHETIC_D1_IDS.TENANT_DB_DEFAULT,
-  CF_D1_BOOTSTRAP_SCHEMA_VERSION: "1",
+  // The registry schema version is CANONICAL — derived from the manifest, never a
+  // hand-picked digit string (which is exactly what the operator may not supply).
+  CF_D1_BOOTSTRAP_SCHEMA_VERSION: canonicalSchemaVersion(),
   CF_D1_BOOTSTRAP_USER_ID: "synthetic-user-01",
   CF_D1_BOOTSTRAP_USER_EMAIL: "synthetic.operator@synthetic.invalid",
   CF_D1_BOOTSTRAP_MEMBERSHIP_ID: "synthetic-membership-01",
@@ -187,6 +199,31 @@ test("bootstrap prepare: the database ID uses the SAME UUID validation as the de
   assert.equal(readOperatorInput(SYNTHETIC_OPERATOR_ENV).ok, true)
 })
 
+test("bootstrap prepare: the registry schema version must be the CANONICAL one, not any valid digit string", () => {
+  // A bounded digit-format check (what the tenant resolver does) cannot tell a
+  // correct version from a plausible one. `schema_version` names WHICH tenant
+  // schema the registry row claims the database has, so it must equal the single
+  // canonical source exactly.
+  const canonical = canonicalSchemaVersion()
+  assert.equal(readOperatorInput({ ...SYNTHETIC_OPERATOR_ENV, CF_D1_BOOTSTRAP_SCHEMA_VERSION: canonical }).ok, true, "the canonical version must be accepted")
+
+  // An OLDER version (the pre-0006 schema the application cannot use) is refused.
+  const older = String(Number(canonical) - 1)
+  const oldFailures = expectRefused({ ...SYNTHETIC_OPERATOR_ENV, CF_D1_BOOTSTRAP_SCHEMA_VERSION: older })
+  assert.ok(oldFailures.some((f) => f.startsWith("invalid:CF_D1_BOOTSTRAP_SCHEMA_VERSION")), `older version ${older} must be refused`)
+
+  // A NEWER invented version is refused too — an operator cannot declare a schema
+  // that does not exist.
+  for (const invented of [String(Number(canonical) + 1), "99", "0", "1000000"]) {
+    if (invented === canonical) continue
+    const failures = expectRefused({ ...SYNTHETIC_OPERATOR_ENV, CF_D1_BOOTSTRAP_SCHEMA_VERSION: invented })
+    assert.ok(failures.some((f) => f.startsWith("invalid:CF_D1_BOOTSTRAP_SCHEMA_VERSION")), `invented version ${invented} must be refused`)
+  }
+  // Still refuses a malformed value, and never echoes it.
+  const malformed = expectRefused({ ...SYNTHETIC_OPERATOR_ENV, CF_D1_BOOTSTRAP_SCHEMA_VERSION: "v2-beta" })
+  assert.doesNotMatch(JSON.stringify(malformed), /v2-beta/)
+})
+
 test("bootstrap prepare: failures name only FIELDS and never echo an operator value", () => {
   const failures = expectRefused({ ...SYNTHETIC_OPERATOR_ENV, CF_D1_BOOTSTRAP_USER_EMAIL: "not-an-email", CF_D1_BOOTSTRAP_MEMBERSHIP_ROLE: "root" })
   const serialized = JSON.stringify(failures)
@@ -207,7 +244,11 @@ test("bootstrap prepare: generated SQL uses plain INSERTs so duplicates fail clo
   let last = -1
   for (const stmt of order) { const i = sql.indexOf(stmt); assert.ok(i > last, `${stmt} out of order`); last = i }
 
-  const path = resolve(REPO_ROOT, `${BOOTSTRAP_SQL_BASENAME}`)
+  // A DISTINCT filename: `tests/d1bootstrapApplyGates.test.mts` gates on the exact
+  // approved `bootstrap.control.sql`, and the runner executes test files in
+  // parallel — sharing that path makes both suites flaky. Still git-ignored by
+  // `/bootstrap.control*.sql`. This test only asserts the write mode, not location.
+  const path = resolve(REPO_ROOT, "bootstrap.control.operatorgatetest.sql")
   try {
     writeBootstrapSql(sql, path)
     assert.equal(statSync(path).mode & 0o777, 0o600, "generated bootstrap SQL must be 0600")

@@ -167,8 +167,19 @@ The production Control DB bootstrap is repository-controlled and follows
 `prepare → inspect safe plan → gated apply → read-only verification → cleanup`, via
 `cf:d1:bootstrap:prepare` then `cf:d1:bootstrap:apply` (`--remote` + a validated
 config + `CF_D1_BOOTSTRAP_EXECUTE=1` +
-`CF_D1_BOOTSTRAP_CONFIRM=APPLY_PRODUCTION_CONTROL_BOOTSTRAP`). It applies all five
-records as one atomic batch and always removes the generated SQL. Never apply the
+`CF_D1_BOOTSTRAP_CONFIRM=APPLY_PRODUCTION_CONTROL_BOOTSTRAP`).
+
+The **prepared artifact is a reviewable plan, not execution authority**: apply
+reconstructs the canonical SQL from the operator environment at apply time and
+compares the whole file byte-for-byte, so a stale or tampered artifact fails closed
+before Wrangler. Registry database metadata must match the deploy config's real
+`TENANT_DB_DEFAULT` binding, and the registry `schema_version` is canonical (declared
+once in the manifest, pinned to the tenant lane) rather than an arbitrary digit
+string. Wrangler receives a **private temporary canonical copy**, never the mutable
+repository-root file. The five records apply as one atomic batch, are verified
+read-only with COUNT-only queries over every supplied field, and all generated files
+are removed on every exit path. Because verification runs after the batch commits, a
+verification failure is an operator-action state — not a rollback. Never apply the
 generated file with a raw `wrangler d1 execute` — that bypasses every gate.
 
 **Worker deploy never applies migrations and never writes bootstrap records**; it

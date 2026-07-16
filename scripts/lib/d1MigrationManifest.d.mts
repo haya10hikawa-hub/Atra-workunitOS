@@ -34,12 +34,23 @@ export interface MigrationEntry {
   note?: string
 }
 
+/**
+ * The canonical registry declaration for a binding: the ONE source of
+ * `tenant_databases.schema_version`, pinned to a digest of the lane it describes.
+ */
+export interface RegistryDeclaration {
+  schemaVersion: string
+  planDigest: string
+  note?: string
+}
+
 export interface Manifest {
   patchId: string
   version: number
   description?: string
   applyModes?: Record<MigrationApplyMode, string>
   bindings: Binding[]
+  registry: Partial<Record<Binding, RegistryDeclaration>>
   lanes: Record<Binding, MigrationEntry[]>
 }
 
@@ -74,6 +85,15 @@ export declare function resolveMigrationPath(repoRoot: string, relPath: unknown)
 export declare function computeDigest(absPath: string): string
 export declare function isValidEffectProbe(effect: unknown): boolean
 export declare function listCommittedMigrationFiles(repoRoot: string): string[]
+
+export declare const REGISTRY_BINDING: "TENANT_DB_DEFAULT"
+/** Deterministic digest of a binding's ordered lane. */
+export declare function computeRegistryPlanDigest(manifest: unknown, binding?: string): string
+/**
+ * The canonical `tenant_databases.schema_version`, or null when the manifest does
+ * not declare a valid one. Never derived from operator input.
+ */
+export declare function tenantRegistrySchemaVersion(manifest: unknown): string | null
 export declare function validateManifest(manifest: unknown, repoRoot: string): FailureReport
 export declare function buildPlan(manifest: unknown, binding: string): PlanStep[]
 export declare function buildAllPlans(manifest: unknown): Record<Binding, PlanStep[]>

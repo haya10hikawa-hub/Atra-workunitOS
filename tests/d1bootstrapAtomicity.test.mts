@@ -24,7 +24,7 @@ import { dirname, resolve } from "node:path"
 import { buildBootstrapSql } from "../scripts/cf-d1-bootstrap-prepare.mjs"
 import { applyAtomicBatch, hasExplicitTransactionControl } from "../scripts/lib/d1AtomicBatch.mjs"
 import { verifyBootstrapDatabase } from "../scripts/lib/d1BootstrapVerify.mjs"
-import { loadManifest } from "../scripts/lib/d1MigrationManifest.mjs"
+import { loadManifest, tenantRegistrySchemaVersion } from "../scripts/lib/d1MigrationManifest.mjs"
 import { applyLaneWithLedger, splitStatements } from "../scripts/lib/d1MigrationLedger.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
@@ -38,10 +38,19 @@ type BootstrapValues = {
   identityId: string; identityProvider: string; identitySubject: string
 }
 
+/** The ONE canonical registry schema version — never a hand-picked digit string. */
+function canonicalSchemaVersion(): string {
+  const loaded = loadManifest(REPO_ROOT)
+  if (!loaded.ok) throw new Error(`manifest unreadable: ${loaded.error}`)
+  const version = tenantRegistrySchemaVersion(loaded.manifest)
+  if (version === null) throw new Error("the manifest must declare a canonical registry schema version")
+  return version
+}
+
 /** Test-only synthetic operator values. Nothing here is real. */
 const VALUES: BootstrapValues = {
   tenantId: "acme", tenantName: "Acme", tenantSlug: "acme", tenantStatus: "active",
-  databaseName: "acme-db", databaseId: "3f2504e0-4f89-41d3-9a0c-0305e82c3301", schemaVersion: "1",
+  databaseName: "acme-db", databaseId: "3f2504e0-4f89-41d3-9a0c-0305e82c3301", schemaVersion: canonicalSchemaVersion(),
   userId: "user-1", userEmail: "ops@example.com",
   membershipId: "mem-1", membershipRole: "owner", membershipStatus: "active",
   identityId: "ident-1", identityProvider: "jwt", identitySubject: "auth0|abc123",
@@ -240,6 +249,134 @@ test("a broken registry state FAILS post-bootstrap verification with a category 
   assert.equal(result.ok, false)
   assert.deepEqual(result.failures, ["identity_row"])
   for (const f of result.failures) assert.match(f, /^[a-z0-9_]+$/, "failures are category names only")
+  db.close()
+})
+
+// ─── Field-level verification matrix (20–26) ─────────────────────
+
+/**
+ * Bootstrap a control DB, then corrupt ONE field and assert the matching category
+ * fails. Counting a row that merely shares an id would confirm almost nothing —
+ * "a tenant with this id exists" is true even if the bootstrap wrote the wrong
+ * database id or a stale schema version.
+ */
+function expectVerificationFailure(corrupt: string, expected: string) {
+  const db = freshControlDb()
+  assert.equal(applyAtomicBatch(db, sqlFor()).ok, true)
+  assert.deepEqual(verifyBootstrapDatabase(db, VALUES).failures, [], "the pristine bootstrap must verify")
+  db.exec(corrupt)
+  const result = verifyBootstrapDatabase(db, VALUES)
+  assert.equal(result.ok, false, `${corrupt} must fail verification`)
+  assert.deepEqual(result.failures, [expected])
+  for (const f of result.failures) assert.match(f, /^[a-z0-9_]+$/, "failures are category names only")
+  db.close()
+}
+
+test("20. registry verification fails on the WRONG database ID", () => {
+  expectVerificationFailure("UPDATE tenant_databases SET database_id = '3f2504e0-4f89-41d3-9a0c-0305e82c3399'", "registry_row")
+})
+
+test("21. registry verification fails on the WRONG database name", () => {
+  expectVerificationFailure("UPDATE tenant_databases SET database_name = 'some-other-db'", "registry_row")
+})
+
+test("22. registry verification fails on the WRONG schema version", () => {
+  expectVerificationFailure("UPDATE tenant_databases SET schema_version = '1'", "registry_row")
+})
+
+test("23. user verification fails on the WRONG email", () => {
+  expectVerificationFailure("UPDATE users SET email = 'someone-else@example.com'", "user_row")
+})
+
+test("24. membership verification fails on the WRONG role", () => {
+  // Still an allowlisted role — but not the one the operator authorized.
+  expectVerificationFailure("UPDATE tenant_memberships SET role = 'viewer'", "membership_row")
+})
+
+test("25. identity verification fails on the WRONG provider", () => {
+  expectVerificationFailure("UPDATE auth_identities SET provider = 'saml'", "identity_row")
+})
+
+test("26. identity verification fails on the WRONG provider subject", () => {
+  expectVerificationFailure("UPDATE auth_identities SET provider_subject = 'auth0|someone-else'", "identity_row")
+})
+
+test("tenant verification fails on a wrong name or slug, and identity on a wrong email", () => {
+  expectVerificationFailure("UPDATE tenants SET name = 'Renamed'", "tenant_row")
+  expectVerificationFailure("UPDATE tenants SET slug = 'renamed'", "tenant_row")
+  expectVerificationFailure("UPDATE auth_identities SET email = 'other@example.com'", "identity_row")
+})
+
+test("verification requires EVERY supplied field — no query is satisfied by an id alone", () => {
+  // Guard against a verifier that only counts by primary key: corrupt every
+  // non-key field in turn and require a failure each time.
+  for (const [corrupt, expected] of [
+    ["UPDATE tenants SET name = 'x'", "tenant_row"],
+    ["UPDATE tenants SET slug = 'x'", "tenant_row"],
+    ["UPDATE tenant_databases SET database_name = 'x'", "registry_row"],
+    ["UPDATE tenant_databases SET database_id = 'x'", "registry_row"],
+    ["UPDATE tenant_databases SET schema_version = '9'", "registry_row"],
+    ["UPDATE users SET email = 'x@y.z'", "user_row"],
+    ["UPDATE tenant_memberships SET role = 'editor'", "membership_row"],
+    ["UPDATE auth_identities SET provider = 'x'", "identity_row"],
+    ["UPDATE auth_identities SET provider_subject = 'x'", "identity_row"],
+    ["UPDATE auth_identities SET email = 'x@y.z'", "identity_row"],
+  ] as const) {
+    expectVerificationFailure(corrupt, expected)
+  }
+})
+
+test("a broken foreign-key relationship fails verification", () => {
+  // The JOINs are what prove the relationships resolve.
+  for (const [corrupt, expected] of [
+    ["UPDATE tenant_memberships SET user_id = 'ghost'", "membership_row"],
+    ["UPDATE auth_identities SET user_id = 'ghost'", "identity_row"],
+    ["UPDATE tenant_databases SET tenant_id = 'ghost'", "registry_row"],
+  ] as const) {
+    const db = freshControlDb()
+    assert.equal(applyAtomicBatch(db, sqlFor()).ok, true)
+    // Foreign keys are enforced, so break the link with FKs momentarily off —
+    // this models a database that got into a bad state, not a legal write.
+    db.exec("PRAGMA foreign_keys = OFF")
+    db.exec(corrupt)
+    const result = verifyBootstrapDatabase(db, VALUES)
+    assert.equal(result.ok, false, `${corrupt} must fail verification`)
+    assert.deepEqual(result.failures, [expected])
+    db.close()
+  }
+})
+
+test("27 + 28. every verification query stays COUNT-only and no output includes an operator value or SQL", () => {
+  const db = freshControlDb()
+  applyAtomicBatch(db, sqlFor())
+  const issued: string[] = []
+  const spy = { prepare: (sql: string) => { issued.push(sql); return db.prepare(sql) } } as unknown as DatabaseSync
+  verifyBootstrapDatabase(spy, VALUES)
+
+  assert.equal(issued.length, 5, "one query per record")
+  for (const sql of issued) {
+    // 27. COUNT-only: the ONLY thing that can come back is an integer.
+    assert.match(sql, /^SELECT COUNT\(\*\) AS c FROM /, `only COUNT reads are permitted: ${sql}`)
+    assert.doesNotMatch(sql, /\b(insert|update|delete|drop|alter|create|pragma)\b/i)
+    // The values appear only as escaped predicates — never in a select list.
+    assert.equal(/SELECT COUNT\(\*\) AS c FROM [^;]*\bWHERE\b/.test(sql), true, "every query filters")
+  }
+  // Every supplied field is actually used as a predicate somewhere.
+  const all = issued.join("\n")
+  for (const value of [VALUES.tenantId, VALUES.tenantName, VALUES.tenantSlug, VALUES.databaseName, VALUES.databaseId,
+    VALUES.schemaVersion, VALUES.userId, VALUES.userEmail, VALUES.membershipId, VALUES.membershipRole,
+    VALUES.identityId, VALUES.identityProvider, VALUES.identitySubject]) {
+    assert.ok(all.includes(value), `${value} must be verified, not assumed`)
+  }
+
+  // 28. Failure output carries categories only — never a value or any SQL.
+  db.exec("UPDATE users SET email = 'leaked@example.com'")
+  const failed = verifyBootstrapDatabase(db, VALUES)
+  const serialized = JSON.stringify(failed.failures)
+  assert.deepEqual(failed.failures, ["user_row"])
+  for (const secret of [VALUES.userEmail, "leaked@example.com", VALUES.databaseId, VALUES.identitySubject, "SELECT", "COUNT"]) {
+    assert.equal(serialized.includes(secret), false, `output must never include ${secret}`)
+  }
   db.close()
 })
 

@@ -7,6 +7,13 @@
     "once": "The raw SQL is NOT re-runnable (e.g. `ALTER TABLE ... ADD COLUMN`, which SQLite cannot guard with `IF NOT EXISTS`). Applied exactly once, recorded in the `__atra_d1_migrations` ledger, and skipped on later runs. Requires an `effect` probe so the ledger and the real schema reconcile deterministically."
   },
   "bindings": ["CONTROL_DB", "TENANT_DB_DEFAULT"],
+  "registry": {
+    "TENANT_DB_DEFAULT": {
+      "schemaVersion": "2",
+      "planDigest": "4ea3d7e263d21fbb396de7fea474db82997c10ce4c2da088e3f39b46d6c00c13",
+      "note": "The ONE canonical source of `tenant_databases.schema_version` for a TENANT_DB_DEFAULT registry row. It is NOT an arbitrary operator value: bootstrap prepare and apply both require the operator-supplied CF_D1_BOOTSTRAP_SCHEMA_VERSION to equal it exactly. `planDigest` pins the tenant lane this version describes — changing the active plan makes `validateManifest` fail with registry_plan_digest_mismatch until the version and digest are updated together. Version 2 describes the lane INCLUDING 0006 (action_previews.created_by_user_id); version 1 described the pre-0006 schema, which the application cannot use."
+    }
+  },
   "lanes": {
     "CONTROL_DB": [
       { "sequence": 1, "binding": "CONTROL_DB", "path": "migrations/0001_control_db.sql", "sha256": "b693b3d1852cd03fc1b2eb4156cc953f63c36c61813516661b49e8bbdab7eb07", "kind": "schema", "apply": "replay_safe" },
