@@ -34,7 +34,7 @@ import { tmpdir } from "node:os"
 import { loadManifest, validateManifest, buildPlan, computeDigest, resolveMigrationPath, KNOWN_BINDINGS } from "./lib/d1MigrationManifest.mjs"
 // ONE shared config-authority implementation, used by every remote D1 command.
 import {
-  loadValidatedDeployConfigAuthority, createPrivateExecutionConfig, removePrivateExecutionConfig,
+  loadValidatedDeployConfigAuthority, withPrivateExecutionConfig,
 } from "./lib/cfDeployConfigAuthority.mjs"
 import {
   CREATE_HISTORY_SQL, MIGRATION_HISTORY_TABLE, reconcileFromState, buildAtomicMigrationBatchSql,
@@ -90,27 +90,34 @@ function requireAuthorizedExecution() {
 }
 
 // ─── Remote read surface (read-only, metadata only) ──────────────
+//
+// Every helper takes the retained `authority` — never a reusable config PATH. Each
+// Wrangler invocation opens its OWN scoped execution config from that authority,
+// uses it for exactly one call, and drops it. A config from a previous call cannot
+// be mutated to redirect the next, because there is no config from a previous call.
 
 /** Run a remote D1 query through Wrangler and parse its JSON results. */
-function remoteQuery(binding, executionConfig, sql) {
+function remoteQuery(binding, authority, sql) {
   requireAuthorizedExecution()
-  const result = spawnSync(WRANGLER_BIN, ["d1", "execute", binding, "--command", sql, "--remote", "--json", "--config", executionConfig], {
-    cwd: REPO_ROOT, encoding: "utf8",
+  return withPrivateExecutionConfig(authority, { repoRoot: REPO_ROOT, purpose: "migrate-exec" }, (executionConfig) => {
+    const result = spawnSync(WRANGLER_BIN, ["d1", "execute", binding, "--command", sql, "--remote", "--json", "--config", executionConfig], {
+      cwd: REPO_ROOT, encoding: "utf8",
+    })
+    if (result.status !== 0) throw new Error(`remote_query_failed:${binding}`)
+    let parsed
+    try { parsed = JSON.parse(result.stdout) } catch { throw new Error(`remote_query_unparseable:${binding}`) }
+    const first = Array.isArray(parsed) ? parsed[0] : parsed
+    return (first && Array.isArray(first.results)) ? first.results : []
   })
-  if (result.status !== 0) throw new Error(`remote_query_failed:${binding}`)
-  let parsed
-  try { parsed = JSON.parse(result.stdout) } catch { throw new Error(`remote_query_unparseable:${binding}`) }
-  const first = Array.isArray(parsed) ? parsed[0] : parsed
-  return (first && Array.isArray(first.results)) ? first.results : []
 }
 
 /**
  * Read the remote ledger for a binding. Metadata only: no application rows, no
  * database IDs. The ledger table is created first (replay-safe infrastructure).
  */
-function readRemoteHistory(binding, executionConfig) {
-  execRemoteSqlText(binding, executionConfig, CREATE_HISTORY_SQL, "ledger-init")
-  const rows = remoteQuery(binding, executionConfig, `SELECT binding, sequence, path, sha256, applied_at FROM ${MIGRATION_HISTORY_TABLE} ORDER BY binding, sequence;`)
+function readRemoteHistory(binding, authority) {
+  execRemoteSqlText(binding, authority, CREATE_HISTORY_SQL, "ledger-init")
+  const rows = remoteQuery(binding, authority, `SELECT binding, sequence, path, sha256, applied_at FROM ${MIGRATION_HISTORY_TABLE} ORDER BY binding, sequence;`)
   const own = []
   const foreign = []
   for (const r of rows) {
@@ -122,23 +129,26 @@ function readRemoteHistory(binding, executionConfig) {
 }
 
 /** Does a remote column exist? Metadata-only PRAGMA, never row data. */
-function remoteProbe(binding, executionConfig, effect) {
+function remoteProbe(binding, authority, effect) {
   if (!effect || effect.type !== "column_exists") return false
-  const rows = remoteQuery(binding, executionConfig, `PRAGMA table_info("${effect.table}");`)
+  const rows = remoteQuery(binding, authority, `PRAGMA table_info("${effect.table}");`)
   return rows.some((c) => String(c.name) === effect.column)
 }
 
 /** Execute SQL text remotely via a temporary file — ONE atomic D1 batch. */
-function execRemoteSqlText(binding, executionConfig, sql, label) {
+function execRemoteSqlText(binding, authority, sql, label) {
   requireAuthorizedExecution()
   const dir = mkdtempSync(resolve(tmpdir(), "d1-apply-"))
   const file = resolve(dir, `${label}.sql`)
   try {
     writeFileSync(file, sql, { mode: 0o600 })
-    const result = spawnSync(WRANGLER_BIN, ["d1", "execute", binding, "--file", file, "--remote", "--config", executionConfig], {
-      cwd: REPO_ROOT, stdio: "inherit",
+    // A fresh scoped config from the retained authority for THIS single invocation.
+    withPrivateExecutionConfig(authority, { repoRoot: REPO_ROOT, purpose: "migrate-exec" }, (executionConfig) => {
+      const result = spawnSync(WRANGLER_BIN, ["d1", "execute", binding, "--file", file, "--remote", "--config", executionConfig], {
+        cwd: REPO_ROOT, stdio: "inherit",
+      })
+      if (result.status !== 0) throw new Error(`remote_exec_failed:${binding}:${label}`)
     })
-    if (result.status !== 0) throw new Error(`remote_exec_failed:${binding}:${label}`)
   } finally {
     // The generated SQL never outlives the invocation, on success or failure.
     rmSync(dir, { recursive: true, force: true })
@@ -182,19 +192,24 @@ function parseConfigArg(argv) {
 }
 
 /**
- * Apply every lane through ONE private execution config. Returns an exit code and
- * NEVER calls `process.exit` — the caller's `finally` must be able to remove the
- * private config first. A nested exit here would terminate the process mid-loop and
- * leave a config containing real database IDs sitting at the repository root.
+ * Apply every lane, deriving a FRESH scoped execution config from `authority` for
+ * each individual Wrangler call (ledger init, history read, effect probe, and every
+ * migration). Returns an exit code and NEVER calls `process.exit`: a nested exit
+ * would terminate the process mid-call, before a scoped config's own `finally` could
+ * remove it, leaving a file with real database IDs at the repository root.
+ *
+ * Threading the AUTHORITY — not a reusable config path — is the invariant: modifying
+ * a config file from one lane's call cannot redirect the next lane's call, because
+ * the next call opens its own file from the retained bytes.
  */
-function applyAllLanes(executionConfig) {
+function applyAllLanes(authority) {
   const manifest = loadManifest(REPO_ROOT).manifest
   for (const binding of KNOWN_BINDINGS) {
     // Reconcile the REMOTE ledger + schema before applying anything in this lane.
     let reconciled
     try {
-      const history = readRemoteHistory(binding, executionConfig)
-      reconciled = reconcileFromState(manifest, binding, history, (effect) => remoteProbe(binding, executionConfig, effect))
+      const history = readRemoteHistory(binding, authority)
+      reconciled = reconcileFromState(manifest, binding, history, (effect) => remoteProbe(binding, authority, effect))
     } catch (err) {
       console.error(`cf:d1:migrations:apply: FAILED reading migration history for ${binding} — ${err.message}`)
       return 1
@@ -219,11 +234,11 @@ function applyAllLanes(executionConfig) {
         if (state === "satisfied") {
           // Already recorded and replay-safe: re-execute the pinned SQL (a no-op by
           // construction) WITHOUT recording it a second time.
-          execRemoteSqlText(binding, executionConfig, sql, label)
+          execRemoteSqlText(binding, authority, sql, label)
         } else {
           // Pending: SQL + ledger row in ONE file = ONE atomic D1 batch. The
           // migration is never recorded unless its own SQL committed with it.
-          execRemoteSqlText(binding, executionConfig, buildAtomicMigrationBatchSql(sql, step, new Date().toISOString()), label)
+          execRemoteSqlText(binding, authority, buildAtomicMigrationBatchSql(sql, step, new Date().toISOString()), label)
         }
       } catch (err) {
         console.error(`cf:d1:migrations:apply: FAILED applying ${step.name} — ${err.message}. Aborting.`)
@@ -247,23 +262,16 @@ function main() {
   // EVERY gate passed — only now may Wrangler be reached.
   executionAuthorized = true
 
-  // ONE private execution config, written from the retained authority's EXACT
-  // bytes, shared by the ledger init, the history query, every effect probe, and
-  // every Control and Tenant migration. The operator's mutable configPath is never
-  // handed to Wrangler, so it cannot be edited, replaced, or deleted mid-run to
-  // redirect any lane.
-  let executionConfig = null
+  // The retained authority — NOT a reusable config path — is threaded to every lane.
+  // Each Wrangler call derives its own short-lived config from these exact bytes and
+  // removes it immediately, so the operator's mutable configPath is never handed to
+  // Wrangler and no private file survives between two calls to be redirected.
   let exitCode = 1
   try {
-    executionConfig = createPrivateExecutionConfig(gates.configAuthority, { repoRoot: REPO_ROOT, purpose: "migrate-exec" })
-    exitCode = applyAllLanes(executionConfig)
+    exitCode = applyAllLanes(gates.configAuthority)
   } catch (err) {
     console.error(`cf:d1:migrations:apply: FAILED — ${err instanceof Error ? err.message : "apply_failed"}`)
     exitCode = 1
-  } finally {
-    // Unconditional: success, ledger-init failure, query failure, migration
-    // failure, or an unexpected throw. Only `main` exits, and only after this ran.
-    removePrivateExecutionConfig(executionConfig)
   }
   process.exit(exitCode)
 }

@@ -18,6 +18,21 @@
  * single private execution config from the EXACT retained bytes, and gives Wrangler
  * only that. There is deliberately no bootstrap-only variant.
  *
+ * A FILESYSTEM PATH IS NOT AUTHORITY
+ * ----------------------------------
+ * An earlier repair wrote ONE private execution config per command and reused its
+ * PATH for every Wrangler invocation. A path is a mutable filesystem file: it can be
+ * altered between the Control and Tenant migration operations, between remote
+ * verification queries, or after remote schema verification but before the Worker
+ * upload. Path identity across two invocations is therefore NOT proof that both
+ * executed the same bytes.
+ *
+ * The authority is the retained bytes and their SHA-256. Every Wrangler invocation
+ * gets its OWN short-lived config, derived directly from the retained bytes and
+ * removed the instant its one call returns (`withPrivateExecutionConfig`). No
+ * reusable mutable file serves as authority between invocations, so mutating an
+ * earlier scoped file cannot redirect a later call.
+ *
  * SAFETY:
  *   - Dependency-free (node: builtins + the shared validator).
  *   - Performs NO network access and NO SQL.
@@ -25,12 +40,21 @@
  *     config content, raw filesystem path, or secret.
  *   - The EXACT validated bytes are the execution authority — never a later
  *     `JSON.stringify` of a mutable parsed object.
+ *   - `authority.sha256` is safe evidence: it is a digest over the exact bytes and
+ *     contains no database ID or config content. It is NEVER written into the config
+ *     file; it exists only in memory, to bind verification and deploy by byte
+ *     identity rather than by a false same-path claim.
  */
 
-import { readFileSync, writeFileSync, lstatSync, rmSync } from "node:fs"
+import { readFileSync, writeFileSync, lstatSync, rmSync, chmodSync } from "node:fs"
 import { resolve as resolvePath } from "node:path"
-import { randomBytes } from "node:crypto"
+import { randomBytes, createHash } from "node:crypto"
 import { validateDeployConfig, validateGeneratedConfigLocation } from "./cfDeployConfig.mjs"
+
+/** SHA-256 hex of the exact bytes — the safe authority digest. */
+function digestOf(bytes) {
+  return createHash("sha256").update(bytes).digest("hex")
+}
 
 /** Hard size cap, enforced BEFORE the config is read or parsed. */
 export const DEPLOY_CONFIG_MAX_BYTES = 64 * 1024
@@ -61,6 +85,7 @@ export function deepFreeze(value) {
  *
  * Returns `{ ok: true, authority }` where `authority` is:
  *   - `bytes`    — the EXACT validated bytes (the execution authority);
+ *   - `sha256`   — the digest over those exact bytes (safe evidence);
  *   - `snapshot` — a recursively immutable parsed view, for comparisons only.
  * On failure returns `{ ok: false, blocked: [...] }` with safe categories only, and
  * NO authority bytes.
@@ -101,35 +126,83 @@ export function loadValidatedDeployConfigAuthority({ configPath, repoRoot, allow
     return { ok: false, blocked: ["deploy_config_invalid"] }
   }
 
-  return { ok: true, authority: Object.freeze({ bytes, snapshot: deepFreeze(parsed) }) }
+  return { ok: true, authority: Object.freeze({ bytes, sha256: digestOf(bytes), snapshot: deepFreeze(parsed) }) }
+}
+
+/** Hard size cap for a scoped execution config — the same bound as the source. */
+const SCOPED_CONFIG_MAX_BYTES = DEPLOY_CONFIG_MAX_BYTES
+
+/**
+ * Confirm, immediately before it is handed to Wrangler, that a scoped config is
+ * EXACTLY the retained authority: a plain private file at the approved location,
+ * whose bytes hash to `authority.sha256`. This is what makes byte identity — not a
+ * path — the guarantee: even if something raced the file between creation and use,
+ * a single non-matching byte is refused before the call.
+ *
+ * Throws a safe category error (never a path or config content).
+ */
+function assertScopedConfigMatchesAuthority(path, authority, repoRoot) {
+  const location = validateGeneratedConfigLocation(path, repoRoot)
+  if (!location.ok) throw new Error("scoped_config_unapproved_location")
+  const stats = lstatSync(path)
+  if (stats.isSymbolicLink()) throw new Error("scoped_config_symlink")
+  if (!stats.isFile()) throw new Error("scoped_config_not_plain_file")
+  // Never broader than 0600 — normal execution tightens to 0400.
+  if ((stats.mode & 0o777 & ~0o600) !== 0) throw new Error("scoped_config_permissions_too_broad")
+  if (stats.size > SCOPED_CONFIG_MAX_BYTES) throw new Error("scoped_config_too_large")
+  if (stats.size !== Buffer.byteLength(authority.bytes)) throw new Error("scoped_config_size_mismatch")
+  const actual = readFileSync(path, "utf8")
+  if (digestOf(actual) !== authority.sha256) throw new Error("scoped_config_bytes_mismatch")
 }
 
 /**
- * Write the authority's EXACT retained bytes to a fresh private execution config
- * and return only its path.
+ * Run ONE Wrangler-invoking `operation` against a short-lived config that carries
+ * the authority's EXACT retained bytes, and remove that config the instant the
+ * operation returns.
  *
- * The filename is collision-resistant and carries NO database ID; it matches the
- * approved generated-config form (`wrangler.deploy*.json`) at the repository root,
- * so Wrangler resolves it exactly as a normal generated config and `.gitignore`'s
- * `/wrangler.deploy*.json` already covers it. Exclusive creation (`wx`) means an
- * existing file can never be overwritten or followed.
+ * This is the ONLY way execution bytes reach Wrangler. There is deliberately no API
+ * that returns a reusable path: a long-lived private file is still a mutable
+ * filesystem file, and one that survives between two Wrangler calls can be altered
+ * in between to redirect the second call. A fresh lease per invocation closes that
+ * window — the file exists only inside `operation`, is verified to equal the
+ * authority before the call, and is gone before the next lease is taken.
+ *
+ * Behaviour:
+ *   - the filename is collision-resistant, carries NO database ID, and matches the
+ *     approved generated-config form (`wrangler.deploy*.json`) at the repository
+ *     root, so Wrangler resolves it as a normal generated config and `.gitignore`
+ *     already covers it;
+ *   - the file is created EXCLUSIVELY (`wx`) — a pre-placed file is never overwritten
+ *     or followed — with the EXACT retained bytes, then tightened to read-only
+ *     (0400, never broader than 0600);
+ *   - before the callback it is re-confirmed to be a plain private file at the
+ *     approved location whose bytes hash to `authority.sha256`;
+ *   - the callback receives ONLY the path, and it is removed in `finally` on success
+ *     or throw. The path is never returned to, cached by, or reused across callers.
  *
  * `purpose` only labels the file for an operator reading `ls`; it never carries a
  * value and is constrained to a safe token.
  */
-export function createPrivateExecutionConfig(authority, { repoRoot, purpose = "exec" } = {}) {
+export function withPrivateExecutionConfig(authority, { repoRoot, purpose = "exec" } = {}, operation) {
   if (!authority || typeof authority.bytes !== "string" || authority.bytes.length === 0) {
     throw new Error("execution_authority_missing")
   }
+  if (typeof authority.sha256 !== "string" || authority.sha256.length === 0) {
+    throw new Error("execution_authority_missing")
+  }
+  if (typeof operation !== "function") throw new Error("execution_operation_missing")
   const label = /^[a-z][a-z0-9-]{0,23}$/.test(purpose) ? purpose : "exec"
   const path = resolvePath(repoRoot, `wrangler.deploy.${label}-${randomBytes(12).toString("hex")}.json`)
-  // The EXACT validated bytes — never a re-read of the original, never a rebuild
-  // from a mutable parsed object or from environment variables.
-  writeFileSync(path, authority.bytes, { mode: 0o600, flag: "wx" })
-  return path
-}
-
-/** Remove a private execution config. Safe to call with null/undefined. */
-export function removePrivateExecutionConfig(path) {
-  rmSync(path ?? "", { force: true })
+  try {
+    // The EXACT validated bytes — never a re-read of the original, never a rebuild
+    // from a mutable parsed object or from environment variables. Exclusive creation
+    // first, then read-only, so the file Wrangler reads can never be rewritten.
+    writeFileSync(path, authority.bytes, { mode: 0o600, flag: "wx" })
+    chmodSync(path, 0o400)
+    assertScopedConfigMatchesAuthority(path, authority, repoRoot)
+    return operation(path)
+  } finally {
+    // Unconditional, on success or throw — a scoped config never outlives its call.
+    rmSync(path, { force: true })
+  }
 }

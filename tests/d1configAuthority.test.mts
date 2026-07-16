@@ -19,12 +19,13 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import { readFileSync, writeFileSync, rmSync, existsSync, statSync, symlinkSync, chmodSync, mkdtempSync, readdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
 import {
-  loadValidatedDeployConfigAuthority, createPrivateExecutionConfig, removePrivateExecutionConfig,
+  loadValidatedDeployConfigAuthority, withPrivateExecutionConfig,
   deepFreeze, DEPLOY_CONFIG_MAX_BYTES,
 } from "../scripts/lib/cfDeployConfigAuthority.mjs"
 import { buildConfigWithIds, loadConfigFile, SYNTHETIC_D1_IDS } from "../scripts/lib/cfDeployConfig.mjs"
@@ -49,16 +50,20 @@ function withConfig(fn: (path: string) => void, options: { body?: string; mode?:
 
 const load = (configPath: string) => loadValidatedDeployConfigAuthority({ configPath, repoRoot: REPO_ROOT, allowPlaceholderIds: false })
 
-/** Remove any private execution config a test left behind. */
+/**
+ * Remove any scoped execution config THIS suite left behind. Scoped to the purposes
+ * this file uses (`test-exec`, and the `exec` fallback) — `node --test` runs test
+ * FILES in parallel, and matching every `*-exec-*` would delete a sibling suite's
+ * live config at the shared repository root.
+ */
+const OWN_EXEC = /^wrangler\.deploy\.(test-exec-|exec-)[0-9a-f]+\.json$/
 function clearPrivateConfigs() {
-  for (const f of readdirSync(REPO_ROOT)) {
-    if (/^wrangler\.deploy\.(bootstrap|migrate|verify|deploy|exec)-exec-|^wrangler\.deploy\.exec-/.test(f)) rmSync(resolve(REPO_ROOT, f), { force: true })
-  }
+  for (const f of readdirSync(REPO_ROOT)) if (OWN_EXEC.test(f)) rmSync(resolve(REPO_ROOT, f), { force: true })
 }
 
 // ─── 1–10. the shared authority ──────────────────────────────────
 
-test("1. a valid generated config produces retained authority BYTES", () => {
+test("1. a valid generated config produces retained authority BYTES and their SHA-256", () => {
   withConfig((configPath) => {
     const result = load(configPath)
     assert.equal(result.ok, true, `a valid config must load: ${result.ok ? "" : result.blocked.join(",")}`)
@@ -67,6 +72,10 @@ test("1. a valid generated config produces retained authority BYTES", () => {
     assert.equal(result.authority.bytes, readFileSync(configPath, "utf8"))
     assert.equal(JSON.parse(result.authority.bytes).d1_databases.length, 2)
     assert.ok(result.authority.snapshot)
+    // The digest is over the EXACT retained bytes — safe evidence, no ID or content.
+    assert.equal(result.authority.sha256, createHash("sha256").update(result.authority.bytes).digest("hex"))
+    assert.match(result.authority.sha256, /^[0-9a-f]{64}$/)
+    assert.equal(result.authority.sha256.includes(SYNTHETIC_D1_IDS.CONTROL_DB), false, "the digest carries no database ID")
   })
 })
 
@@ -197,58 +206,119 @@ test("10. no failure contains a database ID, database name, config content, or p
   }
 })
 
-// ─── The private execution config ────────────────────────────────
+// ─── The scoped execution-config lease ───────────────────────────
+//
+// A filesystem path is NOT authority: a reusable private file that survives between
+// two Wrangler calls can be altered in between. The only way execution bytes reach
+// Wrangler is a callback-scoped lease that mints a fresh file from the retained
+// bytes, verifies it, invokes the callback, and removes it — the path never escapes.
 
-test("the private execution config is exclusive, 0600, collision-resistant, and carries the EXACT bytes", () => {
+const authorityOf = (configPath: string) => {
+  const result = load(configPath)
+  if (!result.ok) throw new Error(`authority must load: ${result.blocked.join(",")}`)
+  return result.authority
+}
+
+test("4 + 5 + 6 + 7 + 10. a scoped config carries EXACT bytes, is 0400 & exclusive, exists only inside the callback, and each lease is a fresh path", () => {
   withConfig((configPath) => {
-    const result = load(configPath)
-    assert.equal(result.ok, true)
-    if (!result.ok) return
-    const first = createPrivateExecutionConfig(result.authority, { repoRoot: REPO_ROOT, purpose: "test-exec" })
-    const second = createPrivateExecutionConfig(result.authority, { repoRoot: REPO_ROOT, purpose: "test-exec" })
-    try {
-      // EXACT retained bytes — never a re-serialization of the parsed object.
-      assert.equal(readFileSync(first, "utf8"), result.authority.bytes)
-      assert.equal(statSync(first).mode & 0o777, 0o600, "the execution config must be private")
-      // An approved, git-ignored, repository-root generated-config form, with a
-      // collision-resistant name that carries NO database ID.
-      const name = first.slice(REPO_ROOT.length + 1)
-      assert.match(name, /^wrangler\.deploy\.test-exec-[0-9a-f]{24}\.json$/)
-      assert.equal(name.includes(SYNTHETIC_D1_IDS.CONTROL_DB), false, "the filename must never carry a database ID")
-      assert.notEqual(first, second, "each call must produce a fresh file")
-      // Exclusive creation: a pre-placed file is never overwritten or followed.
-      assert.throws(() => writeFileSync(first, "hijacked", { flag: "wx" }), /EEXIST/)
-    } finally {
-      removePrivateExecutionConfig(first)
-      removePrivateExecutionConfig(second)
-    }
-    assert.deepEqual(readdirSync(REPO_ROOT).filter((f) => f.startsWith("wrangler.deploy.test-exec-")), [])
+    const authority = authorityOf(configPath)
+    let insidePath = ""
+    let insideMode = -1
+    let insideBytes = ""
+    let existedInside = false
+    let nestedPath = ""
+
+    const ret = withPrivateExecutionConfig(authority, { repoRoot: REPO_ROOT, purpose: "test-exec" }, (cfg) => {
+      insidePath = cfg
+      existedInside = existsSync(cfg)
+      insideMode = statSync(cfg).mode & 0o777
+      insideBytes = readFileSync(cfg, "utf8")
+      // 6. Exclusive creation: a pre-placed file could never have been overwritten or
+      // followed — proven by the fact that re-creating this exact path fails.
+      assert.throws(() => writeFileSync(cfg, "hijacked", { flag: "wx" }), /EEXIST/)
+      // 10. A nested lease gets a DIFFERENT random path.
+      withPrivateExecutionConfig(authority, { repoRoot: REPO_ROOT, purpose: "test-exec" }, (c2) => { nestedPath = c2 })
+      // 8. The nested lease's file is already gone once its callback returned.
+      assert.equal(existsSync(nestedPath), false, "the nested lease is removed before we resume")
+      return "CALLBACK_RESULT"
+    })
+
+    // The function returns the CALLBACK's value — the path never escapes.
+    assert.equal(ret, "CALLBACK_RESULT")
+    assert.equal(existedInside, true, "7. the config exists inside the callback")
+    assert.equal(insideBytes, authority.bytes, "4. EXACT retained bytes, never a re-serialization")
+    // 5. Read-only (0400), and in any case never broader than 0600.
+    assert.equal(insideMode, 0o400, "the scoped config must be read-only 0400")
+    assert.equal(insideMode & ~0o600, 0, "…and never broader than 0600")
+    const name = insidePath.slice(REPO_ROOT.length + 1)
+    assert.match(name, /^wrangler\.deploy\.test-exec-[0-9a-f]{24}\.json$/, "approved, collision-resistant, repo-root name")
+    assert.equal(name.includes(SYNTHETIC_D1_IDS.CONTROL_DB), false, "the filename must never carry a database ID")
+    assert.notEqual(nestedPath, insidePath, "10. each lease produces a fresh random path")
+    // 8. Removed after callback success.
+    assert.equal(existsSync(insidePath), false, "8. the scoped config is removed after the callback succeeds")
   })
-})
-
-test("a private execution config cannot be created without authority bytes", () => {
-  for (const bad of [null, undefined, {}, { bytes: "" }, { bytes: 42 }]) {
-    assert.throws(() => createPrivateExecutionConfig(bad as never, { repoRoot: REPO_ROOT }), /execution_authority_missing/)
-  }
-  // An unsafe purpose label cannot escape the approved filename form.
-  withConfig((configPath) => {
-    const result = load(configPath)
-    if (!result.ok) throw new Error("expected a valid config")
-    const path = createPrivateExecutionConfig(result.authority, { repoRoot: REPO_ROOT, purpose: "../../etc/passwd" })
-    try {
-      assert.match(path.slice(REPO_ROOT.length + 1), /^wrangler\.deploy\.exec-[0-9a-f]{24}\.json$/, "an unsafe label must fall back to the safe default")
-    } finally { removePrivateExecutionConfig(path) }
-  })
-})
-
-test("removePrivateExecutionConfig is safe with null/undefined and a missing file", () => {
-  assert.doesNotThrow(() => removePrivateExecutionConfig(null))
-  assert.doesNotThrow(() => removePrivateExecutionConfig(undefined))
-  assert.doesNotThrow(() => removePrivateExecutionConfig(resolve(REPO_ROOT, "wrangler.deploy.never-existed.json")))
-})
-
-test("no private execution config survives this suite", () => {
   clearPrivateConfigs()
-  assert.deepEqual(readdirSync(REPO_ROOT).filter((f) => /^wrangler\.deploy\..*-exec-/.test(f)), [])
+})
+
+test("9. a scoped config is removed after the callback THROWS", () => {
+  withConfig((configPath) => {
+    const authority = authorityOf(configPath)
+    let path = ""
+    assert.throws(() => withPrivateExecutionConfig(authority, { repoRoot: REPO_ROOT, purpose: "test-exec" }, (cfg) => {
+      path = cfg
+      assert.equal(existsSync(cfg), true)
+      throw new Error("callback_boom")
+    }), /callback_boom/)
+    assert.notEqual(path, "")
+    assert.equal(existsSync(path), false, "the scoped config must be removed even when the callback throws")
+  })
+  clearPrivateConfigs()
+})
+
+test("11. changing an earlier lease's path cannot affect a later lease", () => {
+  withConfig((configPath) => {
+    const authority = authorityOf(configPath)
+    let firstPath = ""
+    withPrivateExecutionConfig(authority, { repoRoot: REPO_ROOT, purpose: "test-exec" }, (cfg) => { firstPath = cfg })
+    // The first lease's file is gone; drop a hostile file back at that exact path.
+    writeFileSync(firstPath, JSON.stringify({ d1_databases: [{ database_id: "dddddddd-dead" }] }), { mode: 0o600 })
+    try {
+      let secondBytes = ""
+      let secondPath = ""
+      withPrivateExecutionConfig(authority, { repoRoot: REPO_ROOT, purpose: "test-exec" }, (cfg) => {
+        secondPath = cfg
+        secondBytes = readFileSync(cfg, "utf8")
+      })
+      assert.notEqual(secondPath, firstPath, "a later lease never reuses an earlier path")
+      assert.equal(secondBytes, authority.bytes, "the later lease carries the authority bytes, immune to the stale earlier file")
+      assert.doesNotMatch(secondBytes, /dead/, "the hostile earlier file cannot reach the later Wrangler call")
+    } finally {
+      rmSync(firstPath, { force: true })
+    }
+  })
+  clearPrivateConfigs()
+})
+
+test("a scoped lease refuses to run without authority bytes+digest or a callback", () => {
+  for (const bad of [null, undefined, {}, { bytes: "" }, { bytes: 42 }, { bytes: "x" }]) {
+    // Missing/empty bytes OR a missing sha256 fails closed the same way.
+    assert.throws(() => withPrivateExecutionConfig(bad as never, { repoRoot: REPO_ROOT }, () => {}), /execution_authority_missing/)
+  }
+  withConfig((configPath) => {
+    const authority = authorityOf(configPath)
+    assert.throws(() => (withPrivateExecutionConfig as unknown as (a: unknown, o: unknown) => void)(authority, { repoRoot: REPO_ROOT }), /execution_operation_missing/)
+    // An unsafe purpose label cannot escape the approved filename form.
+    withPrivateExecutionConfig(authority, { repoRoot: REPO_ROOT, purpose: "../../etc/passwd" }, (cfg) => {
+      assert.match(cfg.slice(REPO_ROOT.length + 1), /^wrangler\.deploy\.exec-[0-9a-f]{24}\.json$/, "an unsafe label must fall back to the safe default")
+    })
+  })
+  clearPrivateConfigs()
+})
+
+test("no scoped execution config survives this suite", () => {
+  clearPrivateConfigs()
+  // Scoped to this file's own purposes — a sibling suite may legitimately hold a live
+  // config of its own at the shared repository root while running in parallel.
+  assert.deepEqual(readdirSync(REPO_ROOT).filter((f) => OWN_EXEC.test(f)), [])
   assert.equal(existsSync(CONFIG_PATH), false)
 })

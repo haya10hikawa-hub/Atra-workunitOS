@@ -8,8 +8,14 @@
  * `snapshot` — is the execution authority.
  */
 export interface DeployConfigAuthority {
-  /** The EXACT validated bytes written to a private execution config. */
+  /** The EXACT validated bytes written to every scoped execution config. */
   readonly bytes: string
+  /**
+   * SHA-256 of the exact bytes. Safe evidence — no database ID or config content —
+   * used to bind verification and deploy by byte identity, never written into a
+   * config file.
+   */
+  readonly sha256: string
   /** A recursively immutable parsed view, for comparisons only. */
   readonly snapshot: Readonly<Record<string, unknown>>
 }
@@ -44,10 +50,14 @@ export declare function deepFreeze<T>(value: T): Readonly<T>
 export declare function loadValidatedDeployConfigAuthority(input: LoadAuthorityInput): DeployConfigAuthorityResult
 
 /**
- * Write the authority's exact retained bytes to a fresh private (0600, exclusively
- * created) execution config and return only its path.
+ * Run ONE Wrangler-invoking `operation` against a short-lived config carrying the
+ * authority's exact retained bytes, then remove it. The scoped path is created
+ * exclusively (`wx`), tightened to read-only (0400), confirmed to hash to
+ * `authority.sha256` before the callback, and removed in `finally`. It is never
+ * returned, cached, or reused across invocations.
  */
-export declare function createPrivateExecutionConfig(authority: DeployConfigAuthority, input: PrivateExecutionConfigInput): string
-
-/** Remove a private execution config. Safe with null/undefined. */
-export declare function removePrivateExecutionConfig(path: string | null | undefined): void
+export declare function withPrivateExecutionConfig<T>(
+  authority: DeployConfigAuthority,
+  input: PrivateExecutionConfigInput,
+  operation: (executionConfig: string) => T,
+): T

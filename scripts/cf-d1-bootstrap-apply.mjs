@@ -45,7 +45,7 @@ import { loadSchemaContract } from "./lib/d1SchemaContract.mjs"
 import { validateD1Id } from "./lib/cfDeployConfig.mjs"
 // ONE shared config-authority implementation — no bootstrap-only variant.
 import {
-  loadValidatedDeployConfigAuthority, createPrivateExecutionConfig, removePrivateExecutionConfig,
+  loadValidatedDeployConfigAuthority, withPrivateExecutionConfig,
 } from "./lib/cfDeployConfigAuthority.mjs"
 import {
   BOOTSTRAP_SQL_BASENAME, BOOTSTRAP_SQL_PATH, BOOTSTRAP_ARTIFACT_MAX_BYTES,
@@ -296,20 +296,23 @@ export function evaluateBootstrapGates({ env = process.env, argv = [], repoRoot 
  * (0600) temporary file, and only that file is executed. The bytes are never
  * re-read from the original path after validation.
  *
- * `executionConfig` is the PRIVATE config written from the validated snapshot —
- * never the operator's mutable `configPath`, which could have changed since it was
- * validated. The temporary SQL directory is removed unconditionally.
+ * `authority` is the retained deploy-config authority — the WHICH-DATABASE decision.
+ * A fresh scoped execution config is minted from it for this single Wrangler call and
+ * removed the instant it returns; the operator's mutable `configPath` is never handed
+ * to Wrangler. The temporary SQL directory is removed unconditionally.
  */
-function applyBootstrapFile(executionConfig, canonicalSql) {
+function applyBootstrapFile(authority, canonicalSql) {
   requireAuthorizedExecution()
   const dir = mkdtempSync(resolve(tmpdir(), "d1-bootstrap-exec-"))
   const executionFile = resolve(dir, "bootstrap.exec.sql")
   try {
     writeFileSync(executionFile, canonicalSql, { mode: 0o600 })
-    const result = spawnSync(WRANGLER_BIN, ["d1", "execute", BOOTSTRAP_BINDING, "--file", executionFile, "--remote", "--config", executionConfig], {
-      cwd: REPO_ROOT, stdio: "inherit",
+    withPrivateExecutionConfig(authority, { repoRoot: REPO_ROOT, purpose: "bootstrap-exec" }, (executionConfig) => {
+      const result = spawnSync(WRANGLER_BIN, ["d1", "execute", BOOTSTRAP_BINDING, "--file", executionFile, "--remote", "--config", executionConfig], {
+        cwd: REPO_ROOT, stdio: "inherit",
+      })
+      if (result.status !== 0) throw new Error("wrangler_apply_failed")
     })
-    if (result.status !== 0) throw new Error("wrangler_apply_failed")
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -317,19 +320,22 @@ function applyBootstrapFile(executionConfig, canonicalSql) {
 
 /**
  * Read-only COUNT query. Output is captured (never inherited) so no value is
- * printed. Uses the SAME private execution config as the apply, so verification
- * can never read a different database than the one that was written.
+ * printed. Mints a fresh scoped execution config from the SAME `authority` the apply
+ * used, so verification can never read a different database than the one written —
+ * yet no reusable config path survives between the write and the verification.
  */
-function remoteCount(executionConfig, sql) {
+function remoteCount(authority, sql) {
   requireAuthorizedExecution()
-  const result = spawnSync(WRANGLER_BIN, ["d1", "execute", BOOTSTRAP_BINDING, "--command", sql, "--remote", "--json", "--config", executionConfig], {
-    cwd: REPO_ROOT, encoding: "utf8",
+  return withPrivateExecutionConfig(authority, { repoRoot: REPO_ROOT, purpose: "bootstrap-exec" }, (executionConfig) => {
+    const result = spawnSync(WRANGLER_BIN, ["d1", "execute", BOOTSTRAP_BINDING, "--command", sql, "--remote", "--json", "--config", executionConfig], {
+      cwd: REPO_ROOT, encoding: "utf8",
+    })
+    if (result.status !== 0) throw new Error("remote_verify_query_failed")
+    let parsed
+    try { parsed = JSON.parse(result.stdout) } catch { throw new Error("remote_verify_query_unparseable") }
+    const first = Array.isArray(parsed) ? parsed[0] : parsed
+    return (first && Array.isArray(first.results)) ? first.results : []
   })
-  if (result.status !== 0) throw new Error("remote_verify_query_failed")
-  let parsed
-  try { parsed = JSON.parse(result.stdout) } catch { throw new Error("remote_verify_query_unparseable") }
-  const first = Array.isArray(parsed) ? parsed[0] : parsed
-  return (first && Array.isArray(first.results)) ? first.results : []
 }
 
 // ─── Main ────────────────────────────────────────────────────────
@@ -358,20 +364,20 @@ function main() {
 
   const values = readOperatorInput(process.env, REPO_ROOT).values
   let exitCode = 0
-  // ONE private execution config, written from the validated snapshot and shared by
-  // the apply and every verification query — so the database that is written and the
-  // database that is verified can never diverge, and the operator's mutable
-  // configPath is never handed to Wrangler.
-  let executionConfig = null
+  // The retained authority — NOT a reusable config path — decides WHICH database the
+  // bytes hit. The apply and every verification query each mint their own short-lived
+  // scoped config from these exact bytes, so the database written and the database
+  // verified can never diverge, yet no private config path survives between the write
+  // and the verification to be redirected, and the operator's mutable configPath is
+  // never handed to Wrangler.
+  const authority = gates.configAuthority
   try {
-    executionConfig = createPrivateExecutionConfig(gates.configAuthority, { repoRoot: REPO_ROOT, purpose: "bootstrap-exec" })
-
     // ONE invocation = ONE atomic batch: all five records, or none. The bytes are
     // the ones validation retained — never re-read from the mutable artifact path.
-    applyBootstrapFile(executionConfig, gates.canonicalSql)
+    applyBootstrapFile(authority, gates.canonicalSql)
 
     // Read-only, category-level verification. Counts only; no row values.
-    const verified = verifyBootstrapVia((sql) => remoteCount(executionConfig, sql), values)
+    const verified = verifyBootstrapVia((sql) => remoteCount(authority, sql), values)
     if (!verified.ok) {
       // HONEST STATE: the five INSERTs were COMMITTED by the batch above; this
       // read-only check runs afterwards. A failure here is NOT an atomic rollback —
@@ -390,10 +396,9 @@ function main() {
     exitCode = 1
   } finally {
     // Guaranteed cleanup on EVERY path: success, Wrangler failure, verification
-    // failure, or an unexpected throw. Only ever runs AFTER Wrangler has read the
-    // (temporary) execution file, never before. Both the private execution config
-    // and the repository-root preparation artifact go, unconditionally.
-    removePrivateExecutionConfig(executionConfig)
+    // failure, or an unexpected throw. The scoped execution configs remove themselves
+    // as each call returns; here only the repository-root preparation artifact is
+    // removed, unconditionally.
     removeBootstrapSql()
   }
   process.exit(exitCode)

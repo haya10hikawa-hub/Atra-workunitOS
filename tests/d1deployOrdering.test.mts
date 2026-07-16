@@ -47,10 +47,13 @@ test("no step can be skipped or reordered — every gate precedes deploy", () =>
   }
   // The orchestrator aborts on the FIRST failing step (so a schema-verification
   // failure prevents deploy). It returns an exit code rather than exiting inside
-  // the loop — a nested exit would bypass the private-config cleanup.
+  // the loop — a nested exit would terminate inside a scoped config's callback,
+  // before its finally removed the file.
   const src = read("scripts/cloudflare-deploy.mjs")
-  assert.match(src, /if \(!run\(step, executionConfig\)\)[\s\S]*?deploy aborted[\s\S]*?return 1/)
+  assert.match(src, /if \(!run\(step, authority, spawn\)\)[\s\S]*?deploy aborted[\s\S]*?return 1/)
   assert.match(src, /if \(!result\.ok\)[\s\S]*?deploy aborted[\s\S]*?return 1/, "a remote schema-verification failure must abort before deploy")
+  // …and a verified-authority digest mismatch aborts before deploy too.
+  assert.match(src, /result\.authorityDigest !== authority\.sha256[\s\S]*?Deploy aborted[\s\S]*?return 1/, "a digest mismatch must abort before deploy")
 })
 
 test("Worker deploy NEVER applies database migrations", () => {
@@ -76,34 +79,44 @@ test("only the remote steps are network steps, and they are gated by CF_DEPLOY_E
   assert.match(src, /if \(step\.remote && !execute\)[\s\S]*?return 0/)
 })
 
-test("remote schema verification and deploy are tied to ONE retained authority — never the mutable generated config", () => {
+test("remote schema verification and deploy are bound by AUTHORITY BYTE IDENTITY — never the mutable generated config, and not a false same-path claim", () => {
   // Verification runs IN-PROCESS against the same authority the deploy uses, rather
   // than spawning a child that would snapshot wrangler.deploy.json a second time —
   // two independent reads of a mutable file could verify one database and deploy
-  // another.
+  // another. It returns a digest the orchestrator matches before uploading.
   assert.equal(stepNamed("verify-remote-schema").inProcess, "verifyRemoteSchema")
   assert.equal(stepNamed("verify-remote-schema").cmd, undefined, "verification must not spawn a second snapshot")
   const src = read("scripts/cloudflare-deploy.mjs")
-  assert.match(src, /verifyRemoteSchemas\(authority, \{ repoRoot: REPO_ROOT \}\)/)
+  assert.match(src, /verifyRemoteSchemas\(authority, \{ repoRoot: REPO_ROOT, spawn \}\)/)
+  // The binding is byte identity: deploy aborts unless the verified digest equals
+  // the orchestrator's retained authority digest. (The old test claimed they "cannot
+  // receive different config paths" — they may; the guarantee is the digest match.)
+  assert.match(src, /result\.authorityDigest !== authority\.sha256/, "deploy must match the verified authority digest")
 
   // NO step may name the original generated config: every step's args are a
-  // function of the PRIVATE execution config.
+  // function of the SCOPED execution config it is handed for its single call.
   for (const step of DEPLOY_STEPS) {
     if (!step.args) continue
-    const args = step.args("PRIVATE_EXEC_CONFIG").join(" ")
+    const args = step.args("SCOPED_EXEC_CONFIG").join(" ")
     assert.doesNotMatch(args, /wrangler\.deploy\.json/, `${step.name} must never receive the original generated config`)
   }
-  // …and deploy receives exactly that private config.
-  assert.deepEqual(argsOf("deploy", "PRIVATE_EXEC_CONFIG"), ["deploy", "--config", "PRIVATE_EXEC_CONFIG"])
-  assert.deepEqual(argsOf("preflight", "PRIVATE_EXEC_CONFIG"), ["scripts/cloudflare-deploy-preflight.mjs", "--config", "PRIVATE_EXEC_CONFIG"])
+  // …and deploy receives exactly the scoped config it is minted for its call.
+  assert.deepEqual(argsOf("deploy", "SCOPED_EXEC_CONFIG"), ["deploy", "--config", "SCOPED_EXEC_CONFIG"])
+  assert.deepEqual(argsOf("preflight", "SCOPED_EXEC_CONFIG"), ["scripts/cloudflare-deploy-preflight.mjs", "--config", "SCOPED_EXEC_CONFIG"])
 })
 
-test("the orchestrator removes BOTH the private execution config and the original generated config on every exit", () => {
+test("the orchestrator keeps NO long-lived execution config, and removes the original generated config on every exit", () => {
   const src = read("scripts/cloudflare-deploy.mjs")
-  const finallyIdx = src.indexOf("} finally {")
-  assert.ok(finallyIdx > 0, "cleanup must be in a finally-equivalent path")
+  // There is no reusable execution-config path in the orchestrator — every Wrangler
+  // call runs against a scoped config the shared lease removes on return.
+  assert.doesNotMatch(src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/[^\n]*$/gm, ""), /createPrivateExecutionConfig|removePrivateExecutionConfig/,
+    "the orchestrator must not create or hold a reusable execution config")
+  assert.match(src, /withPrivateExecutionConfig\(authority, \{ repoRoot: REPO_ROOT, purpose: step\.purpose \}/, "config-using steps mint a scoped config per call")
+  // The original generated config is removed the moment the authority is retained…
+  assert.match(src, /rmSync\(generatedConfig, \{ force: true \}\)\n {6}exitCode = runPipeline/, "the original is dropped once its bytes are retained")
+  // …and again unconditionally in the finally.
+  const finallyIdx = src.lastIndexOf("} finally {")
   const body = src.slice(finallyIdx, src.indexOf("\n  }", finallyIdx))
-  assert.match(body, /removePrivateExecutionConfig\(executionConfig\)/)
   assert.match(body, /rmSync\(generatedConfig, \{ force: true \}\)/)
   assert.doesNotMatch(body.replace(/\/\/[^\n]*/g, ""), /\bif\s*\(/, "cleanup must be unconditional")
 })

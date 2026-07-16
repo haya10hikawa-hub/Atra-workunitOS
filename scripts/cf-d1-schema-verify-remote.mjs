@@ -19,7 +19,7 @@ import { loadSchemaContract, verifyViaRunner, isReadOnlyIntrospectionSql } from 
 import { KNOWN_BINDINGS } from "./lib/d1MigrationManifest.mjs"
 // ONE shared config-authority implementation, used by every remote D1 command.
 import {
-  loadValidatedDeployConfigAuthority, createPrivateExecutionConfig, removePrivateExecutionConfig,
+  loadValidatedDeployConfigAuthority, withPrivateExecutionConfig,
 } from "./lib/cfDeployConfigAuthority.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
@@ -42,23 +42,28 @@ export function evaluateRemoteVerifyGates({ argv = [], repoRoot = REPO_ROOT, con
 }
 
 /**
- * A wrangler-backed read-only runner for a binding. Every SQL is asserted
- * read-only before execution; a mutation attempt throws (never reaches Wrangler).
+ * A wrangler-backed read-only runner for a binding, bound to the retained
+ * `authority`. Every SQL is asserted read-only before anything else — a mutation
+ * attempt throws before any file is created and never reaches Wrangler.
  *
- * `executionConfig` is the PRIVATE config written from the retained authority —
- * never the operator's mutable path, which could be edited between one binding's
- * queries and the next (reproduced against the audited head: a post-validation edit
- * redirected the TENANT introspection to a different database mid-run).
+ * Each query opens its OWN short-lived execution config from `authority` and drops
+ * it when the call returns. There is no reusable private path that could be edited
+ * between one query and the next (reproduced against the audited head: a
+ * post-validation edit redirected the TENANT introspection to a different database
+ * mid-run). A modified or leaked earlier scoped file cannot affect the next query,
+ * because the next query mints a fresh one from the exact authority bytes.
  */
-export function makeWranglerReadOnlyRunner(binding, executionConfig, spawn = spawnSync) {
+export function makeWranglerReadOnlyRunner(binding, authority, spawn = spawnSync, repoRoot = REPO_ROOT) {
   return (sql) => {
     if (!isReadOnlyIntrospectionSql(sql)) throw new Error("non_read_only_query_blocked")
-    const res = spawn(WRANGLER_BIN, ["d1", "execute", binding, "--command", sql, "--remote", "--config", executionConfig, "--json"], { cwd: REPO_ROOT, encoding: "utf8" })
-    if (res.status !== 0) throw new Error("wrangler_query_failed")
-    const parsed = JSON.parse(res.stdout)
-    // wrangler --json returns [{ results: [...] }] (or { results }).
-    if (Array.isArray(parsed)) return parsed[0] && Array.isArray(parsed[0].results) ? parsed[0].results : []
-    return Array.isArray(parsed.results) ? parsed.results : []
+    return withPrivateExecutionConfig(authority, { repoRoot, purpose: "verify-exec" }, (executionConfig) => {
+      const res = spawn(WRANGLER_BIN, ["d1", "execute", binding, "--command", sql, "--remote", "--config", executionConfig, "--json"], { cwd: REPO_ROOT, encoding: "utf8" })
+      if (res.status !== 0) throw new Error("wrangler_query_failed")
+      const parsed = JSON.parse(res.stdout)
+      // wrangler --json returns [{ results: [...] }] (or { results }).
+      if (Array.isArray(parsed)) return parsed[0] && Array.isArray(parsed[0].results) ? parsed[0].results : []
+      return Array.isArray(parsed.results) ? parsed.results : []
+    })
   }
 }
 
@@ -68,40 +73,36 @@ export function makeWranglerReadOnlyRunner(binding, executionConfig, spawn = spa
  *
  * Exported as an internal library function so the deploy orchestrator can pass the
  * SAME authority it will deploy with — rather than spawning a child that creates a
- * second, unrelated snapshot of a file that may have changed in between. Writes one
- * private execution config, uses it for every Control and Tenant query, and removes
- * it unconditionally.
+ * second, unrelated snapshot of a file that may have changed in between. Every
+ * introspection query opens its own scoped execution config from the authority, so
+ * Control and Tenant verification are one logical authority (`authority.sha256`)
+ * even though each query used a different ephemeral file.
  *
- * Returns `{ ok, failures }` — safe categories only; never a database ID, config
- * content, or application row data.
+ * Returns `{ ok, failures, authorityDigest }` — safe evidence only: `authorityDigest`
+ * is the SHA-256 the deploy orchestrator matches against its own retained digest
+ * before uploading; never a database ID, config content, path, or row data.
  */
 export function verifyRemoteSchemasWithAuthority(authority, { repoRoot = REPO_ROOT, spawn = spawnSync } = {}) {
+  const authorityDigest = authority && typeof authority.sha256 === "string" ? authority.sha256 : null
   const contract = loadSchemaContract(repoRoot)
-  if (!contract.ok) return { ok: false, failures: [contract.error] }
+  if (!contract.ok) return { ok: false, failures: [contract.error], authorityDigest }
 
-  let executionConfig = null
-  try {
-    executionConfig = createPrivateExecutionConfig(authority, { repoRoot, purpose: "verify-exec" })
-    const failures = []
-    for (const binding of KNOWN_BINDINGS) {
-      // The SAME private config for every binding — the pair verified is always the
-      // pair the authority names.
-      const runner = makeWranglerReadOnlyRunner(binding, executionConfig, spawn)
-      let result
-      try { result = verifyViaRunner(runner, contract.contract.databases[binding]) } catch (err) {
-        failures.push(`${binding}:${err instanceof Error ? err.message : "query_failed"}`)
-        continue
-      }
-      if (result.ok) console.log(`cf:d1:schema:verify:remote: ${binding} OK`)
-      else {
-        for (const f of result.failures) failures.push(`${binding}:${f.category}:${f.table || ""}${f.name ? ":" + f.name : ""}`)
-      }
+  const failures = []
+  for (const binding of KNOWN_BINDINGS) {
+    // The SAME authority for every binding — each query derives its own scoped
+    // config, so the pair verified is always the pair the authority names.
+    const runner = makeWranglerReadOnlyRunner(binding, authority, spawn, repoRoot)
+    let result
+    try { result = verifyViaRunner(runner, contract.contract.databases[binding]) } catch (err) {
+      failures.push(`${binding}:${err instanceof Error ? err.message : "query_failed"}`)
+      continue
     }
-    return { ok: failures.length === 0, failures }
-  } finally {
-    // Unconditional: success, query failure, parse failure, or an unexpected throw.
-    removePrivateExecutionConfig(executionConfig)
+    if (result.ok) console.log(`cf:d1:schema:verify:remote: ${binding} OK`)
+    else {
+      for (const f of result.failures) failures.push(`${binding}:${f.category}:${f.table || ""}${f.name ? ":" + f.name : ""}`)
+    }
   }
+  return { ok: failures.length === 0, failures, authorityDigest }
 }
 
 function parseConfigArg(argv) {
@@ -117,8 +118,8 @@ function main() {
     console.error(`cf:d1:schema:verify:remote: STOPPED — gate(s) not satisfied: ${gates.blocked.join(", ")}`)
     process.exit(1)
   }
-  // One retained authority → one private execution config → every Control and
-  // Tenant query. Cleanup is inside the library's own `finally`.
+  // One retained authority → a fresh scoped config per query → every Control and
+  // Tenant introspection. Each scoped config is removed as its own call returns.
   const result = verifyRemoteSchemasWithAuthority(gates.configAuthority, { repoRoot: REPO_ROOT })
   if (!result.ok) console.error(`cf:d1:schema:verify:remote: FAIL — ${result.failures.join(", ")}`)
   process.exit(result.ok ? 0 : 1)

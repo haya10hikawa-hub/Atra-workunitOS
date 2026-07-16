@@ -14,7 +14,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { writeFileSync, rmSync, mkdtempSync, symlinkSync, chmodSync, readFileSync, existsSync, statSync, readdirSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { randomBytes } from "node:crypto"
+import { createHash } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
 import {
@@ -24,7 +24,13 @@ import {
 import { BOOTSTRAP_SQL_BASENAME, buildBootstrapSql, BOOTSTRAP_ARTIFACT_MAX_BYTES } from "../scripts/cf-d1-bootstrap-prepare.mjs"
 import { SYNTHETIC_D1_IDS } from "../scripts/lib/cfDeployConfig.mjs"
 import { loadManifest, tenantRegistrySchemaVersion } from "../scripts/lib/d1MigrationManifest.mjs"
-import { createPrivateExecutionConfig, removePrivateExecutionConfig } from "../scripts/lib/cfDeployConfigAuthority.mjs"
+import { loadValidatedDeployConfigAuthority, withPrivateExecutionConfig } from "../scripts/lib/cfDeployConfigAuthority.mjs"
+
+const authorityFrom = (configPath: string) => {
+  const r = loadValidatedDeployConfigAuthority({ configPath, repoRoot: resolve(dirname(fileURLToPath(import.meta.url)), ".."), allowPlaceholderIds: false })
+  if (!r.ok) throw new Error(`authority must load: ${r.blocked.join(",")}`)
+  return r.authority
+}
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const APPLY_SRC = resolve(REPO_ROOT, "scripts/cf-d1-bootstrap-apply.mjs")
@@ -472,6 +478,12 @@ test("a missing bootstrap SQL stops before Wrangler", () => {
  * is loaded with `spawnSync`, `mkdtempSync`, and the temp root stubbed, so the
  * exact `--file` argument and its bytes can be observed. Nothing is executed.
  */
+/** A trivial-but-valid authority: withPrivateExecutionConfig only needs bytes+sha256. */
+function trivialAuthority() {
+  const bytes = JSON.stringify({ name: "test", d1_databases: [] })
+  return { bytes, sha256: createHash("sha256").update(bytes).digest("hex"), snapshot: {} }
+}
+
 function driveApplyBootstrapFile(canonicalSql: string, options: { failWrangler?: boolean } = {}) {
   const src = readFileSync(APPLY_SRC, "utf8")
   const start = src.indexOf("function applyBootstrapFile(")
@@ -483,7 +495,7 @@ function driveApplyBootstrapFile(canonicalSql: string, options: { failWrangler?:
   const observed: { file?: string; bytesAtExec?: string; existedAtExec?: boolean; modeAtExec?: number } = {}
   let tempRoot = ""
   const harness = new Function("deps", `
-    const { spawnSync, mkdtempSync, writeFileSync, rmSync, resolve, tmpdir, requireAuthorizedExecution, WRANGLER_BIN, REPO_ROOT, BOOTSTRAP_BINDING } = deps
+    const { spawnSync, mkdtempSync, writeFileSync, rmSync, resolve, tmpdir, withPrivateExecutionConfig, requireAuthorizedExecution, WRANGLER_BIN, REPO_ROOT, BOOTSTRAP_BINDING } = deps
     ${body}
     return applyBootstrapFile
   `)({
@@ -497,13 +509,15 @@ function driveApplyBootstrapFile(canonicalSql: string, options: { failWrangler?:
       return { status: options.failWrangler ? 1 : 0 }
     },
     mkdtempSync: (p: string) => { tempRoot = mkdtempSync(p); return tempRoot },
-    writeFileSync, rmSync, resolve, tmpdir,
+    writeFileSync, rmSync, resolve, tmpdir, withPrivateExecutionConfig,
     requireAuthorizedExecution: () => {},
     WRANGLER_BIN: "/nonexistent/wrangler", REPO_ROOT, BOOTSTRAP_BINDING,
   })
 
   let threw: Error | null = null
-  try { harness("config.json", canonicalSql) } catch (err) { threw = err as Error }
+  // applyBootstrapFile(authority, canonicalSql) — a fresh scoped config is minted
+  // from the authority for the single Wrangler call.
+  try { harness(trivialAuthority(), canonicalSql) } catch (err) { threw = err as Error }
   return { observed, tempRoot, threw }
 }
 
@@ -556,26 +570,26 @@ test("14. the temporary execution file is removed after Wrangler FAILURE", () =>
  * `spawnSync` stubbed, so every `--config` argument and the bytes behind it can be
  * observed. Nothing is executed, no network, no bootstrap.
  */
-function driveExecution(snapshot: unknown, canonicalSql: string, options: { failWrangler?: boolean; failVerify?: boolean } = {}) {
+function driveExecution(authority: { bytes: string; sha256: string; snapshot: unknown }, canonicalSql: string, options: { failWrangler?: boolean; failVerify?: boolean } = {}) {
   const src = readFileSync(APPLY_SRC, "utf8")
   const slice = (name: string) => {
     const start = src.indexOf(`function ${name}(`)
     return src.slice(start, src.indexOf("\n}", start) + 2)
   }
   const observed: Array<{ kind: string; config: string; configBytes: string; mode: number }> = []
-  let executionConfig: string | null = null
 
-  // The private execution config now comes from the SHARED authority library —
-  // there is no bootstrap-only implementation to extract.
+  // Both Wrangler surfaces now take the retained AUTHORITY and each opens its OWN
+  // scoped config via the SHARED library — there is no reusable execution path.
   const harness = new Function("deps", `
-    const { spawnSync, mkdtempSync, writeFileSync, rmSync, resolve, tmpdir, randomBytes, readFileSync,
-            createPrivateExecutionConfig, requireAuthorizedExecution, WRANGLER_BIN, REPO_ROOT, BOOTSTRAP_BINDING } = deps
+    const { spawnSync, mkdtempSync, writeFileSync, rmSync, resolve, tmpdir,
+            withPrivateExecutionConfig, requireAuthorizedExecution, WRANGLER_BIN, REPO_ROOT, BOOTSTRAP_BINDING } = deps
     ${slice("applyBootstrapFile")}
     ${slice("remoteCount")}
     return { applyBootstrapFile, remoteCount }
   `)({
     spawnSync: (_bin: string, args: string[]) => {
       const config = args[args.indexOf("--config") + 1]
+      // Captured DURING the call — the scoped config is removed the instant it returns.
       observed.push({
         kind: args.includes("--file") ? "apply" : "verify",
         config,
@@ -586,49 +600,30 @@ function driveExecution(snapshot: unknown, canonicalSql: string, options: { fail
       if (!args.includes("--file") && options.failVerify) return { status: 1 }
       return { status: 0, stdout: JSON.stringify([{ results: [{ c: 1 }] }]) }
     },
-    mkdtempSync, writeFileSync, rmSync, resolve, tmpdir, randomBytes, readFileSync,
-    createPrivateExecutionConfig,
+    mkdtempSync, writeFileSync, rmSync, resolve, tmpdir, withPrivateExecutionConfig,
     requireAuthorizedExecution: () => {},
     WRANGLER_BIN: "/nonexistent/wrangler", REPO_ROOT, BOOTSTRAP_BINDING,
   })
 
-  // Run main()'s ACTUAL finally body, extracted from source — never a
-  // reimplementation of it here, which could not detect main() regressing.
-  const mainStart = src.indexOf("function main()")
-  const finallyIdx = src.indexOf("} finally {", mainStart)
-  const cleanupBody = src.slice(finallyIdx + "} finally {".length, src.indexOf("\n  }", finallyIdx))
-  const runMainCleanup = new Function(
-    "rmSync", "removePrivateExecutionConfig", "executionConfig", "removeBootstrapSql", "exitCode", cleanupBody,
-  )
-
   let threw: Error | null = null
-  let exitCode = 0
   try {
-    executionConfig = createPrivateExecutionConfig(
-      { bytes: JSON.stringify(snapshot, null, 2), snapshot: snapshot as Readonly<Record<string, unknown>> },
-      { repoRoot: REPO_ROOT, purpose: "bootstrap-exec" },
-    )
-    harness.applyBootstrapFile(executionConfig, canonicalSql)
-    harness.remoteCount(executionConfig, "SELECT COUNT(*) AS c FROM tenants WHERE id = 'x';")
+    harness.applyBootstrapFile(authority, canonicalSql)
+    harness.remoteCount(authority, "SELECT COUNT(*) AS c FROM tenants WHERE id = 'x';")
   } catch (err) {
     threw = err as Error
-    exitCode = 1
-  } finally {
-    runMainCleanup(rmSync, removePrivateExecutionConfig, executionConfig, () => {}, exitCode)
   }
-  return { observed, executionConfig, threw }
+  return { observed, threw }
 }
 
-const snapshotOf = (configPath: string) => JSON.parse(readFileSync(configPath, "utf8"))
-
-test("Wrangler receives a PRIVATE temporary config — never the original operator config path", () => {
+test("Wrangler receives a PRIVATE scoped config per call — never the original operator config path", () => {
   withSyntheticConfig((configPath) => {
-    const { observed, executionConfig } = driveExecution(snapshotOf(configPath), canonicalArtifact())
+    const authority = authorityFrom(configPath)
+    const { observed } = driveExecution(authority, canonicalArtifact())
     assert.equal(observed.length, 2, "apply + verification")
     for (const call of observed) {
       assert.notEqual(call.config, configPath, "Wrangler must NEVER receive the original mutable config path")
-      assert.match(call.config, /wrangler\.deploy\.bootstrap-exec-[0-9a-f]{24}\.json$/, "…it must receive the collision-resistant private execution config")
-      assert.equal(call.mode, 0o600, "the execution config must be private")
+      assert.match(call.config, /wrangler\.deploy\.bootstrap-exec-[0-9a-f]{24}\.json$/, "…it must receive a collision-resistant scoped execution config")
+      assert.equal(call.mode, 0o400, "the scoped execution config must be read-only")
       // It carries EXACTLY the validated binding ids and names.
       const cfg = JSON.parse(call.configBytes)
       const byBinding = Object.fromEntries(cfg.d1_databases.map((d: { binding: string }) => [d.binding, d]))
@@ -636,24 +631,25 @@ test("Wrangler receives a PRIVATE temporary config — never the original operat
       assert.equal(byBinding.TENANT_DB_DEFAULT.database_id, SYNTHETIC_D1_IDS.TENANT_DB_DEFAULT)
       assert.equal(byBinding.TENANT_DB_DEFAULT.database_name, tenantBindingName())
     }
-    // Apply and verification use ONE AND THE SAME snapshot — the database written
-    // and the database verified can never diverge.
-    assert.equal(observed[0].config, observed[1].config, "apply and verification must use the same execution config")
-    assert.equal(observed[0].configBytes, observed[1].configBytes)
-    // …and it is removed afterwards.
-    assert.equal(existsSync(executionConfig!), false)
+    // Apply and verification use DIFFERENT ephemeral files but the SAME authority
+    // bytes — the database written and the database verified can never diverge.
+    assert.notEqual(observed[0].config, observed[1].config, "apply and verification use distinct scoped configs")
+    assert.equal(observed[0].configBytes, observed[1].configBytes, "…that carry byte-identical authority bytes")
+    assert.equal(observed[0].configBytes, authority.bytes)
+    // …and each is removed afterwards.
+    for (const call of observed) assert.equal(existsSync(call.config), false)
   })
 })
 
 test("mutating, deleting, or replacing the original config after validation cannot redirect execution", () => {
   withSyntheticConfig((configPath) => {
-    const snapshot = snapshotOf(configPath) // validated snapshot, retained
+    const authority = authorityFrom(configPath) // validated authority, bytes retained
 
     // 1. Mutate the original to point at a DIFFERENT database.
-    const hijacked = snapshotOf(configPath)
+    const hijacked = JSON.parse(readFileSync(configPath, "utf8"))
     for (const db of hijacked.d1_databases) db.database_id = "dddddddd-0000-4000-8000-00000000dead"
     writeFileSync(configPath, JSON.stringify(hijacked, null, 2), { mode: 0o600 })
-    let run = driveExecution(snapshot, canonicalArtifact())
+    let run = driveExecution(authority, canonicalArtifact())
     for (const call of run.observed) {
       assert.doesNotMatch(call.configBytes, /dead/, "a post-validation mutation must not reach Wrangler")
       assert.match(call.configBytes, new RegExp(SYNTHETIC_D1_IDS.CONTROL_DB))
@@ -661,50 +657,52 @@ test("mutating, deleting, or replacing the original config after validation cann
 
     // 2. Replace it with another otherwise-valid config.
     writeFileSync(configPath, JSON.stringify({ ...hijacked, name: "someone-elses-worker" }, null, 2), { mode: 0o600 })
-    run = driveExecution(snapshot, canonicalArtifact())
+    run = driveExecution(authority, canonicalArtifact())
     for (const call of run.observed) assert.doesNotMatch(call.configBytes, /someone-elses-worker/, "a replaced config must not redirect execution")
 
-    // 3. Delete it entirely — execution still works from the snapshot.
+    // 3. Delete it entirely — execution still works from the retained authority.
     rmSync(configPath, { force: true })
-    run = driveExecution(snapshot, canonicalArtifact())
+    run = driveExecution(authority, canonicalArtifact())
     assert.equal(run.threw, null, "deleting the original config after evaluation must not break execution")
     assert.equal(run.observed.length, 2)
   })
 })
 
-test("the private execution config is removed after success, Wrangler failure, and verification failure", () => {
+test("every scoped execution config is removed after success, Wrangler failure, and verification failure", () => {
   withSyntheticConfig((configPath) => {
-    const snapshot = snapshotOf(configPath)
+    const authority = authorityFrom(configPath)
     for (const [label, options] of [
       ["success", {}],
       ["Wrangler failure", { failWrangler: true }],
       ["verification failure", { failVerify: true }],
     ] as const) {
-      const { executionConfig, threw } = driveExecution(snapshot, canonicalArtifact(), options)
-      assert.ok(executionConfig, `${label}: an execution config must have been written`)
-      assert.equal(existsSync(executionConfig!), false, `${label}: the private execution config must be removed`)
+      const { observed, threw } = driveExecution(authority, canonicalArtifact(), options)
+      assert.ok(observed.length >= 1, `${label}: a scoped execution config must have been written`)
+      for (const call of observed) assert.equal(existsSync(call.config), false, `${label}: the scoped execution config must be removed`)
       if (label !== "success") assert.ok(threw, `${label}: must surface the failure`)
     }
-    // No execution config is ever left behind at the repository root.
+    // No scoped execution config is ever left behind at the repository root.
     assert.deepEqual(
       readdirSync(REPO_ROOT).filter((f) => f.startsWith("wrangler.deploy.bootstrap-exec-")), [],
-      "no private execution config may survive",
+      "no scoped execution config may survive",
     )
   })
 })
 
-test("the execution config is created EXCLUSIVELY — an existing file is never overwritten or followed", () => {
-  // The private-config writer now lives in the SHARED authority library, which
-  // bootstrap, migration apply, remote verification, and Worker deploy all use.
+test("the scoped execution config is created EXCLUSIVELY, read-only, from the exact authority bytes", () => {
+  // The scoped-lease writer lives in the SHARED authority library, which bootstrap,
+  // migration apply, remote verification, and Worker deploy all use.
   const src = readFileSync(resolve(REPO_ROOT, "scripts/lib/cfDeployConfigAuthority.mjs"), "utf8")
   assert.match(src, /flag: "wx"/, "exclusive creation prevents overwriting or following a pre-placed file")
   assert.match(src, /randomBytes\(12\)\.toString\("hex"\)/, "the name must be collision-resistant")
+  assert.match(src, /chmodSync\(path, 0o400\)/, "the scoped config is tightened to read-only")
   // The EXACT retained bytes — never a re-serialization of a mutable parsed object.
   assert.match(src, /writeFileSync\(path, authority\.bytes, \{ mode: 0o600, flag: "wx" \}\)/)
-  // Bootstrap consumes the shared writer rather than keeping its own.
+  // Bootstrap consumes the shared scoped lease rather than keeping its own writer.
   const apply = readFileSync(APPLY_SRC, "utf8")
-  assert.match(apply, /createPrivateExecutionConfig\(gates\.configAuthority/)
+  assert.match(apply, /withPrivateExecutionConfig\(authority, \{ repoRoot: REPO_ROOT, purpose: "bootstrap-exec" \}/)
   assert.doesNotMatch(apply, /flag: "wx"/, "bootstrap must not keep a duplicate private-config writer")
+  assert.doesNotMatch(apply, /createPrivateExecutionConfig/, "bootstrap must not use a reusable long-lived config")
 })
 
 test("no database ID or config content reaches logs", () => {
@@ -787,7 +785,7 @@ test("10. the generated SQL is removed on EVERY exit path (finally-equivalent)",
   // …and so is the repository-root preparation artifact.
   assert.ok(bodies.some((b) => /^\s*removeBootstrapSql\(\)\s*$/m.test(b)), "the repository-root artifact must be removed unconditionally")
   // Cleanup runs only after the apply has been attempted — never before.
-  const applyIdx = src.indexOf("applyBootstrapFile(executionConfig, gates.canonicalSql)")
+  const applyIdx = src.indexOf("applyBootstrapFile(authority, gates.canonicalSql)")
   assert.ok(applyIdx > 0, "apply must execute the retained canonical bytes")
   assert.ok(applyIdx < src.lastIndexOf("removeBootstrapSql()"), "the artifact must only be removed after the apply has been attempted")
 })
@@ -798,7 +796,7 @@ test("a post-verification failure is reported HONESTLY as an operator-action sta
   // verification runs. Calling that a rollback would send an operator looking for
   // state that is really there.
   assert.equal(VERIFICATION_FAILED_AFTER_COMMIT, "bootstrap_verification_failed_after_commit")
-  const applyIdx = src.indexOf("applyBootstrapFile(executionConfig, gates.canonicalSql)")
+  const applyIdx = src.indexOf("applyBootstrapFile(authority, gates.canonicalSql)")
   const verifyIdx = src.indexOf("verifyBootstrapVia(")
   assert.ok(applyIdx > 0 && verifyIdx > applyIdx, "verification runs AFTER the batch commits — that is why this state exists")
 

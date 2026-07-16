@@ -175,7 +175,7 @@ test("GUARD: bootstrap apply requires BOTH an execution flag and the exact confi
   assert.match(src, /argv\.includes\("--remote"\)/)
   // The gate actually guards a write path — the whole point of this command — and
   // what it executes is the canonical bytes validation retained.
-  assert.match(src, /applyBootstrapFile\(executionConfig, gates\.canonicalSql\)/)
+  assert.match(src, /applyBootstrapFile\(authority, gates\.canonicalSql\)/)
 })
 
 // ─── GUARD: the artifact is bound to operator authority ──────────
@@ -195,7 +195,7 @@ test("GUARD: Wrangler may never receive the repository-root artifact path", () =
   assert.match(body, /writeFileSync\(executionFile, canonicalSql, \{ mode: 0o600 \}\)/, "the execution file must be written 0600 from the canonical bytes")
   assert.doesNotMatch(body, /readFileSync/, "the bytes must not be re-read from any path at execution time")
   // main() executes the bytes validation retained.
-  assert.match(src, /applyBootstrapFile\(executionConfig, gates\.canonicalSql\)/)
+  assert.match(src, /applyBootstrapFile\(authority, gates\.canonicalSql\)/)
 })
 
 test("GUARD: the artifact content is READ and regenerated from current validated values before execution", () => {
@@ -445,20 +445,22 @@ test("GUARD: the same physical ID is rejected by bootstrap, migration apply, rem
 test("GUARD: bootstrap execution must never pass the original config path to Wrangler", () => {
   const src = codeOf(BOOTSTRAP_APPLY)
   // The SQL bytes were bound to operator authority, but the config decides WHICH
-  // DATABASE those bytes hit — it needs the same treatment.
+  // DATABASE those bytes hit — it needs the same treatment: every Wrangler call opens
+  // its OWN scoped config from the retained authority, never the operator's path.
   for (const helper of ["function applyBootstrapFile(", "function remoteCount("]) {
     const start = src.indexOf(helper)
     assert.ok(start >= 0, `${helper} must exist`)
     const body = src.slice(start, src.indexOf("\n}", start))
     assert.doesNotMatch(body, /"--config", configPath/, `${helper} must not hand Wrangler the original config path`)
-    assert.match(body, /"--config", executionConfig/, `${helper} must use the private execution config`)
+    assert.match(body, /withPrivateExecutionConfig\(authority, \{ repoRoot: REPO_ROOT, purpose: "bootstrap-exec" \}/, `${helper} must open a scoped config from the authority`)
+    assert.match(body, /"--config", executionConfig/, `${helper} must hand Wrangler the scoped config`)
   }
-  // main() derives ONE execution config from the validated snapshot…
-  assert.match(src, /executionConfig = createPrivateExecutionConfig\(gates\.configAuthority, \{ repoRoot: REPO_ROOT, purpose: "bootstrap-exec" \}\)/,
-    "the private config must come from the SHARED library, built from the retained authority")
-  // …and both the apply and the verification use THAT one.
-  assert.match(src, /applyBootstrapFile\(executionConfig, gates\.canonicalSql\)/)
-  assert.match(src, /remoteCount\(executionConfig, sql\)/)
+  // main() threads the retained AUTHORITY (never a reusable config path)…
+  assert.doesNotMatch(src, /createPrivateExecutionConfig/, "bootstrap must not create a reusable long-lived config")
+  assert.match(src, /const authority = gates\.configAuthority/, "the retained authority is threaded to both surfaces")
+  // …and both the apply and the verification derive their own scoped config from it.
+  assert.match(src, /applyBootstrapFile\(authority, gates\.canonicalSql\)/)
+  assert.match(src, /remoteCount\(authority, sql\)/)
 })
 
 test("GUARD: the config is read once, validated as a snapshot, and never re-read after validation", () => {
@@ -485,29 +487,33 @@ test("GUARD: the config is read once, validated as a snapshot, and never re-read
   assert.doesNotMatch(afterGates, /loadConfigFile\(/, "main must never reload the original config")
 })
 
-test("GUARD: apply and post-verification can never use different config snapshots", () => {
+test("GUARD: apply and post-verification derive from ONE retained authority, never a reusable config path", () => {
   const src = codeOf(BOOTSTRAP_APPLY)
   const main = src.slice(src.indexOf("function main()"))
-  // Exactly one execution config is produced, and every Wrangler call uses it.
-  assert.equal(main.split("createPrivateExecutionConfig(").length - 1, 1, "exactly one execution config may be written")
+  // No reusable long-lived execution config is produced; the same authority is
+  // threaded to every Wrangler surface, each of which opens its own scoped config.
+  assert.doesNotMatch(main, /createPrivateExecutionConfig/, "no reusable execution config may be written")
   for (const call of main.matchAll(/(applyBootstrapFile|remoteCount)\(([A-Za-z.]+),/g)) {
-    assert.equal(call[2], "executionConfig", `${call[1]} must receive the single execution config, got ${call[2]}`)
+    assert.equal(call[2], "authority", `${call[1]} must receive the single retained authority, got ${call[2]}`)
   }
 })
 
-test("GUARD: the temporary execution config must be private, exclusive, and unconditionally removed", () => {
+test("GUARD: the scoped execution config must be private, exclusive, read-only, and unconditionally removed", () => {
   const shared = codeOf("scripts/lib/cfDeployConfigAuthority.mjs")
   assert.match(shared, /mode: 0o600, flag: "wx"/, "private + exclusive creation (never overwrite or follow an existing file)")
+  assert.match(shared, /chmodSync\(path, 0o400\)/, "the scoped config is tightened to read-only")
   assert.match(shared, /wrangler\.deploy\.\$\{label\}-\$\{randomBytes\(12\)\.toString\("hex"\)\}\.json/,
     "a collision-resistant, git-ignored, repository-root generated-config name")
   // The EXACT retained bytes — never a re-serialization of a mutable parsed object.
   assert.match(shared, /writeFileSync\(path, authority\.bytes/)
+  // The scoped lease removes its config unconditionally in its own finally.
+  assert.ok(finallyBodies(shared).some((b) => /^\s*rmSync\(path, \{ force: true \}\)\s*$/m.test(b)),
+    "the scoped execution config must be removed unconditionally by the lease")
+  // Bootstrap's own finally paths (temp SQL dir, repository-root artifact) are also
+  // unconditional, and it keeps no reusable execution config to clean up.
   const src = codeOf(BOOTSTRAP_APPLY)
-  // Cleanup is unconditional, in a finally.
-  const bodies = finallyBodies(src)
-  assert.ok(bodies.some((b) => /^\s*removePrivateExecutionConfig\(executionConfig\)\s*$/m.test(b)),
-    "the private execution config must be removed unconditionally")
-  for (const body of bodies) assert.doesNotMatch(body, /\bif\s*\(/, "no cleanup path may be conditional")
+  assert.doesNotMatch(src, /removePrivateExecutionConfig/, "bootstrap keeps no reusable execution config")
+  for (const body of finallyBodies(src)) assert.doesNotMatch(body, /\bif\s*\(/, "no cleanup path may be conditional")
   // …and the generated-config pattern is git-ignored.
   assert.match(read(".gitignore"), /^\/wrangler\.deploy\*\.json$/m)
 })
