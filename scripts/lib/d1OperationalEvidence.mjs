@@ -39,13 +39,82 @@
  */
 
 import { createHash, randomBytes, createPublicKey, verify as edVerify } from "node:crypto"
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs"
+import { readFileSync, writeFileSync, mkdirSync, lstatSync } from "node:fs"
 import { resolve as resolvePath } from "node:path"
 
 /** Repository-relative path of the versioned evidence contract. */
 export const EVIDENCE_CONTRACT_RELPATH = "contracts/operations/d1-operational-evidence.v1.json"
 /** The ONLY directory evidence packs are written to (git-ignored). */
 export const EVIDENCE_DIRNAME = ".d1-evidence"
+
+// ─── Evidence-root permission enforcement (shared; P0-FIX-018) ────
+//
+// The evidence directory holds session private keys, so it must be a plain, private
+// directory. `mkdirSync(path, { recursive: true, mode: 0o700 })` does NOT correct an
+// existing directory: a pre-placed `.d1-evidence` at 0755 (or a symlink) was silently
+// accepted. This ONE validator — used by BOTH session initialization and final pack
+// writing — resolves exactly `<repo>/.d1-evidence`, creates ONLY that directory at
+// 0700 when absent (never recursively), and otherwise requires an existing plain,
+// non-symlink directory with NO group or other permission bits. It never chmods and
+// never prints an absolute path.
+
+/**
+ * True when `mode`'s low 12 bits carry any group or other permission bit — the
+ * evidence root and session directories must be private to the owner (`0o077 == 0`).
+ */
+export function hasGroupOrOtherPermissionBits(mode) {
+  return (mode & 0o077) !== 0
+}
+
+/**
+ * Ensure `<repoRoot>/.d1-evidence` is a SAFE evidence root and return its path.
+ *
+ * Creates it at 0700 (non-recursively) only when absent; otherwise `lstat`s it and
+ * rejects a symlink, a non-directory, or any group/other permission bit. After a
+ * create, the effective mode is re-checked (umask paranoia). Category-only output:
+ * the single safe failure `evidence_directory_permissions_invalid`. Never chmods.
+ *
+ * Manual remediation for an unsafe root: `chmod 700 .d1-evidence`.
+ */
+export function ensureEvidenceRootSecure(repoRoot) {
+  if (!repoRoot) return { ok: false, blocked: ["repo_root_missing"] }
+  const root = resolvePath(repoRoot, EVIDENCE_DIRNAME)
+  let stats = null
+  try { stats = lstatSync(root) } catch { stats = null }
+  if (stats === null) {
+    // Absent: create ONLY this directory, never recursively (a recursive create would
+    // silently accept an unsafe pre-existing target higher up).
+    try { mkdirSync(root, { mode: 0o700 }) } catch { return { ok: false, blocked: ["evidence_directory_permissions_invalid"] } }
+    let created
+    try { created = lstatSync(root) } catch { return { ok: false, blocked: ["evidence_directory_permissions_invalid"] } }
+    if (created.isSymbolicLink() || !created.isDirectory() || hasGroupOrOtherPermissionBits(created.mode)) {
+      return { ok: false, blocked: ["evidence_directory_permissions_invalid"] }
+    }
+    return { ok: true, root }
+  }
+  // Existing: it must be a plain, private directory — never a symlink, never a file,
+  // never group/other accessible. An unsafe existing root is NOT silently accepted.
+  if (stats.isSymbolicLink() || !stats.isDirectory() || hasGroupOrOtherPermissionBits(stats.mode)) {
+    return { ok: false, blocked: ["evidence_directory_permissions_invalid"] }
+  }
+  return { ok: true, root }
+}
+
+/**
+ * Create a fresh private session directory `<root>/<sessionId>` at 0700, then re-check
+ * that its effective mode has no group/other bits. Non-recursive: the root must
+ * already be validated. Category-only output.
+ */
+export function createSecureSessionDir(root, sessionId) {
+  const sessionDir = resolvePath(root, sessionId)
+  try { mkdirSync(sessionDir, { mode: 0o700 }) } catch { return { ok: false, blocked: ["session_directory_unwritable"] } }
+  let stats
+  try { stats = lstatSync(sessionDir) } catch { return { ok: false, blocked: ["session_directory_unwritable"] } }
+  if (stats.isSymbolicLink() || !stats.isDirectory() || hasGroupOrOtherPermissionBits(stats.mode)) {
+    return { ok: false, blocked: ["evidence_directory_permissions_invalid"] }
+  }
+  return { ok: true, sessionDir }
+}
 
 /** SHA-256 hex over exact bytes. */
 export function sha256Hex(value) {
@@ -695,10 +764,13 @@ export function writeEvidencePack(record, { repoRoot } = {}) {
     return { ok: false, blocked: ["evidence_directory_not_ignored"] }
   }
 
-  const directory = resolvePath(repoRoot, EVIDENCE_DIRNAME)
-  try { mkdirSync(directory, { recursive: true, mode: 0o700 }) } catch {
-    return { ok: false, blocked: ["evidence_directory_unwritable"] }
-  }
+  // The evidence root must be a plain, private 0700 directory — an existing unsafe
+  // root (0755, a symlink, a file) is rejected, not silently accepted. Shared with
+  // session initialization; independently enforced here so pack writing never trusts
+  // a root some other path created.
+  const secured = ensureEvidenceRootSecure(repoRoot)
+  if (!secured.ok) return { ok: false, blocked: secured.blocked }
+  const directory = secured.root
   const path = resolvePath(directory, `d1-operational-evidence-${record.evidence_id}.json`)
   try {
     writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600, flag: "wx" })

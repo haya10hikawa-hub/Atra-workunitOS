@@ -115,15 +115,26 @@ test("GUARD: production bootstrap uses no committed default identity data and no
 
 test("GUARD: Worker deploy never automatically applies migrations", () => {
   const src = read(DEPLOY)
-  assert.doesNotMatch(src, /cf-d1-migrations-apply|CF_D1_MIGRATE_EXECUTE|d1["'\s,]*execute/i)
+  // Deploy must never apply migrations: it never imports the migration-apply command,
+  // never sets its execution gate, and never issues a write (`--file`) D1 call. Its
+  // OWN read-only `d1 execute --command <SELECT>` schema introspection is allowed —
+  // and is guarded read-only before reaching Wrangler.
+  assert.doesNotMatch(src, /cf-d1-migrations-apply|CF_D1_MIGRATE_EXECUTE/i, "deploy must never apply migrations")
+  assert.doesNotMatch(src, /"--file"/, "deploy must never issue a write/migration D1 call")
+  assert.match(src, /if \(!isReadOnlyIntrospectionSql\(sql\)\) throw new Error\("non_read_only_query_blocked"\)/,
+    "deploy's own introspection is guarded read-only before Wrangler")
 })
 
 test("GUARD: Worker deploy cannot run before remote schema verification", () => {
-  const src = read(DEPLOY)
-  const verifyIdx = src.indexOf('name: "verify-remote-schema"')
-  const deployIdx = src.indexOf('name: "deploy"')
-  assert.ok(verifyIdx >= 0, "the remote schema verification step must exist")
-  assert.ok(deployIdx > verifyIdx, "deploy must be declared after remote schema verification")
+  const src = read(DEPLOY).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/[^\n]*$/gm, "")
+  // In the private remote region, schema verification runs and its digest is matched
+  // BEFORE the `wrangler deploy` upload.
+  const verifyIdx = src.indexOf("verifyRemoteSchemasForDeploy(authority)")
+  const digestIdx = src.indexOf("deployAuthorityDigestsMatch(result.authorityDigest, authority.sha256)")
+  const deployIdx = src.indexOf('spawnSync(WRANGLER_BIN, ["deploy"')
+  assert.ok(verifyIdx >= 0, "remote schema verification must run in the deploy pipeline")
+  assert.ok(digestIdx > verifyIdx, "the verified authority digest is matched after verification")
+  assert.ok(deployIdx > digestIdx, "the upload runs only after verification + digest match")
 })
 
 // ─── 9 + 11. remote verification is read-only, metadata-only ────

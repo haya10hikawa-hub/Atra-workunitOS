@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * cf:d1:schema:verify:remote (P0-PERSIST-015) — OPERATOR-GATED, READ-ONLY.
+ * cf:d1:schema:verify:remote (P0-PERSIST-015; hardened P0-FIX-018) — OPERATOR-GATED,
+ * READ-ONLY, ENTRYPOINT-ONLY.
  *
  * Verifies the production D1 schemas against the committed schema contract WITHOUT
  * writing. Runs ONLY when gated:
@@ -10,6 +11,16 @@
  * Issues ONLY read-only introspection queries (SELECT on sqlite_master; read-only
  * PRAGMA). NEVER mutates, seeds, runs migrations, prints database IDs, or reads
  * application row data. This patch never invokes it remotely.
+ *
+ * P0-FIX-018 — remote schema verification is NOT reachable from an imported function.
+ * The Wrangler-backed runner and the multi-binding verifier are PRIVATE to this
+ * module; there is no exported `makeWranglerReadOnlyRunner`/`verifyRemoteSchemasWithAuthority`.
+ * Remote provider access is guarded by a module-private authorization latch that ONLY
+ * `main()` opens, and only AFTER `--remote` and the validated deploy-config authority
+ * are confirmed. Every remote-capable leaf calls `requireSchemaVerificationAuthorized()`
+ * BEFORE creating a scoped execution config or spawning Wrangler. The latch is closed
+ * in `finally`. Read-only provider access is still remote execution, so it must be
+ * operator-gated at the command entrypoint — a caller-supplied object never authorizes it.
  */
 
 import { fileURLToPath } from "node:url"
@@ -48,23 +59,36 @@ export function evaluateRemoteVerifyGates({ argv = [], repoRoot = REPO_ROOT, con
   return { ok, blocked: [...new Set(blocked)], configAuthority: ok ? config.authority : null }
 }
 
+// ─── Module-private remote-verification authorization latch ───────
+//
+// Read-only provider access is still remote execution. Wrangler is UNREACHABLE until
+// `main()` opens this latch, and only after `--remote` and the validated deploy-config
+// authority are confirmed. This is a runtime latch, not a convention: every
+// remote-capable leaf calls `requireSchemaVerificationAuthorized()` FIRST, and only
+// `main()` opens it. A future caller that reaches a leaf without the entrypoint's
+// gates therefore fails closed. The latch is NOT exported and has no setter.
+
+let schemaVerificationAuthorized = false
+function requireSchemaVerificationAuthorized() {
+  if (!schemaVerificationAuthorized) throw new Error("schema_verification_not_authorized")
+}
+
 /**
- * A wrangler-backed read-only runner for a binding, bound to the retained
- * `authority`. Every SQL is asserted read-only before anything else — a mutation
- * attempt throws before any file is created and never reaches Wrangler.
- *
- * Each query opens its OWN short-lived execution config from `authority` and drops
- * it when the call returns. There is no reusable private path that could be edited
- * between one query and the next (reproduced against the audited head: a
- * post-validation edit redirected the TENANT introspection to a different database
- * mid-run). A modified or leaked earlier scoped file cannot affect the next query,
- * because the next query mints a fresh one from the exact authority bytes.
+ * A wrangler-backed read-only runner for a binding, bound to the retained `authority`.
+ * PRIVATE — never exported. Every query requires the authorization latch, is asserted
+ * read-only, and opens its OWN short-lived scoped execution config from the exact
+ * authority bytes (removed when the call returns). A mutation attempt throws before any
+ * file is created and never reaches Wrangler; a modified or leaked earlier scoped file
+ * cannot redirect the next query, which mints a fresh one from the retained bytes.
  */
-export function makeWranglerReadOnlyRunner(binding, authority, spawn = spawnSync, repoRoot = REPO_ROOT) {
+function wranglerReadOnlyRunner(binding, authority) {
   return (sql) => {
+    // Authorization FIRST — before the read-only check, before any scoped config,
+    // before spawn. A closed latch fails here, so nothing downstream can run.
+    requireSchemaVerificationAuthorized()
     if (!isReadOnlyIntrospectionSql(sql)) throw new Error("non_read_only_query_blocked")
-    return withPrivateExecutionConfig(authority, { repoRoot, purpose: "verify-exec" }, (executionConfig) => {
-      const res = spawn(WRANGLER_BIN, ["d1", "execute", binding, "--command", sql, "--remote", "--config", executionConfig, "--json"], { cwd: REPO_ROOT, encoding: "utf8" })
+    return withPrivateExecutionConfig(authority, { repoRoot: REPO_ROOT, purpose: "verify-exec" }, (executionConfig) => {
+      const res = spawnSync(WRANGLER_BIN, ["d1", "execute", binding, "--command", sql, "--remote", "--config", executionConfig, "--json"], { cwd: REPO_ROOT, encoding: "utf8" })
       if (res.status !== 0) throw new Error("wrangler_query_failed")
       const parsed = JSON.parse(res.stdout)
       // wrangler --json returns [{ results: [...] }] (or { results }).
@@ -75,30 +99,25 @@ export function makeWranglerReadOnlyRunner(binding, authority, spawn = spawnSync
 }
 
 /**
- * Verify BOTH bindings' schemas against the committed contract using ONE already-
- * retained authority.
- *
- * Exported as an internal library function so the deploy orchestrator can pass the
- * SAME authority it will deploy with — rather than spawning a child that creates a
- * second, unrelated snapshot of a file that may have changed in between. Every
- * introspection query opens its own scoped execution config from the authority, so
- * Control and Tenant verification are one logical authority (`authority.sha256`)
- * even though each query used a different ephemeral file.
+ * Verify BOTH bindings' schemas against the committed contract using ONE retained
+ * authority. PRIVATE — never exported, never given a spawn/runner seam. Requires the
+ * authorization latch before touching Wrangler. Every introspection query opens its
+ * own scoped execution config from the authority, so Control and Tenant verification
+ * are one logical authority (`authority.sha256`) even across distinct ephemeral files.
  *
  * Returns `{ ok, failures, authorityDigest }` — safe evidence only: `authorityDigest`
- * is the SHA-256 the deploy orchestrator matches against its own retained digest
- * before uploading; never a database ID, config content, path, or row data.
+ * is the SHA-256 of the authority actually verified; never a database ID, config
+ * content, path, or row data.
  */
-export function verifyRemoteSchemasWithAuthority(authority, { repoRoot = REPO_ROOT, spawn = spawnSync } = {}) {
+function verifyRemoteSchemas(authority) {
+  requireSchemaVerificationAuthorized()
   const authorityDigest = authority && typeof authority.sha256 === "string" ? authority.sha256 : null
-  const contract = loadSchemaContract(repoRoot)
+  const contract = loadSchemaContract(REPO_ROOT)
   if (!contract.ok) return { ok: false, failures: [contract.error], authorityDigest }
 
   const failures = []
   for (const binding of KNOWN_BINDINGS) {
-    // The SAME authority for every binding — each query derives its own scoped
-    // config, so the pair verified is always the pair the authority names.
-    const runner = makeWranglerReadOnlyRunner(binding, authority, spawn, repoRoot)
+    const runner = wranglerReadOnlyRunner(binding, authority)
     let result
     try { result = verifyViaRunner(runner, contract.contract.databases[binding]) } catch (err) {
       failures.push(`${binding}:${err instanceof Error ? err.message : "query_failed"}`)
@@ -176,9 +195,19 @@ function main() {
   const evidenceSessionDir = process.env.CF_D1_EVIDENCE_SESSION_DIR
   const evidenceStartedAt = evidenceSessionDir ? new Date().toISOString() : null
 
-  // One retained authority → a fresh scoped config per query → every Control and
-  // Tenant introspection. Each scoped config is removed as its own call returns.
-  const result = verifyRemoteSchemasWithAuthority(gates.configAuthority, { repoRoot: REPO_ROOT })
+  // EVERY gate passed — only now may Wrangler be reached. The latch is opened HERE,
+  // never by a caller, and closed unconditionally in `finally`.
+  let result
+  schemaVerificationAuthorized = true
+  console.log("cf:d1:schema:verify:remote: verification latch opened")
+  try {
+    // One retained authority → a fresh scoped config per query → every Control and
+    // Tenant introspection. Each scoped config is removed as its own call returns.
+    result = verifyRemoteSchemas(gates.configAuthority)
+  } finally {
+    schemaVerificationAuthorized = false
+    console.log("cf:d1:schema:verify:remote: verification latch closed")
+  }
   if (!result.ok) console.error(`cf:d1:schema:verify:remote: FAIL — ${result.failures.join(", ")}`)
 
   // Command-local receipt from THIS result path.

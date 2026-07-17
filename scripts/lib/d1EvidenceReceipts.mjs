@@ -48,13 +48,14 @@
 
 import { generateKeyPairSync, randomBytes } from "node:crypto"
 import { spawnSync } from "node:child_process"
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, lstatSync } from "node:fs"
+import { readFileSync, writeFileSync, readdirSync, lstatSync } from "node:fs"
 import { resolve as resolvePath } from "node:path"
 import {
   loadEvidenceContract, scanSensitiveEvidence, canonicalSerialize, sha256Hex,
   isStrictUtcIso, deepFreezeEvidence, computeReceiptDigest,
   verifyReceiptSignature, createEvidenceSession, recordEvidenceOperation,
   finalizeEvidenceSession, writeEvidencePack, EVIDENCE_DIRNAME, EVIDENCE_FORMATS,
+  ensureEvidenceRootSecure, createSecureSessionDir,
 } from "./d1OperationalEvidence.mjs"
 import { loadManifest, buildPlan, tenantRegistrySchemaVersion, KNOWN_BINDINGS } from "./d1MigrationManifest.mjs"
 import { validateD1Id } from "./cfDeployConfig.mjs"
@@ -190,6 +191,12 @@ export function initializeEvidenceSession({ repoRoot, environmentClass } = {}) {
   if (!new RegExp(`^/${EVIDENCE_DIRNAME.replace(".", "\\.")}/$`, "m").test(gitignore)) blocked.push("evidence_directory_not_ignored")
   if (blocked.length > 0) return { ok: false, blocked: [...new Set(blocked)] }
 
+  // The evidence root must be a plain, private 0700 directory BEFORE any key or
+  // manifest is created — a pre-existing unsafe root (0755, symlink, file) fails
+  // closed here, so a failed validation never leaves a private key on disk.
+  const secured = ensureEvidenceRootSecure(repoRoot)
+  if (!secured.ok) return { ok: false, blocked: secured.blocked }
+
   const sessionId = `evs-${randomBytes(16).toString("hex")}`
   const { publicKey, privateKey } = generateKeyPairSync("ed25519")
   const publicKeyHex = Buffer.from(publicKey.export({ format: "jwk" }).x, "base64url").toString("hex")
@@ -210,9 +217,13 @@ export function initializeEvidenceSession({ repoRoot, environmentClass } = {}) {
     expected_schema_version: facts.facts.expectedSchemaVersion,
   }
 
-  const sessionDir = resolvePath(repoRoot, EVIDENCE_DIRNAME, sessionId)
+  // The session directory is created fresh at 0700 (non-recursively, under the
+  // validated root) and its effective mode re-checked before the manifest and key
+  // are written 0600/exclusive.
+  const dir = createSecureSessionDir(secured.root, sessionId)
+  if (!dir.ok) return { ok: false, blocked: dir.blocked }
+  const sessionDir = dir.sessionDir
   try {
-    mkdirSync(sessionDir, { recursive: true, mode: 0o700 })
     writeFileSync(resolvePath(sessionDir, SESSION_MANIFEST_BASENAME), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600, flag: "wx" })
     writeFileSync(resolvePath(sessionDir, SESSION_PRIVATE_KEY_BASENAME), privateKeyPem, { mode: 0o600, flag: "wx" })
   } catch {

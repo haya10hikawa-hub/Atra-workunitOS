@@ -42,6 +42,18 @@
  *   - no long-lived execution config exists across the build; every scoped config is
  *     removed as its call returns, and the original generated config is removed the
  *     moment its bytes are retained (and again on every exit).
+ *
+ * P0-FIX-018 — remote execution is ENTRYPOINT-ONLY. There is NO exported `runPipeline`
+ * and no `RunPipelineDeps`: the pipeline and every remote-capable leaf are PRIVATE to
+ * this module. `main()` alone reads `CF_DEPLOY_EXECUTE`, and a module-private
+ * deployment-authorization latch is opened ONLY after every gate (validated config +
+ * offline preflight/build/artifact verification) succeeds — never by a caller-supplied
+ * boolean. Every remote leaf (in-process schema introspection and `wrangler deploy`)
+ * calls `requireDeployExecutionAuthorized()` before touching Cloudflare, and the latch
+ * is closed in `finally`. Deploy does its OWN private Wrangler-backed schema
+ * introspection (reusing only PURE schema helpers) — it never imports a remote-capable
+ * function from the standalone schema command. The only exported surface is pure,
+ * non-authorizing step metadata and a digest-equality predicate.
  */
 
 import { fileURLToPath } from "node:url"
@@ -52,7 +64,9 @@ import { createPrivateKey, sign as edSign } from "node:crypto"
 import {
   loadValidatedDeployConfigAuthority, withPrivateExecutionConfig,
 } from "./lib/cfDeployConfigAuthority.mjs"
-import { verifyRemoteSchemasWithAuthority } from "./cf-d1-schema-verify-remote.mjs"
+// PURE schema helpers only — NEVER a remote-capable function from the schema command.
+import { loadSchemaContract, verifyViaRunner, isReadOnlyIntrospectionSql } from "./lib/d1SchemaContract.mjs"
+import { KNOWN_BINDINGS } from "./lib/d1MigrationManifest.mjs"
 import { sha256Hex } from "./lib/d1OperationalEvidence.mjs"
 import {
   openCommandReceiptContext, assembleUnsignedReceipt, persistSignedReceipt,
@@ -64,95 +78,167 @@ const REPO_ROOT = resolve(__dirname, "..")
 const GENERATED_CONFIG = "wrangler.deploy.json"
 const WRANGLER_BIN = resolve(REPO_ROOT, "node_modules/.bin/wrangler")
 
-/**
- * Ordered pipeline. Exported so tests can assert that no gate (notably `prepare`,
- * `preflight`, and `verify-remote-schema`) is ever removed or reordered before
- * `deploy`. Steps marked `remote: true` contact Cloudflare and are reached ONLY
- * with CF_DEPLOY_EXECUTE=1.
- *
- * A step marked `usesConfig: true` names `--config <scoped>` in its `args`, where the
- * scoped config is a fresh short-lived file `runStep` mints from the retained
- * authority for THAT invocation and removes immediately afterwards — no step is ever
- * handed the original generated config, and no config survives between steps.
- * `verify-remote-schema` has no `cmd`: it runs in-process through the shared library
- * against the same retained authority, returning a digest the orchestrator matches
- * before deploy.
- *
- * NOTE: there is intentionally NO migration-apply or bootstrap-apply step — Worker
- * deploy must never silently apply database migrations or write bootstrap records.
- */
-export const DEPLOY_STEPS = [
-  { name: "prepare", cmd: process.execPath, args: () => ["scripts/cloudflare-deploy-prepare.mjs"], beforeAuthority: true },
-  { name: "preflight", cmd: process.execPath, args: (cfg) => ["scripts/cloudflare-deploy-preflight.mjs", "--config", cfg], usesConfig: true, purpose: "preflight-exec" },
-  { name: "build", cmd: resolve(REPO_ROOT, "node_modules/.bin/opennextjs-cloudflare"), args: () => ["build"] },
-  { name: "verify", cmd: process.execPath, args: (cfg) => ["scripts/cloudflare-deploy-preflight.mjs", "--config", cfg, "--check-artifacts"], usesConfig: true, purpose: "artifacts-exec" },
-  { name: "verify-remote-schema", inProcess: "verifyRemoteSchema", remote: true },
-  { name: "deploy", cmd: WRANGLER_BIN, args: (cfg) => ["deploy", "--config", cfg], remote: true, usesConfig: true, purpose: "deploy-exec" },
-]
+// ─── Pure, non-authorizing step information (the ONLY exported surface) ──
+//
+// This is INFORMATION, not execution: it names no command binary, receives no
+// authority, accepts no execution flag, has no remote default, and cannot spawn or
+// contact Cloudflare. It exists so tests and tooling can assert the pipeline's shape
+// and order without any path to remote execution.
 
-/**
- * Run one spawned step. A `usesConfig` step gets a FRESH scoped execution config
- * from the retained authority for its single Wrangler call, removed the instant the
- * call returns; a step that needs no config is spawned directly. `spawn` is
- * injectable so tests can observe the exact `--config` file (and its bytes) without
- * contacting Cloudflare.
- */
-function runStep(step, authority, spawn = spawnSync) {
-  console.log(`cf:deploy → ${step.name}`)
-  if (step.usesConfig) {
-    // Created immediately before the call, used for that one invocation, gone after.
-    return withPrivateExecutionConfig(authority, { repoRoot: REPO_ROOT, purpose: step.purpose }, (cfg) =>
-      spawn(step.cmd, step.args(cfg), { cwd: REPO_ROOT, stdio: "inherit" }).status === 0)
-  }
-  return spawn(step.cmd, step.args(), { cwd: REPO_ROOT, stdio: "inherit" }).status === 0
+const DEPLOY_STEP_METADATA = Object.freeze([
+  Object.freeze({ name: "prepare", remote: false, usesConfig: false }),
+  Object.freeze({ name: "preflight", remote: false, usesConfig: true }),
+  Object.freeze({ name: "build", remote: false, usesConfig: false }),
+  Object.freeze({ name: "verify", remote: false, usesConfig: true }),
+  Object.freeze({ name: "verify-remote-schema", remote: true, usesConfig: false }),
+  Object.freeze({ name: "deploy", remote: true, usesConfig: true }),
+])
+
+/** The ordered, non-authorizing step metadata (fresh copy; no cmd, no authority). */
+export function getDeployStepMetadata() {
+  return DEPLOY_STEP_METADATA.map((step) => ({ ...step }))
 }
 
 /**
- * Run the pipeline after `prepare`. Returns an exit code and NEVER calls
- * `process.exit` — a nested exit could terminate the process inside a scoped config's
- * callback, before its `finally` removed the file. Every Wrangler call runs against a
- * fresh scoped config from `authority`; there is no reusable execution-config path.
+ * Validate the canonical deploy step order — a PURE check. Requires `prepare` first,
+ * `deploy` last, `verify-remote-schema` IMMEDIATELY before `deploy`, and NO migration
+ * or bootstrap step anywhere. Returns `{ ok, failures }`.
  */
-export function runPipeline(authority, execute, deps = {}) {
-  const { verifyRemoteSchemas = verifyRemoteSchemasWithAuthority, run = runStep, spawn = spawnSync } = deps
-  for (const step of DEPLOY_STEPS) {
-    // `prepare` produced the config the authority was loaded from; it has already
-    // run by the time we get here.
-    if (step.beforeAuthority) continue
+export function validateDeployStepOrder(order) {
+  const names = Array.isArray(order) ? order : DEPLOY_STEP_METADATA.map((step) => step.name)
+  const failures = []
+  if (names[0] !== "prepare") failures.push("prepare_not_first")
+  if (names[names.length - 1] !== "deploy") failures.push("deploy_not_last")
+  const verifyIndex = names.indexOf("verify-remote-schema")
+  const deployIndex = names.indexOf("deploy")
+  if (verifyIndex < 0) failures.push("verify_remote_schema_missing")
+  else if (deployIndex - verifyIndex !== 1) failures.push("deploy_not_immediately_after_verification")
+  if (names.some((name) => /migrat|bootstrap/i.test(name))) failures.push("migration_or_bootstrap_step_present")
+  return { ok: failures.length === 0, failures }
+}
 
-    // The first remote step halts an offline run — nothing after it contacts
-    // Cloudflare without an explicit CF_DEPLOY_EXECUTE=1.
-    if (step.remote && !execute) {
-      console.log(
-        "cf:deploy: stopping before remote schema verification + upload (set CF_DEPLOY_EXECUTE=1 to perform the real deploy).",
-      )
-      return 0
-    }
+/**
+ * PURE digest equality: the schema the deploy just verified must be bound to EXACTLY
+ * the authority the deploy will upload. Both must be a 64-hex digest and identical.
+ * Non-authorizing — it compares two strings and can neither spawn nor deploy.
+ */
+export function deployAuthorityDigestsMatch(verifiedDigest, deployDigest) {
+  return typeof verifiedDigest === "string" && /^[0-9a-f]{64}$/.test(verifiedDigest)
+    && typeof deployDigest === "string" && verifiedDigest === deployDigest
+}
 
-    if (step.inProcess === "verifyRemoteSchema") {
-      console.log(`cf:deploy → ${step.name}`)
-      // The SAME retained authority that will be deployed — not a second snapshot
-      // of a file that may have changed since preflight. Each introspection query
-      // opens its own scoped config from this authority.
-      const result = verifyRemoteSchemas(authority, { repoRoot: REPO_ROOT, spawn })
-      if (!result.ok) {
-        console.error(`cf:deploy: FAILED at step "${step.name}" — deploy aborted.`)
-        return 1
-      }
-      // Byte identity is the guarantee: the database whose schema was just verified
-      // must be the database we are about to deploy. Both are bound to one digest —
-      // a mismatch here is a validate/deploy divergence and MUST prevent deploy.
-      if (result.authorityDigest !== authority.sha256) {
-        console.error(`cf:deploy: FAILED at step "${step.name}" — verified authority digest does not match the deploy authority. Deploy aborted.`)
-        return 1
-      }
+// ─── Module-private deployment-authorization latch ────────────────
+//
+// Cloudflare is UNREACHABLE until `main()` opens this latch, and only after every gate
+// succeeded. A runtime latch, not a convention: every remote leaf calls
+// `requireDeployExecutionAuthorized()` first. A caller-supplied boolean can never open
+// it — the latch is not exported and has no setter. It is closed in `finally`.
+
+let deployExecutionAuthorized = false
+function requireDeployExecutionAuthorized() {
+  if (!deployExecutionAuthorized) throw new Error("deploy_execution_not_authorized")
+}
+
+// ─── Private remote-capable leaves (never exported) ───────────────
+
+/**
+ * Deploy's OWN read-only introspection runner for a binding. Requires the deploy
+ * latch, asserts read-only, and opens its own scoped execution config from the exact
+ * retained authority bytes. A mutation attempt throws before any file is created.
+ */
+function deployReadOnlyRunner(binding, authority) {
+  return (sql) => {
+    // Authorization FIRST — before the read-only check, before any scoped config,
+    // before spawn. A closed latch fails here, so nothing downstream can run.
+    requireDeployExecutionAuthorized()
+    if (!isReadOnlyIntrospectionSql(sql)) throw new Error("non_read_only_query_blocked")
+    return withPrivateExecutionConfig(authority, { repoRoot: REPO_ROOT, purpose: "verify-exec" }, (executionConfig) => {
+      const res = spawnSync(WRANGLER_BIN, ["d1", "execute", binding, "--command", sql, "--remote", "--config", executionConfig, "--json"], { cwd: REPO_ROOT, encoding: "utf8" })
+      if (res.status !== 0) throw new Error("wrangler_query_failed")
+      const parsed = JSON.parse(res.stdout)
+      if (Array.isArray(parsed)) return parsed[0] && Array.isArray(parsed[0].results) ? parsed[0].results : []
+      return Array.isArray(parsed.results) ? parsed.results : []
+    })
+  }
+}
+
+/**
+ * Deploy's OWN private remote schema verification against the retained authority —
+ * implemented HERE (reusing only pure schema helpers) so deploy imports no
+ * remote-capable function from the standalone schema command. Requires the deploy
+ * latch. Returns `{ ok, failures, authorityDigest }` — the digest of the authority
+ * actually verified, which `main` matches against the deploy authority before upload.
+ */
+function verifyRemoteSchemasForDeploy(authority) {
+  requireDeployExecutionAuthorized()
+  const authorityDigest = authority && typeof authority.sha256 === "string" ? authority.sha256 : null
+  const contract = loadSchemaContract(REPO_ROOT)
+  if (!contract.ok) return { ok: false, failures: [contract.error], authorityDigest }
+  const failures = []
+  for (const binding of KNOWN_BINDINGS) {
+    const runner = deployReadOnlyRunner(binding, authority)
+    let result
+    try { result = verifyViaRunner(runner, contract.contract.databases[binding]) } catch (err) {
+      failures.push(`${binding}:${err instanceof Error ? err.message : "query_failed"}`)
       continue
     }
+    if (result.ok) console.log(`cf:deploy: ${binding} schema OK`)
+    else for (const f of result.failures) failures.push(`${binding}:${f.category}`)
+  }
+  return { ok: failures.length === 0, failures, authorityDigest }
+}
 
-    if (!run(step, authority, spawn)) {
+/**
+ * The OFFLINE step region: preflight (scoped config), OpenNext build, and artifact
+ * verification. None contacts Cloudflare, so none needs the deploy latch. Returns
+ * true only when every step succeeds.
+ */
+function runOfflineSteps(authority) {
+  const steps = [
+    { name: "preflight", cmd: process.execPath, args: (cfg) => ["scripts/cloudflare-deploy-preflight.mjs", "--config", cfg], usesConfig: true, purpose: "preflight-exec" },
+    { name: "build", cmd: resolve(REPO_ROOT, "node_modules/.bin/opennextjs-cloudflare"), args: () => ["build"], usesConfig: false },
+    { name: "verify", cmd: process.execPath, args: (cfg) => ["scripts/cloudflare-deploy-preflight.mjs", "--config", cfg, "--check-artifacts"], usesConfig: true, purpose: "artifacts-exec" },
+  ]
+  for (const step of steps) {
+    console.log(`cf:deploy → ${step.name}`)
+    const ok = step.usesConfig
+      ? withPrivateExecutionConfig(authority, { repoRoot: REPO_ROOT, purpose: step.purpose }, (cfg) =>
+        spawnSync(step.cmd, step.args(cfg), { cwd: REPO_ROOT, stdio: "inherit" }).status === 0)
+      : spawnSync(step.cmd, step.args(), { cwd: REPO_ROOT, stdio: "inherit" }).status === 0
+    if (!ok) {
       console.error(`cf:deploy: FAILED at step "${step.name}" — deploy aborted.`)
-      return 1
+      return false
     }
+  }
+  return true
+}
+
+/**
+ * The REMOTE region: schema verification against the retained authority, a digest
+ * match, then `wrangler deploy`. Reached ONLY with the latch open (opened by `main`
+ * after all gates). Returns an exit code and never calls `process.exit`.
+ */
+function runRemotePipeline(authority) {
+  requireDeployExecutionAuthorized()
+  console.log("cf:deploy → verify-remote-schema")
+  const result = verifyRemoteSchemasForDeploy(authority)
+  if (!result.ok) {
+    console.error('cf:deploy: FAILED at step "verify-remote-schema" — deploy aborted.')
+    return 1
+  }
+  // Byte identity: the database whose schema was just verified must be the database
+  // about to be deployed. A digest mismatch is a validate/deploy divergence and MUST
+  // prevent deploy.
+  if (!deployAuthorityDigestsMatch(result.authorityDigest, authority.sha256)) {
+    console.error('cf:deploy: FAILED at step "verify-remote-schema" — verified authority digest does not match the deploy authority. Deploy aborted.')
+    return 1
+  }
+  console.log("cf:deploy → deploy")
+  const status = withPrivateExecutionConfig(authority, { repoRoot: REPO_ROOT, purpose: "deploy-exec" }, (cfg) =>
+    spawnSync(WRANGLER_BIN, ["deploy", "--config", cfg], { cwd: REPO_ROOT, stdio: "inherit" }).status)
+  if (status !== 0) {
+    console.error('cf:deploy: FAILED at step "deploy" — deploy aborted.')
+    return 1
   }
   console.log("cf:deploy: complete.")
   return 0
@@ -205,11 +291,11 @@ function main() {
   const execute = process.env.CF_DEPLOY_EXECUTE === "1"
   const generatedConfig = resolve(REPO_ROOT, GENERATED_CONFIG)
 
-  // Step 1: prepare writes the generated config from deploy env vars.
-  const prepare = DEPLOY_STEPS[0]
-  console.log(`cf:deploy → ${prepare.name}`)
-  if (spawnSync(prepare.cmd, prepare.args(), { cwd: REPO_ROOT, stdio: "inherit" }).status !== 0) {
-    console.error(`cf:deploy: FAILED at step "${prepare.name}" — deploy aborted.`)
+  // Step 1: prepare writes the generated config from deploy env vars. This is an
+  // offline, local step — no Cloudflare, no latch.
+  console.log("cf:deploy → prepare")
+  if (spawnSync(process.execPath, ["scripts/cloudflare-deploy-prepare.mjs"], { cwd: REPO_ROOT, stdio: "inherit" }).status !== 0) {
+    console.error('cf:deploy: FAILED at step "prepare" — deploy aborted.')
     rmSync(generatedConfig, { force: true })
     process.exit(1)
   }
@@ -235,7 +321,29 @@ function main() {
       retainedAuthority = authority.authority
       evidenceStartedAt = evidenceSessionDir && execute ? new Date().toISOString() : null
       rmSync(generatedConfig, { force: true })
-      exitCode = runPipeline(authority.authority, execute)
+
+      // OFFLINE gates first — preflight, build, artifact verification. These contact
+      // no provider, so they run without the deployment latch.
+      if (!runOfflineSteps(authority.authority)) {
+        exitCode = 1
+      } else if (!execute) {
+        // Every gate passed but CF_DEPLOY_EXECUTE≠1: stop BEFORE the first remote
+        // action. The latch is never opened, so nothing can reach Cloudflare.
+        console.log("cf:deploy: stopping before remote schema verification + upload (set CF_DEPLOY_EXECUTE=1 to perform the real deploy).")
+        exitCode = 0
+      } else {
+        // ALL gates passed AND CF_DEPLOY_EXECUTE=1 — only now is remote execution
+        // authorized. The latch is opened HERE, never by a caller, and closed
+        // unconditionally in `finally` (success, failure, or throw).
+        deployExecutionAuthorized = true
+        console.log("cf:deploy: execution latch opened")
+        try {
+          exitCode = runRemotePipeline(authority.authority)
+        } finally {
+          deployExecutionAuthorized = false
+          console.log("cf:deploy: execution latch closed")
+        }
+      }
     }
   } catch (err) {
     console.error(`cf:deploy: FAILED — ${err instanceof Error ? err.message : "deploy_failed"}`)
@@ -243,7 +351,8 @@ function main() {
   } finally {
     // Backstop, on EVERY exit: the original generated config never outlives the run,
     // even if the authority load threw before it was removed. Scoped execution
-    // configs remove themselves as each of their calls returns.
+    // configs remove themselves as each of their calls returns. The deployment latch
+    // is opened and closed only inside the guarded region above.
     rmSync(generatedConfig, { force: true })
   }
 

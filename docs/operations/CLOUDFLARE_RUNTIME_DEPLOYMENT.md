@@ -368,6 +368,24 @@ the original generated config, and no reusable private config is passed between 
   Both are separate, operator-gated commands. Deploy only *verifies* the remote
   schema, read-only.
 
+> **Remote execution is ENTRYPOINT-ONLY (P0-FIX-018).** Remote provider execution
+> exists **only** in the direct command entrypoints. The deploy pipeline and every
+> remote-capable leaf are **private** to `scripts/cloudflare-deploy.mjs`: there is no
+> exported `runPipeline` / `RunPipelineDeps` / provider `spawn`/`runner`/`deps` seam,
+> so an **imported** production function cannot authorize a Worker deploy or a remote
+> schema query. Only `main()` reads `CF_DEPLOY_EXECUTE`, and a **module-private
+> deployment-authorization latch** is opened only after every gate (validated config +
+> offline preflight/build/artifact verification) succeeds — **a boolean argument is
+> never authorization**. Every remote leaf calls `requireDeployExecutionAuthorized()`
+> before touching Cloudflare, and the latch is closed in `finally`. Deploy performs
+> its OWN private, read-only schema introspection (reusing only pure schema helpers)
+> and matches the verified authority digest against the deploy authority before upload;
+> it never imports a remote-capable function from the standalone schema command. The
+> standalone `cf:d1:schema:verify:remote` uses a **separate** private latch and is
+> equally entrypoint-only (`--remote` gate). None of this constitutes remote proof —
+> a Cloudflare-side cross-check and human review remain mandatory, and **Issue #155
+> stays open**.
+
 ### Production migration apply gates
 
 `cf:d1:migrations:apply` stops before Wrangler unless **all** hold: `--remote`, a
