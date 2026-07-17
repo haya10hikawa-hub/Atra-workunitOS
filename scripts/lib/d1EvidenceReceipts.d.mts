@@ -38,9 +38,7 @@ export interface LoadedEvidenceSession {
   readonly contract: EvidenceContract
 }
 
-export type GitRunner = (repoRoot: string, args: string[]) => string | null
-
-export declare function deriveGitFacts(repoRoot: string, runGit?: GitRunner): EvidenceResult<{ commitSha: string; dirtyTree: false }>
+export declare function deriveGitFacts(repoRoot: string): EvidenceResult<{ commitSha: string; dirtyTree: false }>
 export declare function deriveWranglerVersion(repoRoot: string): string | null
 export declare function deriveMigrationPlanDigest(repoRoot: string): string | null
 export declare function deriveRepositoryEvidenceFacts(repoRoot: string): EvidenceResult<{ facts: { manifestSha256: string; schemaContractSha256: string; planDigest: string; expectedSchemaVersion: string } }>

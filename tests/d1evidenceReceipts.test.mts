@@ -18,9 +18,10 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs"
+import { readFileSync, writeFileSync, readdirSync, statSync, mkdtempSync, rmSync } from "node:fs"
 import { createPrivateKey, sign as edSign, generateKeyPairSync } from "node:crypto"
 import { resolve } from "node:path"
+import { tmpdir } from "node:os"
 import * as receiptsModule from "../scripts/lib/d1EvidenceReceipts.mjs"
 import * as coreModule from "../scripts/lib/d1OperationalEvidence.mjs"
 import * as verifyModule from "../scripts/cf-d1-evidence-verify.mjs"
@@ -237,9 +238,10 @@ test("14. session initialization DERIVES HEAD, versions, and contract digests in
     // The private key + manifest are 0600 and confined to the session directory.
     assert.equal(statSync(resolve(init.sessionDir, SESSION_PRIVATE_KEY_BASENAME)).mode & 0o777, 0o600)
     assert.equal(statSync(resolve(init.sessionDir, "session.json")).mode & 0o777, 0o600)
-    // deriveGitFacts resolves HEAD and rejects an unresolvable one (unit-level).
-    assert.deepEqual(deriveGitFacts(repo.repoRoot, () => "not-a-sha\n"), { ok: false, blocked: ["head_unresolvable"] })
-    assert.deepEqual(deriveGitFacts(repo.repoRoot, () => null), { ok: false, blocked: ["head_unresolvable"] })
+    assert.deepEqual(deriveGitFacts(repo.repoRoot), { ok: true, commitSha: repo.commitSha, dirtyTree: false })
+    const noGit = mkdtempSync(resolve(tmpdir(), "d1-evidence-no-git-"))
+    try { assert.deepEqual(deriveGitFacts(noGit), { ok: false, blocked: ["head_unresolvable"] }) }
+    finally { rmSync(noGit, { recursive: true, force: true }) }
   } finally { repo.cleanup() }
 })
 
@@ -258,11 +260,7 @@ test("15. session initialization REJECTS a dirty worktree — and no caller clai
     })
     assert.equal(claimed.ok, false)
     assert.ok(!claimed.ok && (claimed.blocked ?? []).includes("repository_dirty"), "a dirty-tree claim is ignored")
-    // deriveGitFacts reports the dirty tree from a porcelain status (unit-level).
-    assert.deepEqual(
-      deriveGitFacts(repo.repoRoot, (_r, args) => args[0] === "rev-parse" ? `${repo.commitSha}\n` : " M wrangler.json\n"),
-      { ok: false, blocked: ["repository_dirty"] },
-    )
+    assert.deepEqual(deriveGitFacts(repo.repoRoot), { ok: false, blocked: ["repository_dirty"] })
   } finally { repo.cleanup() }
 })
 
@@ -415,7 +413,10 @@ test("22. no command sets, weakens, or auto-satisfies an execution gate; the sha
   // The recorder is spawn-free; the receipts library spawns ONLY allowlisted read-only git.
   assert.doesNotMatch(codeOf("scripts/lib/d1OperationalEvidence.mjs"), /child_process|spawnSync|execSync/, "the recorder never spawns")
   const receipts = codeOf("scripts/lib/d1EvidenceReceipts.mjs")
-  assert.match(receipts, /const allowed = new Set\(\["rev-parse", "status"\]\)/, "git is allowlisted read-only")
+  assert.match(receipts, /"rev-parse\\0--verify\\0HEAD"/)
+  assert.match(receipts, /status\\0--porcelain=v1\\0--untracked-files=all\\0--ignore-submodules=none/, "git is exactly allowlisted read-only")
+  assert.match(receipts, /core\.fsmonitor=false/)
+  assert.match(receipts, /GIT_OPTIONAL_LOCKS:\s*"0"/, "Git control environment is not inherited and optional locks are disabled")
   assert.equal((receipts.match(/spawnSync\(/g) ?? []).length, 1, "exactly one spawn site, and it is git")
 })
 

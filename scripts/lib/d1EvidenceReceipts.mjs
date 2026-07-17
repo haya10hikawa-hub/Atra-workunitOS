@@ -76,24 +76,32 @@ const SESSION_MANIFEST_FIELDS = ["session_version", "session_id", "environment_c
 
 /** Run ONE allowlisted read-only git command in `repoRoot`; null on failure. */
 function readOnlyGit(repoRoot, args) {
-  const allowed = new Set(["rev-parse", "status"])
-  if (!allowed.has(args[0])) throw new Error("git_command_not_allowlisted")
-  const result = spawnSync("git", args, { cwd: repoRoot, encoding: "utf8" })
+  const allowed = new Set([
+    "rev-parse\0--verify\0HEAD",
+    "status\0--porcelain=v1\0--untracked-files=all\0--ignore-submodules=none",
+  ])
+  if (!allowed.has(args.join("\0"))) throw new Error("git_command_not_allowlisted")
+  // A fixed child environment prevents GIT_DIR/GIT_WORK_TREE/GIT_CONFIG_* (and
+  // PATH) from redirecting authority. Optional locks and repo-configured filesystem
+  // monitors/caches are disabled so status cannot write the index or invoke a hook.
+  const gitArgs = ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", ...args]
+  const result = spawnSync("git", gitArgs, {
+    cwd: repoRoot, encoding: "utf8", env: { LANG: "C", LC_ALL: "C", GIT_OPTIONAL_LOCKS: "0" },
+  })
   if (result.status !== 0) return null
   return result.stdout
 }
 
 /**
- * Derive the HEAD commit and worktree cleanliness from git. A dirty tree or an
- * unresolvable HEAD fails closed. Exported so the CLI and unit tests can exercise
- * the derivation with an injected read-only runner; the PRODUCTION initializer
- * always uses the real allowlisted git and exposes no injection point.
+ * Derive the HEAD commit and worktree cleanliness from the private allowlisted git
+ * runner. A dirty tree or an unresolvable HEAD fails closed. Callers cannot replace
+ * the repository authority; tests exercise this only through temporary real repos.
  */
-export function deriveGitFacts(repoRoot, runGit = readOnlyGit) {
-  const head = runGit(repoRoot, ["rev-parse", "HEAD"])
+export function deriveGitFacts(repoRoot) {
+  const head = readOnlyGit(repoRoot, ["rev-parse", "--verify", "HEAD"])
   const commitSha = head ? head.trim() : null
   if (!commitSha || !RE.commitSha.test(commitSha)) return { ok: false, blocked: ["head_unresolvable"] }
-  const status = runGit(repoRoot, ["status", "--porcelain"])
+  const status = readOnlyGit(repoRoot, ["status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"])
   if (status === null) return { ok: false, blocked: ["worktree_state_unresolvable"] }
   if (status.trim().length > 0) return { ok: false, blocked: ["repository_dirty"] }
   return { ok: true, commitSha, dirtyTree: false }

@@ -98,12 +98,3 @@ export function makeAuthority(ids: Record<string, string> = SYNTHETIC_D1_IDS) {
   const bytes = JSON.stringify(buildConfigWithIds(base, ids), null, 2)
   return { bytes, sha256: sha256Hex(bytes), snapshot: JSON.parse(bytes) }
 }
-
-/** A read-only git runner that reports a fixed HEAD and clean/dirty tree (verifier tests). */
-export function fixedGitRunner(headSha: string, { dirty = false } = {}) {
-  return (_repoRoot: string, args: string[]): string | null => {
-    if (args[0] === "rev-parse") return `${headSha}\n`
-    if (args[0] === "status") return dirty ? " M migrations/manifest.json\n" : ""
-    return null
-  }
-}

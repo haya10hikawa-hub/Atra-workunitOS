@@ -220,6 +220,15 @@ receipt- and checkout-binding categories: `evidence_receipt_unsigned`,
 spawns is read-only `git`; it performs **no network or database access** and reads no
 environment.
 
+The CLI and imported-library API use the identical production path:
+`verifyEvidencePackAtPath(path, { repoRoot, sessionDir })` always calls
+`deriveGitFacts(repoRoot)`. Production exposes **no Git runner, dependency, spawn, or
+execution override**. The private runner accepts only `rev-parse --verify HEAD` and
+`status --porcelain=v1 --untracked-files=all --ignore-submodules=none`, disables
+optional index locks, filesystem monitors, and the untracked cache, and uses a fixed
+child environment so caller-supplied `GIT_DIR`, `GIT_WORK_TREE`, `GIT_CONFIG_*`, or
+`PATH` cannot replace the checkout authority or hide worktree changes.
+
 ## 7. Operator-run evidence workflow (future; NOT executed by this patch)
 
 Each numbered step is a **separate human-approved action** against dedicated remote

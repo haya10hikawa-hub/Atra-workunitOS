@@ -53,7 +53,7 @@ function localFileDigest(repoRoot, relPath) {
  * initialized repository evidence session" from a wholesale re-implementation
  * signed with a foreign key. It is still NOT a third-party attestation.
  */
-export function verifyEvidencePackAtPath(path, { repoRoot = REPO_ROOT, sessionDir = null, runGit = undefined } = {}) {
+export function verifyEvidencePackAtPath(path, { repoRoot = REPO_ROOT, sessionDir = null } = {}) {
   const loaded = loadEvidenceContract(repoRoot)
   if (!loaded.ok) return { ok: false, categories: loaded.blocked }
   const contract = loaded.contract
@@ -193,7 +193,7 @@ export function verifyEvidencePackAtPath(path, { repoRoot = REPO_ROOT, sessionDi
     // digests from the local files. This is what makes second-checkout verification
     // meaningful — a pack whose commit is not the local HEAD, or whose local files
     // drifted, is not evidence for THIS checkout.
-    const git = deriveGitFacts(repoRoot, runGit)
+    const git = deriveGitFacts(repoRoot)
     if (!git.ok) {
       if (git.blocked.includes("repository_dirty")) categories.push("evidence_local_tree_dirty")
       else categories.push("evidence_local_head_unresolved")

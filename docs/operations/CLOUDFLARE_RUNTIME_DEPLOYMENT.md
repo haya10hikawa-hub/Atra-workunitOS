@@ -453,7 +453,10 @@ bound to one session + commit + deploy-config **authority digest**, with proof
 facts recomputed from the repository. The offline verifier recomputes every receipt
 digest, checks every signature, and enforces the chain, one-authority, per-operation
 category allowlists, and cross-operation timestamp monotonicity (ideally run from a
-second clean checkout with `--session`). The evidence layer satisfies no operator
+second clean checkout with `--session`). CLI and imported verification use the same
+`verifyEvidencePackAtPath(path, { repoRoot, sessionDir })` path; actual HEAD and tree
+cleanliness come only from private allowlisted read-only Git, with no production
+runner injection or override. The evidence layer satisfies no operator
 gate and reads no environment; each workflow step remains a separate human-approved
 action. Session signatures prove one local evidence-session origin only — **not** a
 Cloudflare attestation, and no defence against a malicious machine owner. See

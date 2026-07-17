@@ -231,7 +231,10 @@ adds defence in depth. `npm run cf:d1:evidence:verify -- --file <pack> [--sessio
 verifies fully offline: recomputed pack + receipt digests, every signature, chain,
 one authority, per-operation categories, and cross-operation timestamp monotonicity
 — a complete but unsigned fabricated pack fails. The evidence layer satisfies no
-operator gate and reads no environment. Session signatures prove one local
+operator gate and reads no environment. CLI and library verification share
+`verifyEvidencePackAtPath(path, { repoRoot, sessionDir })`; actual HEAD and
+`git status --porcelain` come only from its private allowlisted read-only Git path,
+with no production runner injection or override. Session signatures prove one local
 evidence-session origin only — **not** a Cloudflare attestation, no defence against a
 malicious machine owner. See
 [docs/operations/D1_OPERATIONAL_EVIDENCE.md](docs/operations/D1_OPERATIONAL_EVIDENCE.md);

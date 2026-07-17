@@ -962,7 +962,10 @@ remains as defence in depth. The offline verifier
 (`npm run cf:d1:evidence:verify -- --file <pack> [--session <dir>]`) recomputes
 every receipt digest, checks every signature, enforces the chain, one-authority,
 per-operation categories, and cross-operation timestamp monotonicity — a complete
-but unsigned fabricated pack fails. The evidence layer authorizes nothing: every
+but unsigned fabricated pack fails. CLI and imported verification share
+`verifyEvidencePackAtPath(path, { repoRoot, sessionDir })`; actual HEAD and tree
+cleanliness come only from private allowlisted read-only Git, with no production
+runner injection or override. The evidence layer authorizes nothing: every
 operator gate stays independent and operator-supplied, and it never reads the
 environment. Session signatures prove **one local evidence-session origin only** —
 they are **not** a third-party Cloudflare attestation and do not protect against a
