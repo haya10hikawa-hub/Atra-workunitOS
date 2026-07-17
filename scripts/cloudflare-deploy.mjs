@@ -47,12 +47,17 @@
 import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
 import { spawnSync } from "node:child_process"
-import { rmSync } from "node:fs"
+import { rmSync, readFileSync } from "node:fs"
+import { createPrivateKey, sign as edSign } from "node:crypto"
 import {
   loadValidatedDeployConfigAuthority, withPrivateExecutionConfig,
 } from "./lib/cfDeployConfigAuthority.mjs"
 import { verifyRemoteSchemasWithAuthority } from "./cf-d1-schema-verify-remote.mjs"
-import { beginEvidenceOperation, emitWorkerDeployReceipt } from "./lib/d1EvidenceReceipts.mjs"
+import { sha256Hex } from "./lib/d1OperationalEvidence.mjs"
+import {
+  openCommandReceiptContext, assembleUnsignedReceipt, persistSignedReceipt,
+  SESSION_PRIVATE_KEY_BASENAME,
+} from "./lib/d1EvidenceReceipts.mjs"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(__dirname, "..")
@@ -153,6 +158,49 @@ export function runPipeline(authority, execute, deps = {}) {
   return 0
 }
 
+// ─── Command-local evidence emission (private; not exported) ──────
+//
+// Receipt creation and signing live HERE, after a real gated deploy attempt reached
+// its pipeline outcome. Status is derived from the outcome and bound to the real
+// built Worker artifact bytes; the session key is read and signed inline.
+
+/** Derive status + proof from the REAL deploy outcome (worker artifact required). */
+function deriveWorkerDeployOutcome(repoRoot, deployResult) {
+  if (!deployResult || typeof deployResult.deployed !== "boolean") {
+    return { ok: false, blocked: ["result_shape_invalid"] }
+  }
+  let workerDigest
+  try { workerDigest = sha256Hex(readFileSync(resolve(repoRoot, ".open-next/worker.js"))) } catch { workerDigest = null }
+  if (deployResult.deployed && !workerDigest) return { ok: false, blocked: ["worker_artifact_missing"] }
+  return {
+    ok: true, status: deployResult.deployed ? "success" : "failed",
+    proof: {
+      worker_artifact_sha256: workerDigest ?? sha256Hex("worker_artifact_absent"),
+      deploy_result: deployResult.deployed ? "worker_deployed" : "worker_deploy_failed",
+    },
+    safeCategories: deployResult.deployed ? ["worker_deployed"] : ["worker_deploy_failed"],
+  }
+}
+
+/** Emit the deploy receipt from THIS command's real result path. Private. */
+function emitWorkerDeployReceipt(sessionDir, { repoRoot, authority, startedAt, deployResult }) {
+  const producer = "cf_worker_deploy"
+  const operation = "worker_deploy_completed"
+  const ctx = openCommandReceiptContext(sessionDir, { repoRoot, authority, producer })
+  if (!ctx.ok) return ctx
+  const outcome = deriveWorkerDeployOutcome(repoRoot, deployResult)
+  if (!outcome.ok) return outcome
+  const built = assembleUnsignedReceipt(ctx.session, ctx.existingReceipts, {
+    operation, producer, authoritySha256: ctx.authoritySha256, producerSourceSha256: ctx.producerSourceSha256,
+    startedAt, completedAt: new Date().toISOString(),
+    status: outcome.status, proof: outcome.proof, safeCategories: outcome.safeCategories,
+  })
+  if (!built.ok) return built
+  const pem = readFileSync(resolve(sessionDir, SESSION_PRIVATE_KEY_BASENAME), "utf8")
+  built.receipt.receipt_signature = edSign(null, Buffer.from(built.receipt.receipt_sha256, "utf8"), createPrivateKey(pem)).toString("hex")
+  return persistSignedReceipt(ctx.session, built.receipt)
+}
+
 function main() {
   const execute = process.env.CF_DEPLOY_EXECUTE === "1"
   const generatedConfig = resolve(REPO_ROOT, GENERATED_CONFIG)
@@ -172,7 +220,7 @@ function main() {
   // therefore emits nothing. The boundary opens after the authority is retained.
   const evidenceSessionDir = process.env.CF_D1_EVIDENCE_SESSION_DIR
   let retainedAuthority = null
-  let evidenceBegun = null
+  let evidenceStartedAt = null
   try {
     // Step 2: ONE authority for the whole pipeline — its exact bytes and digest.
     const authority = loadValidatedDeployConfigAuthority({ configPath: generatedConfig, repoRoot: REPO_ROOT, allowPlaceholderIds: false })
@@ -185,7 +233,7 @@ function main() {
       // downstream reads it, and every Wrangler call runs a fresh scoped config from
       // the authority. Editing, replacing, or deleting it now cannot redirect a step.
       retainedAuthority = authority.authority
-      evidenceBegun = evidenceSessionDir && execute ? beginEvidenceOperation() : null
+      evidenceStartedAt = evidenceSessionDir && execute ? new Date().toISOString() : null
       rmSync(generatedConfig, { force: true })
       exitCode = runPipeline(authority.authority, execute)
     }
@@ -199,12 +247,12 @@ function main() {
     rmSync(generatedConfig, { force: true })
   }
 
-  // Command-bound receipt from THIS result path, only when a gated deploy actually
-  // ran. The emitter binds the receipt to the real built Worker artifact bytes and
-  // derives status from the pipeline outcome — no exit-code parameter exists.
-  if (evidenceSessionDir && execute && retainedAuthority !== null && evidenceBegun !== null) {
+  // Command-local receipt from THIS result path, only when a gated deploy actually
+  // ran. Status is bound to the real built Worker artifact bytes and derived from the
+  // pipeline outcome — no exit-code parameter exists.
+  if (evidenceSessionDir && execute && retainedAuthority !== null && evidenceStartedAt !== null) {
     const receipt = emitWorkerDeployReceipt(evidenceSessionDir, {
-      repoRoot: REPO_ROOT, authority: retainedAuthority, begun: evidenceBegun,
+      repoRoot: REPO_ROOT, authority: retainedAuthority, startedAt: evidenceStartedAt,
       deployResult: { deployed: exitCode === 0 },
     })
     if (receipt.ok) console.log("evidence: receipt recorded (worker_deploy_completed)")

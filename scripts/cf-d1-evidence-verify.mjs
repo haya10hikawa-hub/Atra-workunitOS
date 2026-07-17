@@ -8,8 +8,18 @@
  * canonical digest, operation ordering, one authority digest across every
  * operation, and completeness of the required successful sequence.
  *
- * ENTIRELY OFFLINE: no network, no database, no Wrangler, no child process. It can
- * (and should) be run from a second clean checkout when reviewing evidence.
+ * LOCAL-CHECKOUT BINDING (this repair)
+ * ------------------------------------
+ * A signed pack proves only that receipts came through one evidence session; it does
+ * not prove which repository they belong to. The verifier therefore also binds the
+ * pack to the LOCAL clean checkout at the recorded commit: it derives local HEAD and
+ * worktree cleanliness via read-only `git`, requires `local HEAD == commit_sha` and a
+ * clean tree, and recomputes the migration-manifest / migration-plan / schema-contract
+ * digests and every producer-source digest from the local files. Drift on any of them
+ * fails closed. Run it from a SECOND clean checkout at the evidence commit.
+ *
+ * NO NETWORK OR PROVIDER ACCESS: the only process spawned is read-only `git`
+ * (rev-parse/status), via the shared library. No database, no Wrangler, no fetch.
  *
  * Output is CATEGORY-ONLY. This command never prints evidence contents, values,
  * paths from inside the record, IDs, or names — a malformed pack must not become a
@@ -24,8 +34,14 @@ import {
   validateOperationOrdering, computeEvidenceDigest, computeReceiptDigest,
   verifyReceiptSignature, canonicalSerialize, sha256Hex,
 } from "./lib/d1OperationalEvidence.mjs"
+import { deriveGitFacts, deriveMigrationPlanDigest } from "./lib/d1EvidenceReceipts.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+
+/** SHA-256 of a local repository file's exact bytes; null when unreadable. */
+function localFileDigest(repoRoot, relPath) {
+  try { return sha256Hex(readFileSync(resolve(repoRoot, relPath))) } catch { return null }
+}
 
 /**
  * Verify one evidence pack. Returns `{ ok, categories }` — safe categories only.
@@ -37,7 +53,7 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
  * initialized repository evidence session" from a wholesale re-implementation
  * signed with a foreign key. It is still NOT a third-party attestation.
  */
-export function verifyEvidencePackAtPath(path, { repoRoot = REPO_ROOT, sessionDir = null } = {}) {
+export function verifyEvidencePackAtPath(path, { repoRoot = REPO_ROOT, sessionDir = null, runGit = undefined } = {}) {
   const loaded = loadEvidenceContract(repoRoot)
   if (!loaded.ok) return { ok: false, categories: loaded.blocked }
   const contract = loaded.contract
@@ -169,6 +185,30 @@ export function verifyEvidencePackAtPath(path, { repoRoot = REPO_ROOT, sessionDi
         categories.push("evidence_session_mismatch")
       }
     }
+
+    // ── Local-checkout binding ──
+    // Signatures do not say WHICH repository the pack belongs to. Bind it to the
+    // local clean checkout at the recorded commit: derive HEAD + cleanliness from
+    // read-only git and require they match, and recompute the contract + producer
+    // digests from the local files. This is what makes second-checkout verification
+    // meaningful — a pack whose commit is not the local HEAD, or whose local files
+    // drifted, is not evidence for THIS checkout.
+    const git = deriveGitFacts(repoRoot, runGit)
+    if (!git.ok) {
+      if (git.blocked.includes("repository_dirty")) categories.push("evidence_local_tree_dirty")
+      else categories.push("evidence_local_head_unresolved")
+    } else if (git.commitSha !== record.repository.commit_sha) {
+      categories.push("evidence_local_head_mismatch")
+    }
+
+    // Each contract digest is recomputed from the LOCAL files and compared
+    // independently, so drift in any one of them is caught on its own.
+    const localManifest = localFileDigest(repoRoot, "migrations/manifest.json")
+    if (localManifest === null || localManifest !== record.contracts.migration_manifest_sha256) categories.push("evidence_local_contract_mismatch")
+    const localSchema = localFileDigest(repoRoot, "migrations/schema-contract.json")
+    if (localSchema === null || localSchema !== record.contracts.schema_contract_sha256) categories.push("evidence_local_contract_mismatch")
+    const localPlan = deriveMigrationPlanDigest(repoRoot)
+    if (localPlan === null || localPlan !== record.contracts.migration_plan_digest) categories.push("evidence_local_contract_mismatch")
   }
 
   const unique = [...new Set(categories)]

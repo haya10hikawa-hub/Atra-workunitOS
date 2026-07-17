@@ -20,6 +20,8 @@
 
 import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
+import { readFileSync } from "node:fs"
+import { createPrivateKey, sign as edSign } from "node:crypto"
 import {
   loadConfigFile,
   validateDeployConfig,
@@ -27,7 +29,11 @@ import {
   SYNTHETIC_D1_IDS,
 } from "./lib/cfDeployConfig.mjs"
 import { loadValidatedDeployConfigAuthority } from "./lib/cfDeployConfigAuthority.mjs"
-import { beginEvidenceOperation, emitWorkerPreflightReceipt } from "./lib/d1EvidenceReceipts.mjs"
+import { sha256Hex } from "./lib/d1OperationalEvidence.mjs"
+import {
+  openCommandReceiptContext, assembleUnsignedReceipt, persistSignedReceipt,
+  SESSION_PRIVATE_KEY_BASENAME,
+} from "./lib/d1EvidenceReceipts.mjs"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(__dirname, "..")
@@ -59,6 +65,54 @@ function fail(category, detail) {
   console.error(`preflight: FAIL ${category}${detail ? ` (${detail})` : ""}`)
 }
 
+// ─── Command-local evidence emission (private; not exported) ──────
+//
+// Receipt creation and signing live HERE, after the preflight failures are known. A
+// successful receipt requires the validated deploy-config authority AND a real built
+// Worker artifact; the session key is read and signed inline.
+
+/** Derive status + proof from the REAL preflight result (worker artifact recomputed). */
+function deriveWorkerPreflightOutcome(repoRoot, preflightResult) {
+  const result = preflightResult
+  if (!result || typeof result.ok !== "boolean" || !Array.isArray(result.failures) || typeof result.checkedArtifacts !== "boolean") {
+    return { ok: false, blocked: ["result_shape_invalid"] }
+  }
+  const succeeded = result.ok === true && result.failures.length === 0
+  let workerDigest
+  try { workerDigest = sha256Hex(readFileSync(resolve(repoRoot, ".open-next/worker.js"))) } catch { workerDigest = null }
+  if (succeeded && (!result.checkedArtifacts || !workerDigest)) return { ok: false, blocked: ["worker_artifact_missing"] }
+  let preflightContract
+  try { preflightContract = sha256Hex(readFileSync(resolve(repoRoot, "wrangler.json"))) } catch { preflightContract = null }
+  if (!preflightContract) return { ok: false, blocked: ["proof_underivable"] }
+  return {
+    ok: true, status: succeeded ? "success" : "failed",
+    proof: {
+      worker_artifact_sha256: workerDigest ?? sha256Hex("worker_artifact_absent"),
+      preflight_contract_sha256: preflightContract,
+    },
+    safeCategories: succeeded ? ["artifacts_verified", "preflight_ok"] : ["preflight_failed"],
+  }
+}
+
+/** Emit the preflight receipt from THIS command's real result path. Private. */
+function emitWorkerPreflightReceipt(sessionDir, { repoRoot, authority, startedAt, preflightResult }) {
+  const producer = "cf_worker_preflight"
+  const operation = "worker_preflight_completed"
+  const ctx = openCommandReceiptContext(sessionDir, { repoRoot, authority, producer })
+  if (!ctx.ok) return ctx
+  const outcome = deriveWorkerPreflightOutcome(repoRoot, preflightResult)
+  if (!outcome.ok) return outcome
+  const built = assembleUnsignedReceipt(ctx.session, ctx.existingReceipts, {
+    operation, producer, authoritySha256: ctx.authoritySha256, producerSourceSha256: ctx.producerSourceSha256,
+    startedAt, completedAt: new Date().toISOString(),
+    status: outcome.status, proof: outcome.proof, safeCategories: outcome.safeCategories,
+  })
+  if (!built.ok) return built
+  const pem = readFileSync(resolve(sessionDir, SESSION_PRIVATE_KEY_BASENAME), "utf8")
+  built.receipt.receipt_signature = edSign(null, Buffer.from(built.receipt.receipt_sha256, "utf8"), createPrivateKey(pem)).toString("hex")
+  return persistSignedReceipt(ctx.session, built.receipt)
+}
+
 function main() {
   const parsed = parseArgs(process.argv.slice(2))
   if (!parsed.ok) {
@@ -71,7 +125,7 @@ function main() {
   // Evidence session (optional): the boundary opens before the checks run; the
   // receipt is emitted after the result is known, from this real result path.
   const evidenceSessionDir = process.env.CF_D1_EVIDENCE_SESSION_DIR
-  const evidenceBegun = evidenceSessionDir ? beginEvidenceOperation() : null
+  const evidenceStartedAt = evidenceSessionDir ? new Date().toISOString() : null
 
   if (args.config) {
     // ── Validate a resolved deploy config ──
@@ -115,15 +169,15 @@ function main() {
     for (const f of synthRes.failures) failures.push(`synthetic:${f}`)
   }
 
-  // Command-bound receipt from THIS result path. A successful receipt requires
-  // the validated deploy-config authority (--config) AND --check-artifacts with a
-  // real built Worker artifact — the emitter derives everything else itself.
+  // Command-local receipt from THIS result path. A successful receipt requires the
+  // validated deploy-config authority (--config) AND --check-artifacts with a real
+  // built Worker artifact — status and proof are derived privately.
   if (evidenceSessionDir) {
     const authority = args.config
       ? loadValidatedDeployConfigAuthority({ configPath: resolve(process.cwd(), args.config), repoRoot: REPO_ROOT, allowPlaceholderIds: false })
       : { ok: false }
     const receipt = emitWorkerPreflightReceipt(evidenceSessionDir, {
-      repoRoot: REPO_ROOT, authority: authority.ok ? authority.authority : null, begun: evidenceBegun,
+      repoRoot: REPO_ROOT, authority: authority.ok ? authority.authority : null, startedAt: evidenceStartedAt,
       preflightResult: { ok: failures.length === 0, failures, checkedArtifacts: args.checkArtifacts },
     })
     if (receipt.ok) console.log("evidence: receipt recorded (worker_preflight_completed)")

@@ -138,8 +138,6 @@ export declare const EVIDENCE_FORMATS: Readonly<Record<string, RegExp>>
 export declare function sha256Hex(value: string | Uint8Array): string
 /** Receipt digest: canonical bytes of the receipt minus its digest + signature. */
 export declare function computeReceiptDigest(receipt: unknown): string
-/** Sign a receipt digest with the session private key (PKCS8 PEM) → 128-hex. */
-export declare function signReceiptDigest(privateKeyPem: string, receiptSha256: string): string
 /** Verify a receipt signature against the session public key (64-hex raw Ed25519). */
 export declare function verifyReceiptSignature(publicKeyHex: string, receiptSha256: string, signatureHex: string): boolean
 export declare function deepFreezeEvidence<T>(value: T): Readonly<T>

@@ -1,17 +1,10 @@
 /**
- * Type declarations for cf:d1:evidence:init (P0-OPS-016 repair, offline-only).
- * The implementation is `cf-d1-evidence-init.mjs`.
+ * Type declarations for cf:d1:evidence:init (P0-OPS-016, offline-only). The
+ * implementation is `cf-d1-evidence-init.mjs`.
+ *
+ * The CLI has no exported API: it derives repository facts and initializes a session
+ * entirely through the library (`initializeEvidenceSession`), which accepts no
+ * commit or dirty-tree claim. Git-facts derivation lives in the library, not here.
  */
 
-export type GitFactsResult =
-  | { ok: true; commitSha: string; dirtyTree: false }
-  | { ok: false; blocked: string[] }
-
-/**
- * Derive HEAD + worktree cleanliness via read-only `git` — never accepted from a
- * caller. Fails closed when HEAD is unresolvable or the tree is dirty.
- */
-export declare function deriveGitFacts(runGit?: (args: string[]) => string | null): GitFactsResult
-
-/** The pinned Wrangler version from the installed package — derived, not claimed. */
-export declare function deriveWranglerVersion(repoRoot?: string): string | null
+export {}

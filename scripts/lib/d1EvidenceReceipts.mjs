@@ -1,44 +1,58 @@
 /**
- * D1 Evidence Receipts — command-bound operation receipts for one initialized
- * evidence session (P0-OPS-016 repair, Issue #155).
+ * D1 Evidence Sessions + safe receipt helpers (P0-OPS-016 second repair, Issue #155).
  *
- * WHY RECEIPTS
- * ------------
- * Pack-level hashing alone is NOT execution provenance: at the previous head an
- * ordinary caller could fabricate a complete `evidence_valid` pack by feeding
- * invented exit codes and strings into a generic recorder API. The repaired
- * invariant:
+ * WHAT CHANGED IN THIS REPAIR
+ * ---------------------------
+ * The previous head exported seven `emit*Receipt(...)` functions plus a generic
+ * `produceReceipt(...)`/`signReceiptDigest(...)` core and an initializer that
+ * accepted caller-supplied `derived.commitSha`/`derived.dirtyTree`. That surface
+ * was FORGEABLE: an ordinary imported caller could initialize a session, hand each
+ * emitter a correctly-shaped fabricated success result (`{ completed:true,
+ * appliedPlan }`, `{ deployed:true }`, …), let the library read the session key and
+ * sign, and assemble a pack that passed every check — without running any command.
  *
- *   A successful operational receipt can only be emitted from the actual
- *   repository command path after that command reached its existing execution
- *   result boundary.
+ * The repaired boundary:
  *
- * Each existing operator command calls its ONE matching emitter from inside its
- * real result path. There is deliberately NO emitter parameter for a status or an
- * exit code: every emitter derives status from the command's real result object,
- * cross-checks command-specific proof facts (many recomputed from the repository
- * itself), captures timestamps at the execution boundary, chains the receipt to
- * its predecessor, and signs it with the session's Ed25519 key.
+ *   A caller that did not execute the actual repository command path must not have
+ *   a production API that can create or sign a successful receipt from a
+ *   caller-supplied result object.
+ *
+ * So there is NO result-to-signed-receipt function here. Receipt CREATION and
+ * SIGNING are command-local: each operator command derives its own status and proof
+ * from its real result, reads the session private key itself, and signs inline.
+ * This module exports only NON-authorizing helpers a command may compose:
+ *   - `initializeEvidenceSession` — derives repository facts internally (git HEAD,
+ *     clean tree, versions, contract digests); accepts NO commit/dirty-tree claim;
+ *   - `loadEvidenceSessionManifest` — loads + validates a session manifest WITHOUT
+ *     ever returning the private key;
+ *   - `deriveAuthorityEvidence`, `bindSessionAuthority` — authority derivation +
+ *     first-writer-wins binding (no signing);
+ *   - `assembleUnsignedReceipt` — pure canonical assembly of an UNSIGNED receipt
+ *     (its output is useless until a holder of the session key signs it);
+ *   - `persistSignedReceipt` — VERIFIES an already-signed receipt (digest + session
+ *     signature + chain + categories + scan) and writes it 0600/exclusive; it
+ *     refuses anything not already validly signed by the session key, so it is not
+ *     a signer;
+ *   - `readSessionReceipts`, `verifyReceiptRecord`, `assembleEvidencePackFromSession`
+ *     — verification + pack assembly from already-verified receipts.
  *
  * TRUST MODEL (state it honestly)
  * -------------------------------
- * Session signatures prove that receipts came through ONE initialized repository
- * evidence session. They are NOT a third-party Cloudflare attestation and do not
- * protect against a malicious machine owner who modifies repository source or
- * reads the session key. They DO stop an ordinary caller from manufacturing a
- * valid success pack out of arbitrary exit codes and strings.
- *
- * This library never authorizes anything: it never spawns a process, never runs
- * SQL, never touches the network, never reads process.env, and never reads or
- * sets an operator execution gate.
+ * The session key protects receipt integrity after a command writes the receipt. It
+ * does NOT cryptographically attest which JavaScript call site invoked the signing
+ * code, and does NOT protect against a machine owner who reads the local private key
+ * or modifies source. Ed25519 alone does not prove command execution. Actual remote
+ * execution proof still requires the documented Cloudflare-side cross-check and human
+ * review (see docs/operations/D1_OPERATIONAL_EVIDENCE.md).
  */
 
 import { generateKeyPairSync, randomBytes } from "node:crypto"
+import { spawnSync } from "node:child_process"
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, lstatSync } from "node:fs"
 import { resolve as resolvePath } from "node:path"
 import {
   loadEvidenceContract, scanSensitiveEvidence, canonicalSerialize, sha256Hex,
-  isStrictUtcIso, deepFreezeEvidence, computeReceiptDigest, signReceiptDigest,
+  isStrictUtcIso, deepFreezeEvidence, computeReceiptDigest,
   verifyReceiptSignature, createEvidenceSession, recordEvidenceOperation,
   finalizeEvidenceSession, writeEvidencePack, EVIDENCE_DIRNAME, EVIDENCE_FORMATS,
 } from "./d1OperationalEvidence.mjs"
@@ -54,7 +68,46 @@ const SESSION_MANIFEST_FIELDS = ["session_version", "session_id", "environment_c
   "commit_sha", "node_version", "wrangler_version",
   "migration_manifest_sha256", "migration_plan_digest", "schema_contract_sha256", "expected_schema_version"]
 
-// ─── Derived repository facts (offline, no spawn) ─────────────────
+// ─── Read-only repository derivation (git + versions + digests) ───
+//
+// Every repository fact the session records is DERIVED here — never accepted as a
+// caller claim. The ONLY process spawned is read-only `git` (`rev-parse`/`status`),
+// allowlisted below; there is no network, D1, Wrangler, or write path.
+
+/** Run ONE allowlisted read-only git command in `repoRoot`; null on failure. */
+function readOnlyGit(repoRoot, args) {
+  const allowed = new Set(["rev-parse", "status"])
+  if (!allowed.has(args[0])) throw new Error("git_command_not_allowlisted")
+  const result = spawnSync("git", args, { cwd: repoRoot, encoding: "utf8" })
+  if (result.status !== 0) return null
+  return result.stdout
+}
+
+/**
+ * Derive the HEAD commit and worktree cleanliness from git. A dirty tree or an
+ * unresolvable HEAD fails closed. Exported so the CLI and unit tests can exercise
+ * the derivation with an injected read-only runner; the PRODUCTION initializer
+ * always uses the real allowlisted git and exposes no injection point.
+ */
+export function deriveGitFacts(repoRoot, runGit = readOnlyGit) {
+  const head = runGit(repoRoot, ["rev-parse", "HEAD"])
+  const commitSha = head ? head.trim() : null
+  if (!commitSha || !RE.commitSha.test(commitSha)) return { ok: false, blocked: ["head_unresolvable"] }
+  const status = runGit(repoRoot, ["status", "--porcelain"])
+  if (status === null) return { ok: false, blocked: ["worktree_state_unresolvable"] }
+  if (status.trim().length > 0) return { ok: false, blocked: ["repository_dirty"] }
+  return { ok: true, commitSha, dirtyTree: false }
+}
+
+/** The pinned Wrangler version, derived from the installed package — not claimed. */
+export function deriveWranglerVersion(repoRoot) {
+  try {
+    const pkg = JSON.parse(readFileSync(resolvePath(repoRoot, "node_modules/wrangler/package.json"), "utf8"))
+    return typeof pkg.version === "string" ? pkg.version : null
+  } catch {
+    return null
+  }
+}
 
 /** SHA-256 of a repository file's exact bytes; null when unreadable. */
 function fileDigest(repoRoot, relPath) {
@@ -87,32 +140,39 @@ export function deriveRepositoryEvidenceFacts(repoRoot) {
   return { ok: true, facts: { manifestSha256, schemaContractSha256, planDigest, expectedSchemaVersion } }
 }
 
-// ─── Session initialization (offline) ─────────────────────────────
+// ─── Session initialization (offline; derives everything) ─────────
 
 /**
- * Create one evidence session under the git-ignored evidence directory. The
- * caller (the init CLI) supplies the DERIVED repository facts — a dirty tree or
- * an unresolvable HEAD must already have failed closed there; this function
- * re-validates every value and refuses `dirtyTree !== false`.
+ * Create one evidence session under the git-ignored evidence directory.
  *
- * Produces: `<repo>/.d1-evidence/<session-id>/session.json` (0600, exclusive) and
- * the session's Ed25519 private key PEM (0600, exclusive). The private key never
- * leaves this directory and is never logged or embedded in any record.
+ * The initializer accepts ONLY `{ repoRoot, environmentClass }`. It DERIVES — and
+ * never accepts as claims — the HEAD commit, worktree cleanliness, Node version,
+ * Wrangler version, and the migration-manifest/migration-plan/schema-contract
+ * digests. A dirty tree, an unresolvable HEAD, or an underivable digest fails
+ * closed. There is deliberately no `derived` parameter and no test-injection point:
+ * tests drive it with a temporary REAL git repository.
+ *
+ * Produces `<repo>/.d1-evidence/<session-id>/session.json` (0600, exclusive) and the
+ * session's Ed25519 private key PEM (0600, exclusive). The private key never leaves
+ * this directory and is never logged or embedded in any record.
  */
-export function initializeEvidenceSessionAt({ repoRoot, environmentClass, derived } = {}) {
+export function initializeEvidenceSession({ repoRoot, environmentClass } = {}) {
   if (!repoRoot) return { ok: false, blocked: ["repo_root_missing"] }
   const loaded = loadEvidenceContract(repoRoot)
   if (!loaded.ok) return { ok: false, blocked: loaded.blocked }
   const contract = loaded.contract
   const blocked = []
-  const d = derived ?? {}
   if (!contract.environment_classes.includes(environmentClass)) blocked.push("environment_class_invalid")
-  if (typeof d.commitSha !== "string" || !RE.commitSha.test(d.commitSha)) blocked.push("commit_sha_invalid")
-  if (d.dirtyTree !== false) blocked.push("repository_dirty")
-  if (typeof d.nodeVersion !== "string" || !RE.nodeVersion.test(d.nodeVersion)) blocked.push("node_version_invalid")
-  if (typeof d.wranglerVersion !== "string" || !RE.wranglerVersion.test(d.wranglerVersion)) blocked.push("wrangler_version_invalid")
 
-  // Contract digests are DERIVED from the repository right here — not accepted.
+  // Repository identity is DERIVED here, from git and the installed toolchain.
+  const git = deriveGitFacts(repoRoot)
+  if (!git.ok) blocked.push(...git.blocked)
+  const wranglerVersion = deriveWranglerVersion(repoRoot)
+  if (typeof wranglerVersion !== "string" || !RE.wranglerVersion.test(wranglerVersion)) blocked.push("wrangler_version_underivable")
+  const nodeVersion = process.version
+  if (typeof nodeVersion !== "string" || !RE.nodeVersion.test(nodeVersion)) blocked.push("node_version_underivable")
+
+  // Contract digests are DERIVED from the repository files — not accepted.
   const facts = deriveRepositoryEvidenceFacts(repoRoot)
   if (!facts.ok) blocked.push(...facts.blocked)
 
@@ -133,9 +193,9 @@ export function initializeEvidenceSessionAt({ repoRoot, environmentClass, derive
     environment_class: environmentClass,
     created_at: new Date().toISOString(),
     public_key: publicKeyHex,
-    commit_sha: d.commitSha,
-    node_version: d.nodeVersion,
-    wrangler_version: d.wranglerVersion,
+    commit_sha: git.commitSha,
+    node_version: nodeVersion,
+    wrangler_version: wranglerVersion,
     migration_manifest_sha256: facts.facts.manifestSha256,
     migration_plan_digest: facts.facts.planDigest,
     schema_contract_sha256: facts.facts.schemaContractSha256,
@@ -153,8 +213,12 @@ export function initializeEvidenceSessionAt({ repoRoot, environmentClass, derive
   return { ok: true, sessionDir, sessionId, publicKey: publicKeyHex }
 }
 
-/** Load + strictly validate a session directory (manifest and private key). */
-export function loadEvidenceSession(sessionDir, { repoRoot } = {}) {
+/**
+ * Load + strictly validate a session's MANIFEST (never the private key). Commands
+ * that need to sign read the private key themselves, inline — this shared helper
+ * deliberately never hands the signing capability to a caller.
+ */
+export function loadEvidenceSessionManifest(sessionDir, { repoRoot } = {}) {
   if (!sessionDir || !repoRoot) return { ok: false, blocked: ["session_unreadable"] }
   const loaded = loadEvidenceContract(repoRoot)
   if (!loaded.ok) return { ok: false, blocked: loaded.blocked }
@@ -178,21 +242,16 @@ export function loadEvidenceSession(sessionDir, { repoRoot } = {}) {
     && RE.sha256.test(manifest.schema_contract_sha256 ?? "")
     && RE.schemaVersion.test(manifest.expected_schema_version ?? "")
   if (!shapeOk) return { ok: false, blocked: ["session_manifest_invalid"] }
-  let privateKeyPem
-  try { privateKeyPem = readFileSync(resolvePath(sessionDir, SESSION_PRIVATE_KEY_BASENAME), "utf8") } catch {
-    return { ok: false, blocked: ["session_key_unreadable"] }
-  }
-  return { ok: true, session: deepFreezeEvidence({ sessionDir, manifest, contract: loaded.contract }), privateKeyPem }
+  return { ok: true, session: deepFreezeEvidence({ sessionDir, manifest, contract: loaded.contract }) }
 }
 
 // ─── Authority derivation (never recorded, never trusted as a claim) ──
 
 /**
- * Derive the authority digest AND the Control/Tenant physical-separation fact
- * from a REAL retained deploy-config authority (`{ bytes, sha256, snapshot }`
- * from the shared loader). The digest is recomputed from the exact bytes, the
- * bindings are re-derived by PARSING those bytes (the supplied snapshot is not
- * trusted), and only the digest + a boolean ever leave this function — no
+ * Derive the authority digest AND the Control/Tenant physical-separation fact from a
+ * REAL retained deploy-config authority (`{ bytes, sha256, snapshot }`). The digest
+ * is recomputed from the exact bytes, the bindings are re-derived by PARSING those
+ * bytes (the snapshot is not trusted), and only the digest + a boolean leave — no
  * database ID or name is returned or recorded.
  */
 export function deriveAuthorityEvidence(authority) {
@@ -215,14 +274,34 @@ export function deriveAuthorityEvidence(authority) {
   return { ok: true, authoritySha256: authority.sha256, physicallyDistinct: true }
 }
 
-// ─── Receipt storage ──────────────────────────────────────────────
+/**
+ * Bind the session to ONE authority digest at the first authority-bearing command.
+ * Exclusive creation makes it first-writer-wins and immutable; a later different
+ * digest is refused. This never signs and never reads the private key.
+ */
+export function bindSessionAuthority(sessionDir, authoritySha256) {
+  if (typeof authoritySha256 !== "string" || !RE.sha256.test(authoritySha256)) return { ok: false, blocked: ["authority_invalid"] }
+  const bindingPath = resolvePath(sessionDir, SESSION_AUTHORITY_BASENAME)
+  let bound
+  try { bound = JSON.parse(readFileSync(bindingPath, "utf8")) } catch { bound = null }
+  if (bound === null) {
+    try {
+      writeFileSync(bindingPath, `${JSON.stringify({ authority_sha256: authoritySha256 }, null, 2)}\n`, { mode: 0o600, flag: "wx" })
+    } catch { return { ok: false, blocked: ["session_authority_unwritable"] } }
+    return { ok: true, authoritySha256 }
+  }
+  if (bound.authority_sha256 !== authoritySha256) return { ok: false, blocked: ["authority_mismatch"] }
+  return { ok: true, authoritySha256 }
+}
+
+// ─── Receipt storage + verification ───────────────────────────────
 
 const receiptBasename = (sequence) => `receipt-${String(sequence).padStart(4, "0")}.json`
 
 /**
  * Read and FULLY verify the session's existing receipts (digests recomputed,
  * signatures verified against the session public key, chain + session + commit +
- * producer + proof + category allowlists checked). Returns them in order.
+ * producer + categories + temporal order checked). Returns them in order.
  */
 export function readSessionReceipts(session) {
   const { sessionDir, manifest, contract } = session
@@ -283,55 +362,46 @@ export function verifyReceiptRecord(receipt, { contract, expectedSequence, expec
   return { ok: blocked.length === 0, blocked: [...new Set(blocked)] }
 }
 
-// ─── The command-bound producer core ──────────────────────────────
-
-/** Capture the execution-boundary start instant (called by commands, pre-operation). */
-export function beginEvidenceOperation(clock = () => new Date()) {
-  return { startedAt: clock().toISOString() }
-}
+// ─── Command-composed helpers: assemble (unsigned) + persist (verify) ──
+//
+// These two split the old `produceReceipt` so that NEITHER is a result-to-signed-
+// receipt service:
+//   - `assembleUnsignedReceipt` runs every append rule and produces an UNSIGNED
+//     receipt (canonical assembly only). Its output cannot be used as evidence
+//     until a holder of the session private key signs it — this module never does.
+//   - `persistSignedReceipt` VERIFIES an already-signed receipt (recomputed digest,
+//     signature against the session public key, chain, categories, sensitive scan)
+//     and writes it exclusively. It refuses anything not already validly signed by
+//     the session key, so it cannot mint evidence either.
+// Deriving status/proof, reading the key, and signing are all COMMAND-LOCAL.
 
 /**
- * Produce, sign, and persist ONE receipt. INTERNAL core shared by the seven
- * command-bound emitters below — it takes `derive`, a per-command closure that
- * turns the command's REAL result objects into `{ status, proof, safeCategories }`.
- * There is no status or exit-code parameter anywhere on this path.
+ * Assemble an UNSIGNED receipt for `operation`, after enforcing every append rule
+ * (authority binding present, no duplicate operation, no success after failure,
+ * hard prerequisites, canonical success order, and temporal monotonicity relative
+ * to the session's creation and the previous receipt). Returns `{ ok, receipt }`
+ * with `receipt_sha256` computed and `receipt_signature: ""`, or `{ ok:false,
+ * blocked }`. It signs nothing.
  */
-function produceReceipt(sessionDir, { repoRoot, producer, operation, authority, begun, clock = () => new Date(), derive }) {
-  const loadedSession = loadEvidenceSession(sessionDir, { repoRoot })
-  if (!loadedSession.ok) return { ok: false, blocked: loadedSession.blocked }
-  const { session, privateKeyPem } = loadedSession
+export function assembleUnsignedReceipt(session, existingReceipts, input = {}) {
   const { manifest, contract } = session
+  const {
+    operation, producer, authoritySha256, producerSourceSha256,
+    startedAt, completedAt, status, proof, safeCategories,
+  } = input
+  const receipts = Array.isArray(existingReceipts) ? existingReceipts : null
+  if (receipts === null) return { ok: false, blocked: ["session_unreadable"] }
 
+  if (!contract.operations.includes(operation)) return { ok: false, blocked: ["operation_unknown"] }
   if (contract.producers_by_operation[operation] !== producer) return { ok: false, blocked: ["producer_mismatch"] }
-  if (!begun || !isStrictUtcIso(begun.startedAt)) return { ok: false, blocked: ["execution_boundary_missing"] }
-
-  // The authority digest AND the physical-separation fact are DERIVED from the
-  // real retained authority — never accepted as a bare boolean or digest string.
-  const derivedAuthority = deriveAuthorityEvidence(authority)
-  if (!derivedAuthority.ok) return { ok: false, blocked: derivedAuthority.blocked }
-
-  // Bind the session to ONE authority at the first authority-bearing command;
-  // exclusive creation makes the binding first-writer-wins and immutable.
-  const bindingPath = resolvePath(sessionDir, SESSION_AUTHORITY_BASENAME)
-  let bound
-  try { bound = JSON.parse(readFileSync(bindingPath, "utf8")) } catch { bound = null }
-  if (bound === null) {
-    try {
-      writeFileSync(bindingPath, `${JSON.stringify({ authority_sha256: derivedAuthority.authoritySha256 }, null, 2)}\n`, { mode: 0o600, flag: "wx" })
-    } catch { return { ok: false, blocked: ["session_authority_unwritable"] } }
-  } else if (bound.authority_sha256 !== derivedAuthority.authoritySha256) {
-    return { ok: false, blocked: ["authority_mismatch"] }
-  }
-
-  const existing = readSessionReceipts(session)
-  if (!existing.ok) return { ok: false, blocked: existing.blocked }
-  const receipts = existing.receipts
-  if (receipts.some((prior) => prior.operation === operation)) return { ok: false, blocked: ["operation_duplicate"] }
-
-  const outcome = derive(derivedAuthority)
-  if (!outcome.ok) return { ok: false, blocked: outcome.blocked }
-  const { status, proof, safeCategories } = outcome
+  if (typeof authoritySha256 !== "string" || !RE.sha256.test(authoritySha256)) return { ok: false, blocked: ["authority_invalid"] }
+  if (typeof producerSourceSha256 !== "string" || !RE.sha256.test(producerSourceSha256)) return { ok: false, blocked: ["producer_source_unreadable"] }
+  if (!isStrictUtcIso(startedAt) || !isStrictUtcIso(completedAt)) return { ok: false, blocked: ["execution_boundary_missing"] }
   if (!contract.statuses.includes(status)) return { ok: false, blocked: ["status_underivable"] }
+  if (!proof || typeof proof !== "object" || Array.isArray(proof)) return { ok: false, blocked: ["proof_invalid"] }
+  if (!Array.isArray(safeCategories)) return { ok: false, blocked: ["safe_categories_invalid"] }
+
+  if (receipts.some((prior) => prior.operation === operation)) return { ok: false, blocked: ["operation_duplicate"] }
   if (receipts.some((prior) => prior.status === "failed") && status === "success") {
     return { ok: false, blocked: ["operation_after_failure"] }
   }
@@ -346,31 +416,21 @@ function produceReceipt(sessionDir, { repoRoot, producer, operation, authority, 
     if (canonical.indexOf(operation) <= lastSuccessIndex) return { ok: false, blocked: ["operation_order_invalid"] }
   }
 
-  // Timestamps come from the execution boundary: `begun` was captured immediately
-  // before the operation began; completion is stamped HERE, when the result is
-  // known. Historical caller-supplied instants have no path in: a receipt can
-  // never start before its session was initialized or before its predecessor
-  // completed, and can never complete before it started.
+  // Timestamps come from the execution boundary: a receipt can never start before
+  // its session was initialized or before its predecessor completed, nor complete
+  // before it started.
   const previous = receipts[receipts.length - 1] ?? null
-  if (begun.startedAt < manifest.created_at) return { ok: false, blocked: ["temporal_order_invalid"] }
-  if (previous && begun.startedAt < previous.completed_at) return { ok: false, blocked: ["temporal_order_invalid"] }
-  const completedAt = clock().toISOString()
-  if (completedAt < begun.startedAt) return { ok: false, blocked: ["temporal_order_invalid"] }
-
-  // The producer source digest binds the receipt to the emitting command's bytes.
-  const sourceRel = contract.producer_sources[producer]
-  let producerSourceSha256
-  try { producerSourceSha256 = sha256Hex(readFileSync(resolvePath(repoRoot, sourceRel))) } catch {
-    return { ok: false, blocked: ["producer_source_unreadable"] }
-  }
+  if (startedAt < manifest.created_at) return { ok: false, blocked: ["temporal_order_invalid"] }
+  if (previous && startedAt < previous.completed_at) return { ok: false, blocked: ["temporal_order_invalid"] }
+  if (completedAt < startedAt) return { ok: false, blocked: ["temporal_order_invalid"] }
 
   const categories = [...new Set(safeCategories)].sort()
   const inputDigest = sha256Hex(canonicalSerialize({
-    authority_sha256: derivedAuthority.authoritySha256, operation, producer,
+    authority_sha256: authoritySha256, operation, producer,
     repository_commit_sha: manifest.commit_sha, session_id: manifest.session_id,
   }))
   const resultDigest = sha256Hex(canonicalSerialize({
-    authority_sha256: derivedAuthority.authoritySha256, operation, producer,
+    authority_sha256: authoritySha256, operation, producer,
     producer_source_sha256: producerSourceSha256, proof,
     repository_commit_sha: manifest.commit_sha, safe_categories: categories,
     session_id: manifest.session_id, status,
@@ -379,8 +439,8 @@ function produceReceipt(sessionDir, { repoRoot, producer, operation, authority, 
   const receipt = {
     sequence: receipts.length + 1,
     operation, status,
-    started_at: begun.startedAt, completed_at: completedAt,
-    authority_sha256: derivedAuthority.authoritySha256,
+    started_at: startedAt, completed_at: completedAt,
+    authority_sha256: authoritySha256,
     session_id: manifest.session_id,
     repository_commit_sha: manifest.commit_sha,
     producer, producer_source_sha256: producerSourceSha256,
@@ -390,13 +450,32 @@ function produceReceipt(sessionDir, { repoRoot, producer, operation, authority, 
     receipt_sha256: "", receipt_signature: "",
   }
   receipt.receipt_sha256 = computeReceiptDigest(receipt)
-  receipt.receipt_signature = signReceiptDigest(privateKeyPem, receipt.receipt_sha256)
+  return { ok: true, receipt }
+}
 
+/**
+ * VERIFY an already command-signed receipt and persist it 0600/exclusive. The digest
+ * is recomputed, the signature is verified against the SESSION public key, the whole
+ * candidate is sensitive-scanned, and every field is re-checked against its session
+ * context — so a receipt that is unsigned, foreign-key-signed, or tampered is refused
+ * here even though this helper never signs anything.
+ */
+export function persistSignedReceipt(session, receipt) {
+  const { sessionDir, manifest, contract } = session
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) return { ok: false, blocked: ["receipt_invalid"] }
+  if (typeof receipt.receipt_signature !== "string" || !RE.signature.test(receipt.receipt_signature)) {
+    return { ok: false, blocked: ["receipt_unsigned"] }
+  }
+  const existing = readSessionReceipts(session)
+  if (!existing.ok) return { ok: false, blocked: existing.blocked }
+  if (receipt.sequence !== existing.receipts.length + 1) return { ok: false, blocked: ["receipt_chain_invalid"] }
+
+  const previous = existing.receipts[existing.receipts.length - 1] ?? null
   const scan = scanSensitiveEvidence(receipt, contract)
   if (scan.length > 0) return { ok: false, blocked: scan }
   const check = verifyReceiptRecord(receipt, {
     contract, expectedSequence: receipt.sequence,
-    expectedPrevious: receipt.previous_receipt_sha256,
+    expectedPrevious: previous ? previous.receipt_sha256 : null,
     sessionId: manifest.session_id, publicKey: manifest.public_key, commitSha: manifest.commit_sha,
     previousCompletedAt: previous ? previous.completed_at : null,
   })
@@ -410,201 +489,47 @@ function produceReceipt(sessionDir, { repoRoot, producer, operation, authority, 
   return { ok: true, receipt: deepFreezeEvidence(receipt) }
 }
 
-// ─── The seven command-bound emitters ─────────────────────────────
-// Each is called ONLY from its command's real result path (guarded by tests).
-// None accepts a status, an exit code, or caller-supplied timestamps.
-
-/** cf:d1:migrations:check — offline plan verification (`runCheck` result). */
-export function emitMigrationPlanReceipt(sessionDir, { repoRoot, authority, begun, checkResult, clock } = {}) {
-  return produceReceipt(sessionDir, {
-    repoRoot, producer: "cf_d1_migration_plan", operation: "migration_plan_verified", authority, begun, clock,
-    derive: () => {
-      if (!checkResult || typeof checkResult.ok !== "boolean" || !Array.isArray(checkResult.failures)) {
-        return { ok: false, blocked: ["result_shape_invalid"] }
-      }
-      // Proof facts are recomputed from the repository — not accepted from callers.
-      const manifestSha256 = fileDigest(repoRoot, "migrations/manifest.json")
-      const planDigest = deriveMigrationPlanDigest(repoRoot)
-      if (!manifestSha256 || !planDigest) return { ok: false, blocked: ["proof_underivable"] }
-      const succeeded = checkResult.ok === true && checkResult.failures.length === 0
-      return {
-        ok: true, status: succeeded ? "success" : "failed",
-        proof: { manifest_sha256: manifestSha256, plan_digest: planDigest },
-        safeCategories: succeeded ? ["manifest_valid", "plan_lanes_verified"] : ["plan_verification_failed"],
-      }
-    },
-  })
-}
-
-/** cf:d1:migrations:apply — the gated remote apply (its real applied plan). */
-export function emitMigrationApplyReceipt(sessionDir, { repoRoot, authority, begun, applyResult, clock } = {}) {
-  return produceReceipt(sessionDir, {
-    repoRoot, producer: "cf_d1_migration_apply", operation: "migration_apply_completed", authority, begun, clock,
-    derive: () => {
-      if (!applyResult || typeof applyResult.completed !== "boolean" || !Array.isArray(applyResult.appliedPlan)) {
-        return { ok: false, blocked: ["result_shape_invalid"] }
-      }
-      const planDigest = deriveMigrationPlanDigest(repoRoot)
-      if (!planDigest) return { ok: false, blocked: ["proof_underivable"] }
-      const applied = applyResult.appliedPlan.map((step) => ({
-        apply: step.apply, binding: step.binding, kind: step.kind, path: step.path, sequence: step.sequence, sha256: step.sha256,
-      }))
-      const appliedDigest = sha256Hex(canonicalSerialize(applied))
-      // A SUCCESSFUL apply must have executed exactly the committed plan — the
-      // emitter recomputes it from the repository and requires byte equality.
-      if (applyResult.completed && appliedDigest !== planDigest) {
-        return { ok: false, blocked: ["applied_plan_mismatch"] }
-      }
-      return {
-        ok: true, status: applyResult.completed ? "success" : "failed",
-        proof: {
-          plan_digest: planDigest, applied_steps_sha256: appliedDigest,
-          reconciliation: applyResult.completed ? "ledger_reconciled" : "not_applicable",
-        },
-        safeCategories: applyResult.completed
-          ? ["control_lane_applied", "ledger_reconciled", "tenant_lane_applied"]
-          : ["migration_apply_failed"],
-      }
-    },
-  })
-}
-
-/** cf:d1:schema:verify:remote — its real `{ ok, failures, authorityDigest }`. */
-export function emitRemoteSchemaVerificationReceipt(sessionDir, { repoRoot, authority, begun, verificationResult, clock } = {}) {
-  return produceReceipt(sessionDir, {
-    repoRoot, producer: "cf_d1_schema_verify_remote", operation: "remote_schema_verified", authority, begun, clock,
-    derive: (derivedAuthority) => {
-      const result = verificationResult
-      if (!result || typeof result.ok !== "boolean" || !Array.isArray(result.failures) || typeof result.authorityDigest !== "string") {
-        return { ok: false, blocked: ["result_shape_invalid"] }
-      }
-      // The verification must have run against THIS session's authority — the
-      // real verifier reports the digest it used; a mismatch is not evidence.
-      if (result.authorityDigest !== derivedAuthority.authoritySha256) {
-        return { ok: false, blocked: ["authority_mismatch"] }
-      }
-      const schemaContractSha256 = fileDigest(repoRoot, "migrations/schema-contract.json")
-      if (!schemaContractSha256) return { ok: false, blocked: ["proof_underivable"] }
-      const summary = sha256Hex(canonicalSerialize({
-        control_db_schema_ok: result.ok, failure_count: result.failures.length, tenant_db_schema_ok: result.ok,
-      }))
-      return {
-        ok: true, status: result.ok ? "success" : "failed",
-        proof: { schema_contract_sha256: schemaContractSha256, verification_summary_sha256: summary },
-        safeCategories: result.ok ? ["control_db_schema_ok", "tenant_db_schema_ok"] : ["schema_verification_failed"],
-      }
-    },
-  })
-}
-
-/** cf:d1:bootstrap:apply — the atomic batch outcome + the canonical artifact digest. */
-export function emitBootstrapApplyReceipt(sessionDir, { repoRoot, authority, begun, bootstrapResult, clock } = {}) {
-  return produceReceipt(sessionDir, {
-    repoRoot, producer: "cf_d1_bootstrap_apply", operation: "bootstrap_apply_completed", authority, begun, clock,
-    derive: () => {
-      if (!bootstrapResult || typeof bootstrapResult.committed !== "boolean"
-        || typeof bootstrapResult.canonicalSqlSha256 !== "string" || !RE.sha256.test(bootstrapResult.canonicalSqlSha256)) {
-        return { ok: false, blocked: ["result_shape_invalid"] }
-      }
-      return {
-        ok: true, status: bootstrapResult.committed ? "success" : "failed",
-        proof: {
-          bootstrap_artifact_sha256: bootstrapResult.canonicalSqlSha256,
-          apply_result: bootstrapResult.committed ? "bootstrap_batch_committed" : "bootstrap_apply_failed",
-        },
-        safeCategories: bootstrapResult.committed ? ["bootstrap_batch_committed"] : ["bootstrap_apply_failed"],
-      }
-    },
-  })
-}
-
-/** Post-bootstrap COUNT verification — its real `{ ok, failures }`. */
-export function emitBootstrapCountsReceipt(sessionDir, { repoRoot, authority, begun, countsResult, clock } = {}) {
-  return produceReceipt(sessionDir, {
-    repoRoot, producer: "cf_d1_bootstrap_counts", operation: "bootstrap_counts_verified", authority, begun, clock,
-    derive: () => {
-      if (!countsResult || typeof countsResult.ok !== "boolean" || !Array.isArray(countsResult.failures)) {
-        return { ok: false, blocked: ["result_shape_invalid"] }
-      }
-      const succeeded = countsResult.ok === true && countsResult.failures.length === 0
-      // Allowlisted BOOLEAN assertions only — never a raw row value.
-      const assertions = sha256Hex(canonicalSerialize({
-        failure_count: countsResult.failures.length,
-        identity_row_verified: succeeded, membership_row_verified: succeeded,
-        registry_row_verified: succeeded, tenant_row_verified: succeeded, user_row_verified: succeeded,
-      }))
-      return {
-        ok: true, status: succeeded ? "success" : "failed",
-        proof: { assertions_sha256: assertions },
-        safeCategories: succeeded
-          ? ["identity_row_verified", "membership_row_verified", "registry_row_verified", "tenant_row_verified", "user_row_verified"]
-          : ["counts_verification_failed"],
-      }
-    },
-  })
-}
-
-/** cf:deploy:preflight — artifact-checked preflight over the validated config. */
-export function emitWorkerPreflightReceipt(sessionDir, { repoRoot, authority, begun, preflightResult, clock } = {}) {
-  return produceReceipt(sessionDir, {
-    repoRoot, producer: "cf_worker_preflight", operation: "worker_preflight_completed", authority, begun, clock,
-    derive: () => {
-      const result = preflightResult
-      if (!result || typeof result.ok !== "boolean" || !Array.isArray(result.failures) || typeof result.checkedArtifacts !== "boolean") {
-        return { ok: false, blocked: ["result_shape_invalid"] }
-      }
-      const succeeded = result.ok === true && result.failures.length === 0
-      // A successful preflight receipt requires the REAL Worker artifact digest.
-      const workerDigest = fileDigest(repoRoot, ".open-next/worker.js")
-      if (succeeded && (!result.checkedArtifacts || !workerDigest)) return { ok: false, blocked: ["worker_artifact_missing"] }
-      const preflightContract = fileDigest(repoRoot, "wrangler.json")
-      if (!preflightContract) return { ok: false, blocked: ["proof_underivable"] }
-      return {
-        ok: true, status: succeeded ? "success" : "failed",
-        proof: {
-          worker_artifact_sha256: workerDigest ?? sha256Hex("worker_artifact_absent"),
-          preflight_contract_sha256: preflightContract,
-        },
-        safeCategories: succeeded ? ["artifacts_verified", "preflight_ok"] : ["preflight_failed"],
-      }
-    },
-  })
-}
-
-/** cf:deploy — the gated Worker deploy outcome, bound to the real artifact bytes. */
-export function emitWorkerDeployReceipt(sessionDir, { repoRoot, authority, begun, deployResult, clock } = {}) {
-  return produceReceipt(sessionDir, {
-    repoRoot, producer: "cf_worker_deploy", operation: "worker_deploy_completed", authority, begun, clock,
-    derive: () => {
-      if (!deployResult || typeof deployResult.deployed !== "boolean") {
-        return { ok: false, blocked: ["result_shape_invalid"] }
-      }
-      const workerDigest = fileDigest(repoRoot, ".open-next/worker.js")
-      // A successful deploy receipt requires the real built Worker artifact.
-      if (deployResult.deployed && !workerDigest) return { ok: false, blocked: ["worker_artifact_missing"] }
-      return {
-        ok: true, status: deployResult.deployed ? "success" : "failed",
-        proof: {
-          worker_artifact_sha256: workerDigest ?? sha256Hex("worker_artifact_absent"),
-          deploy_result: deployResult.deployed ? "worker_deployed" : "worker_deploy_failed",
-        },
-        safeCategories: deployResult.deployed ? ["worker_deployed"] : ["worker_deploy_failed"],
-      }
-    },
-  })
+/**
+ * Open the shared, NON-signing context a command needs before it assembles its own
+ * receipt: the validated session manifest, the derived authority digest (bound to
+ * the session first-writer-wins), the verified existing receipts, and the emitting
+ * command's own producer-source digest. It signs nothing, reads no private key, and
+ * accepts no status/result — the command derives status/proof and signs itself.
+ * Returns `{ ok, session, existingReceipts, authoritySha256, producerSourceSha256 }`.
+ */
+export function openCommandReceiptContext(sessionDir, { repoRoot, authority, producer } = {}) {
+  const loaded = loadEvidenceSessionManifest(sessionDir, { repoRoot })
+  if (!loaded.ok) return { ok: false, blocked: loaded.blocked }
+  const { session } = loaded
+  if (session.contract.producers_by_operation && producer && !session.contract.producers.includes(producer)) {
+    return { ok: false, blocked: ["producer_mismatch"] }
+  }
+  const derivedAuthority = deriveAuthorityEvidence(authority)
+  if (!derivedAuthority.ok) return { ok: false, blocked: derivedAuthority.blocked }
+  const bound = bindSessionAuthority(sessionDir, derivedAuthority.authoritySha256)
+  if (!bound.ok) return { ok: false, blocked: bound.blocked }
+  const existing = readSessionReceipts(session)
+  if (!existing.ok) return { ok: false, blocked: existing.blocked }
+  const sourceRel = session.contract.producer_sources[producer]
+  const producerSourceSha256 = sourceRel ? fileDigest(repoRoot, sourceRel) : null
+  if (!producerSourceSha256) return { ok: false, blocked: ["producer_source_unreadable"] }
+  return {
+    ok: true, session, existingReceipts: existing.receipts,
+    authoritySha256: derivedAuthority.authoritySha256, producerSourceSha256,
+  }
 }
 
 // ─── Pack assembly (from verified receipts only) ──────────────────
 
 /**
- * Assemble the final evidence pack from the session's VERIFIED receipts — never
- * from arbitrary operation objects. Every receipt is re-verified (digest,
- * signature, chain, session, commit, producer, categories, temporal order), the
- * pack header comes from the session manifest's DERIVED facts, and the authority
- * facts come from the session's first-command binding.
+ * Assemble the final evidence pack from the session's VERIFIED receipts — never from
+ * arbitrary operation objects. Every receipt is re-verified (digest, signature,
+ * chain, session, commit, producer, categories, temporal order), the pack header
+ * comes from the session manifest's DERIVED facts, and the authority facts come from
+ * the session's first-command binding.
  */
 export function assembleEvidencePackFromSession(sessionDir, { repoRoot, previousRecordSha256 = null } = {}) {
-  const loadedSession = loadEvidenceSession(sessionDir, { repoRoot })
+  const loadedSession = loadEvidenceSessionManifest(sessionDir, { repoRoot })
   if (!loadedSession.ok) return { ok: false, blocked: loadedSession.blocked }
   const { session } = loadedSession
   const { manifest } = session

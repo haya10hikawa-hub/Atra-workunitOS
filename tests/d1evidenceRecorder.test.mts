@@ -12,20 +12,28 @@
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import { generateKeyPairSync } from "node:crypto"
+import { generateKeyPairSync, createPrivateKey, sign as edSign } from "node:crypto"
 import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
 import {
   loadEvidenceContract, scanSensitiveEvidence, canonicalSerialize, computeEvidenceDigest,
-  computeReceiptDigest, signReceiptDigest, verifyReceiptSignature,
+  computeReceiptDigest, verifyReceiptSignature,
   createEvidenceSession, recordEvidenceOperation, finalizeEvidenceSession, writeEvidencePack,
   validateEvidenceRecord, validateOperationOrdering, sha256Hex,
   EVIDENCE_CONTRACT_RELPATH, EVIDENCE_DIRNAME,
 } from "../scripts/lib/d1OperationalEvidence.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+
+/**
+ * Sign a receipt digest as a command does — inline, via node:crypto. The production
+ * signing helper (`signReceiptDigest`) was part of the forgeable surface and is gone;
+ * tests do their own signing with node builtins, which any holder of the key can.
+ */
+const signDigest = (privateKeyPem: string, receiptSha256: string) =>
+  edSign(null, Buffer.from(receiptSha256, "utf8"), createPrivateKey(privateKeyPem)).toString("hex")
 const AUTHORITY = sha256Hex("synthetic-authority-bytes")
 const COMMIT = "0123456789abcdef0123456789abcdef01234567"
 const CONTRACT = (() => {
@@ -105,7 +113,7 @@ function receiptInput(session: unknown, operation: string, over: Record<string, 
     ...over,
   }
   base.receipt_sha256 = computeReceiptDigest(base)
-  base.receipt_signature = signReceiptDigest(PRIVATE_PEM, base.receipt_sha256)
+  base.receipt_signature = signDigest(PRIVATE_PEM, base.receipt_sha256)
   return {
     operation: base.operation, status: base.status,
     startedAt: base.started_at, completedAt: base.completed_at,
@@ -203,7 +211,7 @@ test("REGRESSION 1. an unsigned or foreign-key receipt cannot be appended — ex
     const foreignPem = foreign.privateKey.export({ type: "pkcs8", format: "pem" }) as string
     const s2 = openSession(repo)
     const forged = receiptInput(s2, OPS[0])
-    forged.receiptSignature = signReceiptDigest(foreignPem, forged.receiptSha256)
+    forged.receiptSignature = signDigest(foreignPem, forged.receiptSha256)
     const refusedForged = recordEvidenceOperation(s2, forged)
     assert.equal(refusedForged.ok, false)
     assert.ok(!refusedForged.ok && refusedForged.blocked.includes("receipt_signature_invalid"))
@@ -219,7 +227,7 @@ test("REGRESSION 1. an unsigned or foreign-key receipt cannot be appended — ex
     const s4 = openSession(repo)
     const tampered = receiptInput(s4, OPS[0])
     tampered.receiptSha256 = sha256Hex("forged")
-    tampered.receiptSignature = signReceiptDigest(PRIVATE_PEM, tampered.receiptSha256)
+    tampered.receiptSignature = signDigest(PRIVATE_PEM, tampered.receiptSha256)
     const refusedTampered = recordEvidenceOperation(s4, tampered)
     assert.ok(!refusedTampered.ok && refusedTampered.blocked.includes("receipt_digest_mismatch"))
   } finally { rmSync(repo, { recursive: true, force: true }) }

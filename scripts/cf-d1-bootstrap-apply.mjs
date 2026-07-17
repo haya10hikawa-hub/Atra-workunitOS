@@ -52,8 +52,12 @@ import {
   removeBootstrapSql, readOperatorInput, buildBootstrapSql, parseArtifactHeader,
 } from "./cf-d1-bootstrap-prepare.mjs"
 import { verifyBootstrapVia } from "./lib/d1BootstrapVerify.mjs"
-import { sha256Hex } from "./lib/d1OperationalEvidence.mjs"
-import { beginEvidenceOperation, emitBootstrapApplyReceipt, emitBootstrapCountsReceipt } from "./lib/d1EvidenceReceipts.mjs"
+import { createPrivateKey, sign as edSign } from "node:crypto"
+import { sha256Hex, canonicalSerialize } from "./lib/d1OperationalEvidence.mjs"
+import {
+  openCommandReceiptContext, assembleUnsignedReceipt, persistSignedReceipt,
+  SESSION_PRIVATE_KEY_BASENAME,
+} from "./lib/d1EvidenceReceipts.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 export const BOOTSTRAP_CONFIRM_PHRASE = "APPLY_PRODUCTION_CONTROL_BOOTSTRAP"
@@ -340,6 +344,81 @@ function remoteCount(authority, sql) {
   })
 }
 
+// ─── Command-local evidence emission (private; not exported) ──────
+//
+// Receipt creation and signing live HERE, after the execution latch and each real
+// result boundary (the atomic batch outcome, then the read-only COUNT check).
+// Status and proof are derived privately; the session key is read and signed inline.
+
+/** Assemble, sign inline, and persist ONE command-derived receipt. Private helper. */
+function signAndPersistReceipt(sessionDir, ctx, { operation, producer, startedAt, outcome }) {
+  const built = assembleUnsignedReceipt(ctx.session, ctx.existingReceipts, {
+    operation, producer, authoritySha256: ctx.authoritySha256, producerSourceSha256: ctx.producerSourceSha256,
+    startedAt, completedAt: new Date().toISOString(),
+    status: outcome.status, proof: outcome.proof, safeCategories: outcome.safeCategories,
+  })
+  if (!built.ok) return built
+  const pem = readFileSync(resolve(sessionDir, SESSION_PRIVATE_KEY_BASENAME), "utf8")
+  built.receipt.receipt_signature = edSign(null, Buffer.from(built.receipt.receipt_sha256, "utf8"), createPrivateKey(pem)).toString("hex")
+  return persistSignedReceipt(ctx.session, built.receipt)
+}
+
+/** Derive status + proof from the REAL atomic-batch outcome. */
+function deriveBootstrapApplyOutcome(bootstrapResult) {
+  if (!bootstrapResult || typeof bootstrapResult.committed !== "boolean"
+    || typeof bootstrapResult.canonicalSqlSha256 !== "string" || !/^[0-9a-f]{64}$/.test(bootstrapResult.canonicalSqlSha256)) {
+    return { ok: false, blocked: ["result_shape_invalid"] }
+  }
+  return {
+    ok: true, status: bootstrapResult.committed ? "success" : "failed",
+    proof: {
+      bootstrap_artifact_sha256: bootstrapResult.canonicalSqlSha256,
+      apply_result: bootstrapResult.committed ? "bootstrap_batch_committed" : "bootstrap_apply_failed",
+    },
+    safeCategories: bootstrapResult.committed ? ["bootstrap_batch_committed"] : ["bootstrap_apply_failed"],
+  }
+}
+
+/** Derive status + proof from the REAL read-only COUNT result (booleans only). */
+function deriveBootstrapCountsOutcome(countsResult) {
+  if (!countsResult || typeof countsResult.ok !== "boolean" || !Array.isArray(countsResult.failures)) {
+    return { ok: false, blocked: ["result_shape_invalid"] }
+  }
+  const succeeded = countsResult.ok === true && countsResult.failures.length === 0
+  const assertions = sha256Hex(canonicalSerialize({
+    failure_count: countsResult.failures.length,
+    identity_row_verified: succeeded, membership_row_verified: succeeded,
+    registry_row_verified: succeeded, tenant_row_verified: succeeded, user_row_verified: succeeded,
+  }))
+  return {
+    ok: true, status: succeeded ? "success" : "failed",
+    proof: { assertions_sha256: assertions },
+    safeCategories: succeeded
+      ? ["identity_row_verified", "membership_row_verified", "registry_row_verified", "tenant_row_verified", "user_row_verified"]
+      : ["counts_verification_failed"],
+  }
+}
+
+/** Emit the bootstrap-apply receipt from THIS command's real result path. Private. */
+function emitBootstrapApplyReceipt(sessionDir, { repoRoot, authority, startedAt, bootstrapResult }) {
+  const producer = "cf_d1_bootstrap_apply"
+  const ctx = openCommandReceiptContext(sessionDir, { repoRoot, authority, producer })
+  if (!ctx.ok) return ctx
+  const outcome = deriveBootstrapApplyOutcome(bootstrapResult)
+  if (!outcome.ok) return outcome
+  return signAndPersistReceipt(sessionDir, ctx, { operation: "bootstrap_apply_completed", producer, startedAt, outcome })
+}
+
+/** Emit the bootstrap-counts receipt from THIS command's real result path. Private. */
+function emitBootstrapCountsReceipt(sessionDir, { repoRoot, authority, startedAt, countsResult }) {
+  const producer = "cf_d1_bootstrap_counts"
+  const ctx = openCommandReceiptContext(sessionDir, { repoRoot, authority, producer })
+  if (!ctx.ok) return ctx
+  const outcome = deriveBootstrapCountsOutcome(countsResult)
+  if (!outcome.ok) return outcome
+  return signAndPersistReceipt(sessionDir, ctx, { operation: "bootstrap_counts_verified", producer, startedAt, outcome })
+}
+
 // ─── Main ────────────────────────────────────────────────────────
 
 function main() {
@@ -370,9 +449,9 @@ function main() {
   // a refused run can never carry a receipt. Two receipts are emitted from this
   // command's real result paths: the atomic batch outcome, then the COUNT check.
   const evidenceSessionDir = process.env.CF_D1_EVIDENCE_SESSION_DIR
-  const applyBegun = evidenceSessionDir ? beginEvidenceOperation() : null
+  const applyStartedAt = evidenceSessionDir ? new Date().toISOString() : null
   let batchCommitted = false
-  let countsBegun = null
+  let countsStartedAt = null
   let countsOutcome = null
   // The retained authority — NOT a reusable config path — decides WHICH database the
   // bytes hit. The apply and every verification query each mint their own short-lived
@@ -386,7 +465,7 @@ function main() {
     // the ones validation retained — never re-read from the mutable artifact path.
     applyBootstrapFile(authority, gates.canonicalSql)
     batchCommitted = true
-    countsBegun = evidenceSessionDir ? beginEvidenceOperation() : null
+    countsStartedAt = evidenceSessionDir ? new Date().toISOString() : null
 
     // Read-only, category-level verification. Counts only; no row values.
     const verified = verifyBootstrapVia((sql) => remoteCount(authority, sql), values)
@@ -415,20 +494,20 @@ function main() {
     removeBootstrapSql()
   }
 
-  // Command-bound receipts, emitted only from THIS result path once each outcome
-  // is known. The batch receipt binds the canonical artifact digest that was
-  // actually executed; the counts receipt records allowlisted boolean assertions —
-  // never a row value. Neither takes a status or exit-code parameter.
+  // Command-local receipts, emitted only from THIS result path once each outcome is
+  // known. The batch receipt binds the canonical artifact digest that was actually
+  // executed; the counts receipt records allowlisted boolean assertions — never a
+  // row value. Status is derived privately from each real result.
   if (evidenceSessionDir) {
     const applyReceipt = emitBootstrapApplyReceipt(evidenceSessionDir, {
-      repoRoot: REPO_ROOT, authority, begun: applyBegun,
+      repoRoot: REPO_ROOT, authority, startedAt: applyStartedAt,
       bootstrapResult: { committed: batchCommitted, canonicalSqlSha256: sha256Hex(gates.canonicalSql) },
     })
     if (applyReceipt.ok) console.log("evidence: receipt recorded (bootstrap_apply_completed)")
     else console.error(`evidence: receipt FAILED — ${applyReceipt.blocked.join(", ")}`)
-    if (countsBegun !== null && countsOutcome !== null) {
+    if (countsStartedAt !== null && countsOutcome !== null) {
       const countsReceipt = emitBootstrapCountsReceipt(evidenceSessionDir, {
-        repoRoot: REPO_ROOT, authority, begun: countsBegun, countsResult: countsOutcome,
+        repoRoot: REPO_ROOT, authority, startedAt: countsStartedAt, countsResult: countsOutcome,
       })
       if (countsReceipt.ok) console.log("evidence: receipt recorded (bootstrap_counts_verified)")
       else console.error(`evidence: receipt FAILED — ${countsReceipt.blocked.join(", ")}`)

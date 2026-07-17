@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
- * cf:d1:evidence:init (P0-OPS-016 repair) — initialize ONE offline evidence
- * session, or assemble a session's verified receipts into a final pack.
+ * cf:d1:evidence:init (P0-OPS-016) — initialize ONE offline evidence session, or
+ * assemble a session's verified receipts into a final pack.
  *
  * ENTIRELY LOCAL: performs no network, D1, Wrangler, migration, bootstrap, or
- * deploy action. The ONLY process it may spawn is read-only `git` (rev-parse /
- * status), used to DERIVE — never accept as claims — the exact HEAD commit and
- * whether the worktree is clean. It fails closed when the tree is dirty, HEAD
- * cannot be resolved, required files are missing, or contract digests cannot be
- * derived.
+ * deploy action. Session initialization DERIVES its repository facts internally
+ * (HEAD commit, clean worktree, Node/Wrangler versions, contract digests) through
+ * the library — the only process it spawns is read-only `git` — and fails closed
+ * when the tree is dirty, HEAD is unresolvable, required files are missing, or a
+ * digest cannot be derived. There is no way to hand it a commit or dirty-tree claim.
  *
  * The session's Ed25519 private key is written 0600, exclusively, into the
  * git-ignored session directory and is never printed or embedded anywhere.
@@ -16,41 +16,9 @@
 
 import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
-import { spawnSync } from "node:child_process"
-import { readFileSync } from "node:fs"
-import { initializeEvidenceSessionAt, assembleEvidencePackFromSession } from "./lib/d1EvidenceReceipts.mjs"
+import { initializeEvidenceSession, assembleEvidencePackFromSession } from "./lib/d1EvidenceReceipts.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
-
-/** Run ONE read-only git command; anything else is unreachable from this file. */
-function gitReadOnly(args) {
-  const allowed = new Set(["rev-parse", "status"])
-  if (!allowed.has(args[0])) throw new Error("git_command_not_allowlisted")
-  const result = spawnSync("git", args, { cwd: REPO_ROOT, encoding: "utf8" })
-  if (result.status !== 0) return null
-  return result.stdout
-}
-
-/** Derive HEAD + worktree cleanliness — never accepted from the caller. */
-export function deriveGitFacts(runGit = gitReadOnly) {
-  const head = runGit(["rev-parse", "HEAD"])
-  const commitSha = head ? head.trim() : null
-  if (!commitSha || !/^[0-9a-f]{40}$/.test(commitSha)) return { ok: false, blocked: ["head_unresolvable"] }
-  const status = runGit(["status", "--porcelain"])
-  if (status === null) return { ok: false, blocked: ["worktree_state_unresolvable"] }
-  if (status.trim().length > 0) return { ok: false, blocked: ["repository_dirty"] }
-  return { ok: true, commitSha, dirtyTree: false }
-}
-
-/** The pinned Wrangler version, derived from the installed package — not claimed. */
-export function deriveWranglerVersion(repoRoot = REPO_ROOT) {
-  try {
-    const pkg = JSON.parse(readFileSync(resolve(repoRoot, "node_modules/wrangler/package.json"), "utf8"))
-    return typeof pkg.version === "string" ? pkg.version : null
-  } catch {
-    return null
-  }
-}
 
 function parseArgs(argv) {
   const args = { environment: null, assemble: null, previous: null }
@@ -88,30 +56,13 @@ function main() {
     process.exit(1)
   }
 
-  const git = deriveGitFacts()
-  if (!git.ok) {
-    console.error(`cf:d1:evidence:init: STOPPED — ${git.blocked.join(", ")}`)
-    console.error("Evidence sessions require a CLEAN worktree at a resolvable HEAD commit.")
-    process.exit(1)
-  }
-  const wranglerVersion = deriveWranglerVersion()
-  if (!wranglerVersion) {
-    console.error("cf:d1:evidence:init: STOPPED — wrangler_version_underivable")
-    process.exit(1)
-  }
-
-  const initialized = initializeEvidenceSessionAt({
-    repoRoot: REPO_ROOT,
-    environmentClass: args.environment,
-    derived: {
-      commitSha: git.commitSha,
-      dirtyTree: git.dirtyTree,
-      nodeVersion: process.version,
-      wranglerVersion,
-    },
-  })
+  // The library derives HEAD, worktree cleanliness, versions, and contract digests
+  // internally; it accepts no repository claim. A dirty tree or unresolvable HEAD
+  // fails closed here.
+  const initialized = initializeEvidenceSession({ repoRoot: REPO_ROOT, environmentClass: args.environment })
   if (!initialized.ok) {
     console.error(`cf:d1:evidence:init: STOPPED — ${initialized.blocked.join(", ")}`)
+    console.error("Evidence sessions require a CLEAN worktree at a resolvable HEAD commit, with derivable toolchain versions and contract digests.")
     process.exit(1)
   }
   console.log(`cf:d1:evidence:init: session initialized (${initialized.sessionId}).`)

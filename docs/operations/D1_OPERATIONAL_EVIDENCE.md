@@ -25,26 +25,53 @@ validated config authority
 | --- | --- |
 | Evidence contract (`contracts/operations/d1-operational-evidence.v1.json`) | implemented |
 | Session initializer (`npm run cf:d1:evidence:init`) | implemented |
-| Command-bound receipt emitters (`scripts/lib/d1EvidenceReceipts.mjs`) | implemented |
+| Command-**local** receipt emission (inside each operator command) | implemented |
+| Non-signing receipt helpers (`scripts/lib/d1EvidenceReceipts.mjs`) | implemented |
 | Core recorder + scanner (`scripts/lib/d1OperationalEvidence.mjs`) | implemented |
-| Offline verifier (`npm run cf:d1:evidence:verify`) | implemented |
+| Offline verifier + local-checkout binding (`npm run cf:d1:evidence:verify`) | implemented |
 | Offline tests + mutation coverage | tested offline |
 | Authorized remote run recorded as evidence | **not executed** |
 | Human review of remote evidence | **not performed** |
 
+## 0. Second repair — the previous emitter API was still forgeable
+
+The first repair moved receipt creation behind seven **exported** `emit*Receipt(…)`
+functions. That surface was still forgeable: an ordinary imported caller could
+initialize a session, call each `emit*Receipt` directly with a **correctly-shaped
+fabricated success result** (`{ completed: true, appliedPlan }`, `{ deployed: true }`,
+…), let the library read the session key and sign, and assemble a pack that passed
+every signature, chain, category, and pack-hash check — **without running any
+command**. The initializer also accepted caller-supplied `derived.commitSha` /
+`derived.dirtyTree` claims.
+
+This second repair removes that forgeable surface entirely:
+
+- The seven `emit*Receipt(…)` functions, the generic `produceReceipt(…)` /
+  `signReceiptDigest(…)` core, and `initializeEvidenceSessionAt({ derived })` are
+  **no longer exported** — importing the evidence modules exposes **no
+  result-to-signed-receipt function**.
+- Receipt creation and signing are now **command-local and private**: each command
+  derives its own status and proof from its real result, reads the session key, and
+  signs inline, after its existing gate and result boundary. No shared public
+  function accepts a command result and signs it.
+- The initializer accepts **only** `{ repoRoot, environmentClass }` and derives HEAD,
+  worktree cleanliness, versions, and contract digests **internally**.
+- The offline verifier now **binds the pack to the local clean checkout** at the
+  recorded commit.
+
 ## 1. Execution provenance — the core invariant
 
-**Pack-level hashing alone is not execution provenance.** An internally consistent
-pack proves only that someone hashed it consistently. The repaired invariant is:
+**Pack-level hashing alone is not execution provenance**, and neither is a session
+signature by itself. The repaired security boundary is:
 
 ```text
-A successful operational receipt can only be emitted from the
-actual repository command path after that command reached its
-existing execution result boundary.
+A caller that did not execute the actual repository command path
+must not have a production API that can create or sign a successful
+receipt from a caller-supplied result object.
 ```
 
-Every operation entry in a pack is a **command-bound receipt**, emitted by the real
-operator command from inside its result path:
+Every operation entry in a pack is a **command-local receipt**, emitted by the real
+operator command from inside its own (private, non-exported) result path:
 
 | Producer | Command | Operation |
 | --- | --- | --- |
@@ -56,20 +83,21 @@ operator command from inside its result path:
 | `cf_worker_preflight` | `cf:deploy:preflight` | `worker_preflight_completed` |
 | `cf_worker_deploy` | `cf:deploy` | `worker_deploy_completed` |
 
-The emitters take each command's **real result objects** — there is **no status,
-exit-code, or timestamp parameter** anywhere on the surface. Status is derived from
-the result; many proof facts are **recomputed from the repository itself** (the
-committed migration plan, the built Worker artifact bytes, the manifest and schema
-contract digests); the schema-verification receipt requires the verifier result's
-own `authorityDigest` to equal the session authority; a successful migration-apply
-receipt requires the applied plan to equal the committed plan byte-for-byte. The
-generic caller-trusted adapter layer (`buildOperationEvidence(op, { exitCode… })`)
-that made packs forgeable is **deleted**; the low-level recorder survives only as an
-assembler that itself refuses unsigned or foreign-key receipts.
+Each command derives **its own** status privately from its real result, reads no
+other command's result field, captures its own boundary timestamps, and recomputes
+its proof facts from the repository (the committed migration plan, the built Worker
+artifact bytes, the manifest and schema-contract digests). The shared library
+exposes only **non-authorizing** helpers a command composes: `assembleUnsignedReceipt`
+(pure canonical assembly of an **unsigned** receipt — worthless until signed),
+`persistSignedReceipt` (which **verifies** an already-signed receipt against the
+session key and refuses anything unsigned or foreign-key-signed), authority
+derivation/binding, and pack assembly from already-verified receipts. There is no
+exported `emit*Receipt`, `produceReceipt`, or `signReceiptDigest`.
 
 ## 2. Trust model — state it honestly
 
-Receipts are signed with a **session-scoped Ed25519 key**:
+Receipts are signed with a **session-scoped Ed25519 key**, read and applied by the
+emitting command itself:
 
 - generated by `cf:d1:evidence:init`; private key written 0600, exclusively, into
   the git-ignored session directory; never printed, never in any record;
@@ -79,24 +107,29 @@ Receipts are signed with a **session-scoped Ed25519 key**:
   manifest (same session id, public key, and derived commit).
 
 ```text
-This proves that receipts came through one initialized repository
-evidence session. It is not a third-party Cloudflare attestation
-and does not protect against a malicious machine owner.
+The session key protects receipt integrity after a command writes
+the receipt. It does not cryptographically attest which JavaScript
+call site invoked the signing code and does not protect against a
+machine owner who reads the local private key or modifies source.
 ```
 
-A machine owner who deliberately modifies repository source or reads the session
-key remains **outside the trust model**. What the design prevents is an ordinary
-caller manufacturing a valid success pack from arbitrary exit codes and strings.
-Two additional offline anchors narrow even wholesale re-implementation: every
-receipt's `producer_source_sha256` must match the **actual command source files in
-the local checkout**, and the optional session anchor must match the real session
-manifest. Cloudflare-side cross-checks and human review (see §8) close the rest.
+**Ed25519 alone does not prove command execution.** A machine owner who deliberately
+edits repository source or reads the session key is outside the trust model. What the
+design prevents is an ordinary imported caller manufacturing a valid success pack
+from a fabricated result — there is simply no production API that turns a result into
+a signed receipt. Actual remote-execution proof still requires the documented
+Cloudflare-side cross-check and human review (see §8). Two offline anchors narrow
+even wholesale re-implementation: every receipt's `producer_source_sha256` must match
+the **actual command source files in the local checkout**, and the verifier binds the
+pack to the **clean local checkout at the recorded commit**.
 
 ## 3. Evidence sessions (`npm run cf:d1:evidence:init`)
 
 Entirely offline — no network, D1, Wrangler, migration, bootstrap, or deploy
 action; the only process it spawns is **read-only `git`** (`rev-parse`, `status`).
-It **derives** — and never accepts as claims —
+The production initializer accepts **only** `{ repoRoot, environmentClass }` — there
+is no `derived` parameter and no test-injection point. It **derives** — and never
+accepts as claims —
 
 - the exact HEAD commit and worktree cleanliness (a dirty tree fails closed);
 - the Node version and the installed Wrangler version;
@@ -107,8 +140,9 @@ missing, or contract digests cannot be derived. It creates
 `.d1-evidence/<session-id>/` (0700) holding `session.json` and the private key
 (both 0600, exclusive). Operators then export
 `CF_D1_EVIDENCE_SESSION_DIR=<session dir>` and run the normal gated commands —
-each emits its own receipt; **no command gate is set, satisfied, or weakened by
-the evidence layer** (it never reads `process.env` and never names a gate).
+each emits its own receipt from command-local, private code; **no command gate is
+set, satisfied, or weakened by the evidence layer** (it never reads `process.env`
+and never names a gate).
 
 The Control/Tenant **physical-separation fact is derived** during the first
 authority-bearing command by parsing the retained authority bytes (recomputing the
@@ -161,20 +195,30 @@ npm run cf:d1:evidence:verify -- --file .d1-evidence/<pack>.json [--session .d1-
 
 In addition to the pack-level checks (strict contract, scanner, recomputed
 canonical digest, ordering, one authority, completeness, symlink/size protections),
-the verifier now, per receipt: verifies the session public key and **every
-signature**; **recomputes every receipt digest** plus the input and result digests;
-verifies the chain, session id, repository commit, authority digest, producer
-identity, and producer-source digest **against the local checkout's actual command
-sources**; enforces the per-operation category allowlists; and enforces
-**cross-operation timestamp monotonicity**
-(`operation[i].started_at >= operation[i-1].completed_at`). A complete but unsigned
-fabricated pack fails. Category-only output, with receipt-layer categories:
-`evidence_receipt_unsigned`, `evidence_receipt_signature_invalid`,
-`evidence_receipt_digest_mismatch`, `evidence_receipt_chain_invalid`,
-`evidence_session_mismatch`, `evidence_repository_mismatch`,
-`evidence_producer_mismatch`, `evidence_producer_source_mismatch`,
-`evidence_category_not_allowlisted`, `evidence_temporal_order_invalid`. It performs
-**no network or database access** and reads no environment.
+the verifier, per receipt: verifies the session public key and **every signature**;
+**recomputes every receipt digest** plus the input and result digests; verifies the
+chain, session id, repository commit, authority digest, producer identity, and
+producer-source digest **against the local checkout's actual command sources**;
+enforces the per-operation category allowlists; and enforces **cross-operation
+timestamp monotonicity** (`operation[i].started_at >= operation[i-1].completed_at`).
+
+**Local-checkout binding (this repair).** Signatures do not say *which* repository a
+pack belongs to. So the verifier also derives the **local** HEAD and worktree
+cleanliness via read-only `git` and requires `local HEAD == commit_sha` on a **clean
+tree**, and it recomputes the migration-manifest, migration-plan, and schema-contract
+digests from the local files and compares each independently. Run it from a **second
+clean checkout at the evidence commit**. A complete but unsigned fabricated pack
+fails; so does a pack whose commit is not the local HEAD, whose local tree is dirty,
+or whose local contract or command-source files drifted. Category-only output, with
+receipt- and checkout-binding categories: `evidence_receipt_unsigned`,
+`evidence_receipt_signature_invalid`, `evidence_receipt_digest_mismatch`,
+`evidence_receipt_chain_invalid`, `evidence_session_mismatch`,
+`evidence_repository_mismatch`, `evidence_producer_mismatch`,
+`evidence_producer_source_mismatch`, `evidence_category_not_allowlisted`,
+`evidence_temporal_order_invalid`, `evidence_local_head_mismatch`,
+`evidence_local_tree_dirty`, `evidence_local_contract_mismatch`. The only process it
+spawns is read-only `git`; it performs **no network or database access** and reads no
+environment.
 
 ## 7. Operator-run evidence workflow (future; NOT executed by this patch)
 
