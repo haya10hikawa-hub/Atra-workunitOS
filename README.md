@@ -126,6 +126,16 @@ untracked, git-ignored `wrangler.deploy.json`.
 **Worker deploy never applies database migrations** — a real deploy first requires a
 successful *read-only* remote D1 schema verification.
 
+**Remote execution is entrypoint-only.** Worker deploy and remote D1 schema
+verification exist **only** in the direct command entrypoints (`cf:deploy`,
+`cf:d1:schema:verify:remote`), each gated by its own module-private authorization
+latch that only the CLI opens after all gates pass. No **imported** production
+function can authorize a deploy or a remote query — a boolean argument is never
+authorization. Local evidence-session signatures are integrity for the local journal,
+**not** a Cloudflare attestation; no remote proof has been produced, and Issue #155
+remains open. The `.d1-evidence` directory (session private keys) must be a plain
+`0700` directory — an unsafe directory fails closed.
+
 ## D1 migrations & bootstrap
 
 `migrations/manifest.json` is the canonical source of truth for the two migration

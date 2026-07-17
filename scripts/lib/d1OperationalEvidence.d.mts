@@ -135,6 +135,17 @@ export declare const EVIDENCE_DIRNAME: string
 /** Strict shared formats (session ids, digests, signatures, timestamps, …). */
 export declare const EVIDENCE_FORMATS: Readonly<Record<string, RegExp>>
 
+/** True when `mode` carries any group or other permission bit (`(mode & 0o077) !== 0`). */
+export declare function hasGroupOrOtherPermissionBits(mode: number): boolean
+/**
+ * Ensure `<repoRoot>/.d1-evidence` is a plain, private 0700 directory (created when
+ * absent, never recursively) — a symlink, non-directory, or any group/other bit is
+ * rejected with the single safe category `evidence_directory_permissions_invalid`.
+ */
+export declare function ensureEvidenceRootSecure(repoRoot: string | undefined): EvidenceResult<{ root: string }>
+/** Create a fresh private 0700 session directory `<root>/<sessionId>` and re-check its mode. */
+export declare function createSecureSessionDir(root: string, sessionId: string): EvidenceResult<{ sessionDir: string }>
+
 export declare function sha256Hex(value: string | Uint8Array): string
 /** Receipt digest: canonical bytes of the receipt minus its digest + signature. */
 export declare function computeReceiptDigest(receipt: unknown): string

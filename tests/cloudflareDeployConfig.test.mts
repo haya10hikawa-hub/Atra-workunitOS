@@ -16,7 +16,7 @@ import {
   EXPECTED_WORKER_MAIN,
   EXPECTED_ASSETS_DIR,
 } from "../scripts/lib/cfDeployConfig.mjs"
-import { DEPLOY_STEPS } from "../scripts/cloudflare-deploy.mjs"
+import { getDeployStepMetadata } from "../scripts/cloudflare-deploy.mjs"
 import { parseArgs as parsePreflightArgs } from "../scripts/cloudflare-deploy-preflight.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
@@ -198,7 +198,7 @@ test("missing worker/asset artifacts fail when checkArtifacts is on", () => {
 // ─── Deploy orchestration cannot bypass prepare/preflight ──────
 
 test("deploy pipeline runs prepare and preflight before deploy", () => {
-  const names = DEPLOY_STEPS.map((s) => s.name)
+  const names = getDeployStepMetadata().map((s) => s.name)
   assert.ok(names.includes("prepare"))
   assert.ok(names.includes("preflight"))
   assert.ok(names.includes("deploy"))

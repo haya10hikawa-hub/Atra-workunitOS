@@ -144,6 +144,20 @@ each emits its own receipt from command-local, private code; **no command gate i
 set, satisfied, or weakened by the evidence layer** (it never reads `process.env`
 and never names a gate).
 
+> **Evidence-root permissions (P0-FIX-018).** The `.d1-evidence` root holds session
+> private keys, so it must be a **plain, private `0700` directory**. One shared
+> validator (`ensureEvidenceRootSecure`), used by BOTH session initialization and
+> final pack writing, resolves exactly `<repo>/.d1-evidence`, creates it at `0700`
+> only when absent (never recursively), and otherwise `lstat`s it and rejects a
+> symlink, a non-directory, or **any group/other permission bit** (`(mode & 0o077) !== 0`).
+> A pre-existing unsafe root — e.g. `0755` — is **rejected, not silently accepted**
+> (`mkdirSync(recursive: true)` does not correct an existing directory). The single
+> safe failure category is `evidence_directory_permissions_invalid`; the tool never
+> `chmod`s and never prints an absolute path, and a failed validation writes **no
+> key, manifest, receipt, or pack**. Manual remediation: `chmod 700 .d1-evidence`.
+> Session directories stay `0700`; every manifest, key, authority binding, receipt,
+> and pack stays `0600` and is created exclusively (`wx`).
+
 The Control/Tenant **physical-separation fact is derived** during the first
 authority-bearing command by parsing the retained authority bytes (recomputing the
 digest, checking exactly one CONTROL_DB and one TENANT_DB_DEFAULT with distinct

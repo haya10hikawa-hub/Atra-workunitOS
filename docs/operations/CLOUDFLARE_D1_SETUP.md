@@ -258,6 +258,22 @@ leases remove themselves as each call returns; the orchestrator additionally rem
 the **original** generated `wrangler.deploy.json` the moment its bytes are retained,
 and again on every exit, since it owns it and it carries real IDs.
 
+> **`cf:d1:schema:verify:remote` is ENTRYPOINT-ONLY (P0-FIX-018).** Read-only provider
+> access is still remote execution, so it must be operator-gated at the command
+> entrypoint. The Wrangler-backed runner and multi-binding verifier are **private** to
+> the command — there is no exported `makeWranglerReadOnlyRunner` or
+> `verifyRemoteSchemasWithAuthority`, so an **imported** function cannot issue a remote
+> introspection query. Only `main()` validates `--remote` and the deploy-config
+> authority, then opens a **module-private schema-verification latch**; every
+> remote-capable leaf calls `requireSchemaVerificationAuthorized()` before creating a
+> scoped config or spawning Wrangler (a non-read-only SQL is rejected before any file
+> is created), and the latch is closed in `finally`. The deploy command does **not**
+> import this command's remote path — it re-implements its own private introspection,
+> protected by its own deploy latch, and reuses only pure schema helpers (contract
+> loading, read-only SQL classification, validation through a caller-provided pure row
+> source). This is not remote proof; a Cloudflare-side cross-check and human review
+> remain mandatory and **Issue #155 stays open**.
+
 ### CONTROL_DB and TENANT_DB_DEFAULT must be DIFFERENT physical databases
 
 `CONTROL_DB is never tenant-data storage` is an **architecture guarantee**, not a

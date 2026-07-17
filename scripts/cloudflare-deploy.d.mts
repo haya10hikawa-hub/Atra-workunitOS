@@ -1,51 +1,29 @@
-/** Type declarations for the Cloudflare deploy orchestrator. */
-
-import type { DeployConfigAuthority } from "./lib/cfDeployConfigAuthority.d.mts"
-
 /**
- * A pipeline step. A `usesConfig` step names `--config <scoped>` in its `args`, where
- * the scoped config is a fresh short-lived file minted from the retained authority
- * for that one invocation — no step is ever handed the original generated config, and
- * no config survives between steps.
+ * Type declarations for the Cloudflare deploy orchestrator (hardened P0-FIX-018).
  *
- * `verify-remote-schema` has no `cmd`: it runs in-process against the same retained
- * authority the deploy uses (`inProcess`), returning a digest the orchestrator matches
- * before deploy — rather than spawning a child that would snapshot the config again.
+ * Remote execution is ENTRYPOINT-ONLY. There is deliberately NO `runPipeline`, no
+ * `RunPipelineDeps`, no `DEPLOY_STEPS`, and no remote process-runner seam declared
+ * here — the pipeline and every remote-capable leaf are PRIVATE to the module. The
+ * only exported surface is PURE, non-authorizing information: ordered step metadata,
+ * an order validator, and a digest-equality predicate. None spawns, receives an
+ * authority, accepts an execution flag, or can contact Cloudflare.
  */
-export interface DeployStep {
+
+/** Non-authorizing step metadata: name + whether the step is remote / needs a config. */
+export interface DeployStepMetadata {
   name: string
-  cmd?: string
-  args?: (executionConfig?: string) => string[]
-  remote?: boolean
-  /** Runs before the authority is loaded (only `prepare`, which produces it). */
-  beforeAuthority?: boolean
-  /** Runs in-process through the shared library rather than a child process. */
-  inProcess?: string
-  /** Needs a scoped execution config minted from the authority for its call. */
-  usesConfig?: boolean
-  /** Safe `[a-z][a-z0-9-]{0,23}` filename label for this step's scoped config. */
-  purpose?: string
+  remote: boolean
+  usesConfig: boolean
 }
 
-export interface RunPipelineDeps {
-  verifyRemoteSchemas?: (
-    authority: DeployConfigAuthority,
-    options: { repoRoot: string; spawn?: unknown },
-  ) => { ok: boolean; failures: string[]; authorityDigest: string | null }
-  run?: (step: DeployStep, authority: DeployConfigAuthority, spawn?: unknown) => boolean
-  /** Injectable spawn for tests; nothing contacts Cloudflare when stubbed. */
-  spawn?: unknown
-}
-
-export declare const DEPLOY_STEPS: DeployStep[]
+/** The ordered, non-authorizing step metadata (a fresh copy on every call). */
+export declare function getDeployStepMetadata(): DeployStepMetadata[]
 
 /**
- * Run the pipeline after `prepare`. Returns an exit code and never calls
- * `process.exit`. Every Wrangler call runs against a fresh scoped config derived from
- * `authority`; there is no reusable execution-config path.
+ * Validate the canonical deploy step order (pure): `prepare` first, `deploy` last,
+ * `verify-remote-schema` immediately before `deploy`, and no migration/bootstrap step.
  */
-export declare function runPipeline(
-  authority: DeployConfigAuthority,
-  execute: boolean,
-  deps?: RunPipelineDeps,
-): number
+export declare function validateDeployStepOrder(order?: string[]): { ok: boolean; failures: string[] }
+
+/** Pure 64-hex digest equality — the verified schema authority must equal the deploy authority. */
+export declare function deployAuthorityDigestsMatch(verifiedDigest: unknown, deployDigest: unknown): boolean

@@ -1,5 +1,14 @@
-/** Type declarations for cf:d1:schema:verify:remote (P0-PERSIST-015, read-only). */
-import type { ReadOnlyRunner } from "./lib/d1SchemaContract.d.mts"
+/**
+ * Type declarations for cf:d1:schema:verify:remote (P0-PERSIST-015, read-only;
+ * hardened P0-FIX-018).
+ *
+ * Remote schema verification is ENTRYPOINT-ONLY. The Wrangler-backed runner and the
+ * multi-binding verifier are PRIVATE to the module and are deliberately NOT declared
+ * here — no `makeWranglerReadOnlyRunner`, no `verifyRemoteSchemasWithAuthority`, no
+ * `VerifyWithAuthorityOptions`, no remote process-runner seam. The only exported
+ * surface is the pure gate evaluation, which spawns nothing and returns the retained
+ * authority ONLY when `--remote` and a validated deploy config are both present.
+ */
 import type { DeployConfigAuthority } from "./lib/cfDeployConfigAuthority.d.mts"
 
 export interface RemoteVerifyGateInput { argv?: string[]; repoRoot?: string; configPath?: string }
@@ -12,40 +21,4 @@ export interface RemoteVerifyGateResult {
   configAuthority: DeployConfigAuthority | null
 }
 
-export interface RemoteVerifyResult {
-  ok: boolean
-  /** Safe categories only — never a database ID, config content, or row data. */
-  failures: string[]
-  /**
-   * SHA-256 of the exact retained authority bytes — the deploy orchestrator matches
-   * this against its own digest before uploading. Safe evidence: no ID, name, path,
-   * or config content. `null` only when no authority was supplied.
-   */
-  authorityDigest: string | null
-}
-
-export interface VerifyWithAuthorityOptions {
-  repoRoot?: string
-  /** Injectable for tests; nothing contacts Cloudflare when stubbed. */
-  spawn?: unknown
-}
-
 export declare function evaluateRemoteVerifyGates(input?: RemoteVerifyGateInput): RemoteVerifyGateResult
-
-/**
- * A read-only runner bound to the retained `authority`. Every query opens its own
- * short-lived scoped execution config from the authority bytes and drops it when the
- * call returns — never a reusable path.
- */
-export declare function makeWranglerReadOnlyRunner(binding: string, authority: DeployConfigAuthority, spawn?: unknown, repoRoot?: string): ReadOnlyRunner
-
-/**
- * Verify BOTH bindings against the committed contract using ONE already-retained
- * authority: every Control and Tenant query derives its own scoped execution config
- * from the same authority bytes. Exported so the deploy orchestrator can pass the
- * same authority it will deploy with and match `authorityDigest` before uploading.
- */
-export declare function verifyRemoteSchemasWithAuthority(
-  authority: DeployConfigAuthority,
-  options?: VerifyWithAuthorityOptions,
-): RemoteVerifyResult
