@@ -218,6 +218,28 @@ only verifies the remote schema read-only. D1 data rollback is **separate** from
 Worker rollback. FakeD1 and `cf:deploy:dry-run` are **not** production-readiness
 proof — Issue #155 remains open until authorized remote evidence is reviewed.
 
+**D1 operational evidence packs (P0-OPS-016)** define how that future authorized
+run will be recorded: every operation is a **command-bound receipt** emitted from
+inside the real operator command's result path — **pack-level hashing alone is not
+execution provenance**. `npm run cf:d1:evidence:init` (offline; read-only `git`
+only) derives the commit + clean tree + contract digests and mints a 0600 Ed25519
+session key; each command signs its own receipt, bound to one session + repository
+commit + deploy-config **authority digest**, chained, with proof facts recomputed
+from the repository. Safe categories are exact per-operation allowlists (no
+arbitrary string — e.g. a database name — becomes a category); a recursive scanner
+adds defence in depth. `npm run cf:d1:evidence:verify -- --file <pack> [--session <dir>]`
+verifies fully offline: recomputed pack + receipt digests, every signature, chain,
+one authority, per-operation categories, and cross-operation timestamp monotonicity
+— a complete but unsigned fabricated pack fails. The evidence layer satisfies no
+operator gate and reads no environment. CLI and library verification share
+`verifyEvidencePackAtPath(path, { repoRoot, sessionDir })`; actual HEAD and
+`git status --porcelain` come only from its private allowlisted read-only Git path,
+with no production runner injection or override. Session signatures prove one local
+evidence-session origin only — **not** a Cloudflare attestation, no defence against a
+malicious machine owner. See
+[docs/operations/D1_OPERATIONAL_EVIDENCE.md](docs/operations/D1_OPERATIONAL_EVIDENCE.md);
+the framework itself is **not** remote proof.
+
 After `cf:build`, clean generated artifacts before committing:
 
 ```bash

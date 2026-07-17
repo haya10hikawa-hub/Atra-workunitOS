@@ -30,6 +30,7 @@ import { fileURLToPath } from "node:url"
 import { dirname, resolve } from "node:path"
 import { spawnSync } from "node:child_process"
 import { readFileSync, writeFileSync, rmSync, mkdtempSync } from "node:fs"
+import { createPrivateKey, sign as edSign } from "node:crypto"
 import { tmpdir } from "node:os"
 import { loadManifest, validateManifest, buildPlan, computeDigest, resolveMigrationPath, KNOWN_BINDINGS } from "./lib/d1MigrationManifest.mjs"
 // ONE shared config-authority implementation, used by every remote D1 command.
@@ -39,6 +40,11 @@ import {
 import {
   CREATE_HISTORY_SQL, MIGRATION_HISTORY_TABLE, reconcileFromState, buildAtomicMigrationBatchSql,
 } from "./lib/d1MigrationLedger.mjs"
+import { sha256Hex, canonicalSerialize } from "./lib/d1OperationalEvidence.mjs"
+import {
+  openCommandReceiptContext, assembleUnsignedReceipt, persistSignedReceipt,
+  deriveMigrationPlanDigest, SESSION_PRIVATE_KEY_BASENAME,
+} from "./lib/d1EvidenceReceipts.mjs"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 export const MIGRATE_CONFIRM_PHRASE = "APPLY_PRODUCTION_D1_MIGRATIONS"
@@ -250,6 +256,57 @@ function applyAllLanes(authority) {
   return 0
 }
 
+// ─── Command-local evidence emission (private; not exported) ──────
+//
+// Receipt creation and signing live HERE, after the gate latch and the real apply
+// result. Status is derived from the applied plan RECOMPUTED from the repository;
+// the session key is read and signed inline. No shared function turns a caller
+// result into a signed receipt.
+
+/** Derive status + proof from the REAL apply result (applied plan must be canonical). */
+function deriveMigrationApplyOutcome(repoRoot, applyResult) {
+  if (!applyResult || typeof applyResult.completed !== "boolean" || !Array.isArray(applyResult.appliedPlan)) {
+    return { ok: false, blocked: ["result_shape_invalid"] }
+  }
+  const planDigest = deriveMigrationPlanDigest(repoRoot)
+  if (!planDigest) return { ok: false, blocked: ["proof_underivable"] }
+  const applied = applyResult.appliedPlan.map((step) => ({
+    apply: step.apply, binding: step.binding, kind: step.kind, path: step.path, sequence: step.sequence, sha256: step.sha256,
+  }))
+  const appliedDigest = sha256Hex(canonicalSerialize(applied))
+  // A SUCCESSFUL apply must have executed exactly the committed plan.
+  if (applyResult.completed && appliedDigest !== planDigest) return { ok: false, blocked: ["applied_plan_mismatch"] }
+  return {
+    ok: true, status: applyResult.completed ? "success" : "failed",
+    proof: {
+      plan_digest: planDigest, applied_steps_sha256: appliedDigest,
+      reconciliation: applyResult.completed ? "ledger_reconciled" : "not_applicable",
+    },
+    safeCategories: applyResult.completed
+      ? ["control_lane_applied", "ledger_reconciled", "tenant_lane_applied"]
+      : ["migration_apply_failed"],
+  }
+}
+
+/** Emit the apply receipt from THIS command's real result path. Private. */
+function emitMigrationApplyReceipt(sessionDir, { repoRoot, authority, startedAt, applyResult }) {
+  const producer = "cf_d1_migration_apply"
+  const operation = "migration_apply_completed"
+  const ctx = openCommandReceiptContext(sessionDir, { repoRoot, authority, producer })
+  if (!ctx.ok) return ctx
+  const outcome = deriveMigrationApplyOutcome(repoRoot, applyResult)
+  if (!outcome.ok) return outcome
+  const built = assembleUnsignedReceipt(ctx.session, ctx.existingReceipts, {
+    operation, producer, authoritySha256: ctx.authoritySha256, producerSourceSha256: ctx.producerSourceSha256,
+    startedAt, completedAt: new Date().toISOString(),
+    status: outcome.status, proof: outcome.proof, safeCategories: outcome.safeCategories,
+  })
+  if (!built.ok) return built
+  const pem = readFileSync(resolve(sessionDir, SESSION_PRIVATE_KEY_BASENAME), "utf8")
+  built.receipt.receipt_signature = edSign(null, Buffer.from(built.receipt.receipt_sha256, "utf8"), createPrivateKey(pem)).toString("hex")
+  return persistSignedReceipt(ctx.session, built.receipt)
+}
+
 function main() {
   const argv = process.argv.slice(2)
   const configPath = parseConfigArg(argv)
@@ -262,6 +319,11 @@ function main() {
   // EVERY gate passed — only now may Wrangler be reached.
   executionAuthorized = true
 
+  // Evidence session (optional, operator-supplied): the execution boundary starts
+  // HERE — after every gate — so no receipt can exist for a run the gates refused.
+  const evidenceSessionDir = process.env.CF_D1_EVIDENCE_SESSION_DIR
+  const evidenceStartedAt = evidenceSessionDir ? new Date().toISOString() : null
+
   // The retained authority — NOT a reusable config path — is threaded to every lane.
   // Each Wrangler call derives its own short-lived config from these exact bytes and
   // removes it immediately, so the operator's mutable configPath is never handed to
@@ -272,6 +334,22 @@ function main() {
   } catch (err) {
     console.error(`cf:d1:migrations:apply: FAILED — ${err instanceof Error ? err.message : "apply_failed"}`)
     exitCode = 1
+  }
+
+  // Command-local receipt, emitted ONLY from this real result path once the outcome
+  // is known. Status is derived from the applied plan (recomputed from the
+  // repository) — there is no exit-code parameter to fabricate.
+  if (evidenceSessionDir) {
+    const manifest = loadManifest(REPO_ROOT)
+    const appliedPlan = exitCode === 0 && manifest.ok
+      ? KNOWN_BINDINGS.flatMap((binding) => buildPlan(manifest.manifest, binding))
+      : []
+    const receipt = emitMigrationApplyReceipt(evidenceSessionDir, {
+      repoRoot: REPO_ROOT, authority: gates.configAuthority, startedAt: evidenceStartedAt,
+      applyResult: { completed: exitCode === 0, appliedPlan },
+    })
+    if (receipt.ok) console.log("evidence: receipt recorded (migration_apply_completed)")
+    else console.error(`evidence: receipt FAILED — ${receipt.blocked.join(", ")}`)
   }
   process.exit(exitCode)
 }

@@ -442,3 +442,24 @@ FakeD1 and `cf:deploy:dry-run` are **not production-readiness proof**. The local
 bootstrap proves reproducibility against real SQLite (`node:sqlite`) only.
 **Issue #155 remains open** until an authorized remote execution is performed and its
 evidence (`npm run cf:d1:evidence`) is reviewed.
+
+When that authorized run happens, it is recorded as a **D1 operational evidence
+pack** (P0-OPS-016) whose every operation is a **command-bound, session-signed
+receipt** emitted from the real command's result path — **pack-level hashing alone
+is not execution provenance**. An offline session initializer
+(`cf:d1:evidence:init`, read-only `git` only) derives the commit, clean tree, and
+contract digests and mints a 0600 Ed25519 session key; each receipt is signed and
+bound to one session + commit + deploy-config **authority digest**, with proof
+facts recomputed from the repository. The offline verifier recomputes every receipt
+digest, checks every signature, and enforces the chain, one-authority, per-operation
+category allowlists, and cross-operation timestamp monotonicity (ideally run from a
+second clean checkout with `--session`). CLI and imported verification use the same
+`verifyEvidencePackAtPath(path, { repoRoot, sessionDir })` path; actual HEAD and tree
+cleanliness come only from private allowlisted read-only Git, with no production
+runner injection or override. The evidence layer satisfies no operator
+gate and reads no environment; each workflow step remains a separate human-approved
+action. Session signatures prove one local evidence-session origin only — **not** a
+Cloudflare attestation, and no defence against a malicious machine owner. See
+[D1_OPERATIONAL_EVIDENCE.md](D1_OPERATIONAL_EVIDENCE.md). The framework itself proves
+nothing about staging or production readiness; #155 additionally needs a
+Cloudflare-side cross-check and human review.

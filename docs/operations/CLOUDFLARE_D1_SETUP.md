@@ -944,3 +944,33 @@ execution** and a review of the resulting evidence (`npm run cf:d1:evidence` pro
 an artifact carrying the patch id, commit SHA, tool versions, manifest + schema-contract
 digests, migration filenames/versions, bootstrap + idempotence results, test counts, and
 a timestamp — and **no** database IDs, identities, secrets, SQL, or row data).
+
+### Operational evidence packs (P0-OPS-016)
+
+The future authorized run is recorded as a **D1 operational evidence pack** whose
+every operation is a **command-bound receipt** — emitted from inside the real
+operator command's result path, never fabricated by a caller. **Pack-level hashing
+alone is not execution provenance:** each receipt is Ed25519-signed by a
+per-repository evidence session (`npm run cf:d1:evidence:init`, offline, read-only
+`git` only), bound to one session id + repository commit + deploy-config
+**authority digest**, chained to the previous receipt, and carries proof facts
+recomputed from the repository (the committed migration plan, the built Worker
+artifact bytes, the manifest/schema-contract digests). Safe categories are exact
+**per-operation allowlists** (no arbitrary string — e.g. a database name — can
+become a category), deduplicated and sorted; a recursive sensitive-data scanner
+remains as defence in depth. The offline verifier
+(`npm run cf:d1:evidence:verify -- --file <pack> [--session <dir>]`) recomputes
+every receipt digest, checks every signature, enforces the chain, one-authority,
+per-operation categories, and cross-operation timestamp monotonicity — a complete
+but unsigned fabricated pack fails. CLI and imported verification share
+`verifyEvidencePackAtPath(path, { repoRoot, sessionDir })`; actual HEAD and tree
+cleanliness come only from private allowlisted read-only Git, with no production
+runner injection or override. The evidence layer authorizes nothing: every
+operator gate stays independent and operator-supplied, and it never reads the
+environment. Session signatures prove **one local evidence-session origin only** —
+they are **not** a third-party Cloudflare attestation and do not protect against a
+malicious machine owner. See
+[D1_OPERATIONAL_EVIDENCE.md](D1_OPERATIONAL_EVIDENCE.md) for the receipt design,
+trust model, workflow, and acceptance policy — the framework itself is **not**
+remote proof, and Issue #155 stays open until an authorized run, second-checkout
+verification, a Cloudflare-side cross-check, and human review.

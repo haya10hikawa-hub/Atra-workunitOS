@@ -1,0 +1,97 @@
+{
+  "contract": "d1-operational-evidence",
+  "contract_version": "1",
+  "description": "Allowlisted shape for repository-controlled D1 operational evidence packs (P0-OPS-016, Issue #155). Every operation entry is a COMMAND-BOUND RECEIPT: produced inside the emitting command's real result path, bound to one evidence session (Ed25519 session key), one repository commit, and one deploy-config authority digest, chained to the previous receipt, and signed. Evidence stores safe categories and digests only — never a database ID, database name, token, header, cookie, user email, provider subject, operator input, raw SQL value, application-row value, filesystem path, or raw command output. Unknown fields are rejected at every level. Session signatures prove one local evidence-session origin; they are NOT a third-party Cloudflare attestation and do not protect against a malicious machine owner.",
+  "environment_classes": ["staging", "production"],
+  "statuses": ["success", "failed"],
+  "operations": [
+    "migration_plan_verified",
+    "migration_apply_completed",
+    "remote_schema_verified",
+    "bootstrap_apply_completed",
+    "bootstrap_counts_verified",
+    "worker_preflight_completed",
+    "worker_deploy_completed"
+  ],
+  "required_successful_sequence": [
+    "migration_plan_verified",
+    "migration_apply_completed",
+    "remote_schema_verified",
+    "bootstrap_apply_completed",
+    "bootstrap_counts_verified",
+    "worker_preflight_completed",
+    "worker_deploy_completed"
+  ],
+  "hard_prerequisites": {
+    "remote_schema_verified": ["migration_apply_completed"],
+    "bootstrap_counts_verified": ["bootstrap_apply_completed"],
+    "worker_deploy_completed": ["remote_schema_verified"]
+  },
+  "producers": [
+    "cf_d1_migration_plan",
+    "cf_d1_migration_apply",
+    "cf_d1_schema_verify_remote",
+    "cf_d1_bootstrap_apply",
+    "cf_d1_bootstrap_counts",
+    "cf_worker_preflight",
+    "cf_worker_deploy"
+  ],
+  "producers_by_operation": {
+    "migration_plan_verified": "cf_d1_migration_plan",
+    "migration_apply_completed": "cf_d1_migration_apply",
+    "remote_schema_verified": "cf_d1_schema_verify_remote",
+    "bootstrap_apply_completed": "cf_d1_bootstrap_apply",
+    "bootstrap_counts_verified": "cf_d1_bootstrap_counts",
+    "worker_preflight_completed": "cf_worker_preflight",
+    "worker_deploy_completed": "cf_worker_deploy"
+  },
+  "producer_sources": {
+    "cf_d1_migration_plan": "scripts/cf-d1-migrations-check.mjs",
+    "cf_d1_migration_apply": "scripts/cf-d1-migrations-apply.mjs",
+    "cf_d1_schema_verify_remote": "scripts/cf-d1-schema-verify-remote.mjs",
+    "cf_d1_bootstrap_apply": "scripts/cf-d1-bootstrap-apply.mjs",
+    "cf_d1_bootstrap_counts": "scripts/cf-d1-bootstrap-apply.mjs",
+    "cf_worker_preflight": "scripts/cloudflare-deploy-preflight.mjs",
+    "cf_worker_deploy": "scripts/cloudflare-deploy.mjs"
+  },
+  "safe_categories_by_operation": {
+    "migration_plan_verified": ["manifest_valid", "plan_lanes_verified", "manifest_invalid", "plan_verification_failed"],
+    "migration_apply_completed": ["control_lane_applied", "tenant_lane_applied", "ledger_reconciled", "migration_apply_failed"],
+    "remote_schema_verified": ["control_db_schema_ok", "tenant_db_schema_ok", "schema_verification_failed"],
+    "bootstrap_apply_completed": ["bootstrap_batch_committed", "bootstrap_apply_failed"],
+    "bootstrap_counts_verified": ["tenant_row_verified", "registry_row_verified", "user_row_verified", "membership_row_verified", "identity_row_verified", "counts_verification_failed"],
+    "worker_preflight_completed": ["preflight_ok", "artifacts_verified", "preflight_failed"],
+    "worker_deploy_completed": ["worker_deployed", "worker_deploy_failed"]
+  },
+  "proof_fields_by_operation": {
+    "migration_plan_verified": ["manifest_sha256", "plan_digest"],
+    "migration_apply_completed": ["plan_digest", "applied_steps_sha256", "reconciliation"],
+    "remote_schema_verified": ["schema_contract_sha256", "verification_summary_sha256"],
+    "bootstrap_apply_completed": ["bootstrap_artifact_sha256", "apply_result"],
+    "bootstrap_counts_verified": ["assertions_sha256"],
+    "worker_preflight_completed": ["worker_artifact_sha256", "preflight_contract_sha256"],
+    "worker_deploy_completed": ["worker_artifact_sha256", "deploy_result"]
+  },
+  "proof_category_values": {
+    "reconciliation": ["ledger_reconciled", "ledger_unreconciled", "not_applicable"],
+    "apply_result": ["bootstrap_batch_committed", "bootstrap_apply_failed"],
+    "deploy_result": ["worker_deployed", "worker_deploy_failed"]
+  },
+  "fields": {
+    "top": ["evidence_version", "evidence_id", "environment_class", "created_at", "session", "repository", "toolchain", "authority", "contracts", "operations", "chain"],
+    "session": ["session_id", "public_key"],
+    "repository": ["commit_sha", "dirty_tree"],
+    "toolchain": ["node_version", "wrangler_version"],
+    "authority": ["sha256", "control_tenant_physically_distinct"],
+    "contracts": ["migration_manifest_sha256", "migration_plan_digest", "schema_contract_sha256", "expected_schema_version"],
+    "operation": ["sequence", "operation", "status", "started_at", "completed_at", "authority_sha256", "session_id", "repository_commit_sha", "producer", "producer_source_sha256", "input_digest", "result_digest", "proof", "safe_categories", "previous_receipt_sha256", "receipt_sha256", "receipt_signature"],
+    "chain": ["previous_record_sha256", "evidence_sha256"]
+  },
+  "limits": {
+    "max_file_bytes": 262144,
+    "max_operations": 16,
+    "max_safe_categories_per_operation": 32,
+    "max_safe_category_length": 48,
+    "max_string_length": 256
+  }
+}
