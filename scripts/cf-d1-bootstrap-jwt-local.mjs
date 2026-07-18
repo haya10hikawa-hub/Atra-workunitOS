@@ -209,6 +209,108 @@ export function queryLocalD1Json({ sql, binding = "CONTROL_DB", label = "query",
   return queryJson(run, binding, sql, label)
 }
 
+// ─── async, cancellable execution path (hermetic smoke runner) ──────
+//
+// The sync path above blocks the Node event loop inside `spawnSync`, so a signal
+// arriving during a long wrangler call cannot be handled until it returns. The
+// hermetic runner instead injects `exec(args, { label }) => Promise<{ status,
+// stdout, timedOut }>`, backed by a detached, centrally-registered, deadline-bounded
+// child, so a signal promptly terminates the in-flight D1 child. The SQL/plan logic
+// is identical to the sync path; only the process launch differs.
+
+const CONTROL_COUNTS_SQL =
+  "SELECT (SELECT COUNT(*) FROM tenants) AS tenants, (SELECT COUNT(*) FROM tenant_databases) AS tenant_databases, (SELECT COUNT(*) FROM users) AS users, (SELECT COUNT(*) FROM tenant_memberships) AS tenant_memberships, (SELECT COUNT(*) FROM auth_identities) AS auth_identities;"
+
+function parseD1Results(out, label) {
+  try {
+    const parsed = JSON.parse(out)
+    const first = Array.isArray(parsed) ? parsed[0] : parsed
+    return Array.isArray(first?.results) ? first.results : []
+  } catch {
+    throw new Error(`${label}_json_unparseable`)
+  }
+}
+
+async function execCheck(exec, args, label) {
+  const r = await exec(args, { label })
+  if (r.timedOut) {
+    const e = new Error(label)
+    e.timedOut = true
+    throw e
+  }
+  if (r.status !== 0) throw new Error(label)
+  return r.stdout ?? ""
+}
+
+async function executeFileAsync(exec, binding, file, label) {
+  await execCheck(exec, ["d1", "execute", binding, "--local", "--file", file], label)
+}
+
+async function executeSqlTextAsync(exec, binding, sql, label) {
+  const dir = mkdtempSync(resolve(tmpdir(), "d1-local-jwt-"))
+  const file = resolve(dir, `${label}.sql`)
+  try {
+    writeFileSync(file, sql, { mode: 0o600 })
+    await executeFileAsync(exec, binding, file, label)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+async function queryJsonAsync(exec, binding, sql, label) {
+  const out = await execCheck(exec, ["d1", "execute", binding, "--local", "--command", sql, "--json"], label)
+  return parseD1Results(out, label)
+}
+
+async function onceMigrationAlreadyAppliedAsync(exec, binding, entry) {
+  if (entry.apply !== "once") return false
+  if (!entry.effect || entry.effect.type !== "column_exists") return false
+  const cols = await queryJsonAsync(exec, binding, `PRAGMA table_info(${entry.effect.table});`, `schema_probe:${binding}:${entry.effect.table}`)
+  return cols.some((row) => row.name === entry.effect.column)
+}
+
+async function applyLocalMigrationsAsync(exec, repoRoot) {
+  const loaded = loadManifest(repoRoot)
+  if (!loaded.ok) throw new Error("manifest_unreadable")
+  const checked = validateManifest(loaded.manifest, repoRoot)
+  if (!checked.ok) throw new Error("manifest_invalid")
+  for (const binding of KNOWN_BINDINGS) {
+    for (const entry of loaded.manifest.lanes[binding]) {
+      if (entry.apply === "once" && (await onceMigrationAlreadyAppliedAsync(exec, binding, entry))) continue
+      const resolved = resolveMigrationPath(repoRoot, entry.path)
+      if (!resolved.ok) throw new Error(`migration_path_invalid:${binding}:${resolved.name}`)
+      await executeFileAsync(exec, binding, resolved.absPath, `migration_failed:${binding}:${resolved.name}`)
+    }
+  }
+}
+
+/**
+ * Async, cancellable sibling of {@link runLocalJwtBootstrap}. `exec` launches a
+ * detached, registered, deadline-bounded wrangler child (isolation args already
+ * applied by the caller) and resolves `{ status, stdout, timedOut }`.
+ *
+ * @param {{ env: Record<string,string|undefined>, repoRoot?: string, exec: (args: string[], opts: { label: string }) => Promise<{ status: number|null, stdout?: string, timedOut?: boolean }> }} params
+ * @returns {Promise<{ ok: true, counts: Record<string, number> } | { ok: false, reason: string }>}
+ */
+export async function runLocalJwtBootstrapAsync({ env, repoRoot = REPO_ROOT, exec } = {}) {
+  const plan = buildLocalJwtBootstrapPlan(env, repoRoot)
+  if (!plan.ok) return { ok: false, reason: plan.reason }
+  try {
+    await applyLocalMigrationsAsync(exec, repoRoot)
+    await executeSqlTextAsync(exec, "CONTROL_DB", buildIdempotentBootstrapSql(plan.values), "bootstrap")
+    const rows = await queryJsonAsync(exec, "CONTROL_DB", CONTROL_COUNTS_SQL, "control_verify_counts")
+    return { ok: true, counts: rows[0] ?? {} }
+  } catch (err) {
+    if (err && err.timedOut) return { ok: false, reason: "bootstrap_timeout" }
+    return { ok: false, reason: err instanceof Error ? err.message : "bootstrap_failed" }
+  }
+}
+
+/** Async, cancellable sibling of {@link queryLocalD1Json}. */
+export async function queryLocalD1JsonAsync({ sql, binding = "CONTROL_DB", label = "query", exec } = {}) {
+  return queryJsonAsync(exec, binding, sql, label)
+}
+
 function main() {
   const allowEnvOverride = process.argv.includes("--allow-env-override")
   const authority = resolveLocalJwtAuthority(REPO_ROOT, process.env, { allowEnvOverride })

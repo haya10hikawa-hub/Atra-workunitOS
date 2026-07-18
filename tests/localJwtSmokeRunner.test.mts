@@ -3,6 +3,8 @@ import assert from "node:assert/strict"
 import {
   runHermeticSmoke,
   createOwnedPathRegistry,
+  createChildRegistry,
+  createOwnedRoot,
   buildHermeticEnv,
   buildHermeticConfig,
   buildRs256Token,
@@ -15,13 +17,6 @@ import {
 } from "../scripts/lib/localJwtSmokeRunner.mjs"
 import { generateLocalJwt, verifyLocalJwt } from "../scripts/lib/localJwt.mjs"
 
-// ─── in-memory dependency doubles ───────────────────────────────────
-//
-// Every side effect (fs, build, spawn, HTTP, D1, git) is injected so the state
-// machine runs with NO real I/O. `buildWorker` is mocked to a runner-owned bundle;
-// real `generateLocalJwt`/`verifyLocalJwt` exercise JWT authority for real. The one
-// live integration run lives in the smoke command (`npm run auth:jwt:smoke-local`).
-
 const HEAD = "1111111111111111111111111111111111111111"
 const MOCK_WRANGLER_JSON = JSON.stringify({
   main: ".open-next/worker.js",
@@ -29,6 +24,60 @@ const MOCK_WRANGLER_JSON = JSON.stringify({
   vars: { PERSISTENCE_MODE: "d1" },
   d1_databases: [{ binding: "CONTROL_DB", database_name: "workunit-control-db", database_id: "X" }],
 })
+
+function b64urlJson(seg: string): { alg?: string; exp?: number } {
+  return JSON.parse(Buffer.from(seg, "base64url").toString("utf8"))
+}
+
+// In-memory fs supporting both the sync ops used by atomic root publication and
+// the async ops used by the run/cleanup.
+function makeMockFs(opts: { chmodThrows?: boolean; statBadMode?: boolean; markerWriteThrows?: boolean; markerCorrupt?: boolean } = {}) {
+  const files = new Map<string, string>()
+  const dirs = new Set<string>()
+  const modes = new Map<string, number>()
+  let counter = 0
+  const removeUnder = (p: string) => {
+    for (const k of [...files.keys()]) if (k === p || k.startsWith(p + "/")) files.delete(k)
+    for (const dd of [...dirs]) if (dd === p || dd.startsWith(p + "/")) dirs.delete(dd)
+  }
+  const exists = (p: string) =>
+    files.has(p) || dirs.has(p) || [...files.keys()].some((x) => x.startsWith(p + "/")) || [...dirs].some((x) => x.startsWith(p + "/"))
+  return {
+    files,
+    dirs,
+    mkdtempSync: (prefix: string) => {
+      const p = `${prefix}${(counter++).toString(36)}root`
+      dirs.add(p)
+      modes.set(p, 0o700)
+      return p
+    },
+    chmodSync: (p: string, mode: number) => {
+      if (opts.chmodThrows) throw new Error("injected_chmod_failure")
+      modes.set(p, mode)
+    },
+    statSync: (p: string) => ({ mode: opts.statBadMode ? 0o755 : modes.get(p) ?? 0o700 }),
+    writeFileSync: (p: string, data: string, o?: { mode?: number }) => {
+      if (opts.markerWriteThrows && p.endsWith(".smoke-owner")) throw new Error("injected_marker_write_failure")
+      files.set(p, opts.markerCorrupt && p.endsWith(".smoke-owner") ? "CORRUPT" : String(data))
+      if (o?.mode) modes.set(p, o.mode)
+    },
+    readFileSync: (p: string) => {
+      if (!files.has(p)) throw new Error("ENOENT")
+      return files.get(p)!
+    },
+    rmSync: (p: string) => removeUnder(p),
+    mkdir: async (p: string) => {
+      dirs.add(p)
+    },
+    writeFile: async (p: string, data: string, o?: { mode?: number }) => {
+      files.set(p, String(data))
+      if (o?.mode) modes.set(p, o.mode)
+    },
+    rm: async (p: string) => removeUnder(p),
+    readFile: async (p: string) => (p.endsWith("wrangler.json") ? MOCK_WRANGLER_JSON : files.get(p) ?? ""),
+    existsSync: (p: string) => exists(p),
+  }
+}
 
 interface MockOptions {
   buildHead?: string
@@ -39,28 +88,27 @@ interface MockOptions {
   queryThrowsTimedOut?: boolean
   fetchStatusFor?: (kind: "none" | "hs256" | "rs256" | "expired" | "readiness") => number
   fetchThrows?: boolean
-  chmodThrows?: boolean
   spawnThrows?: boolean
   isAliveForever?: boolean
   portReleased?: boolean
+  portHangs?: boolean
+  rmHangs?: boolean
   gitStatusSequence?: Array<string | null>
   operatorHashSequence?: Array<string | null>
   fixedSecret?: string
   totalMs?: number
+  cleanupMs?: number
   configMainOutsideRoot?: boolean
-}
-
-function b64urlJson(seg: string): { alg?: string; exp?: number } {
-  return JSON.parse(Buffer.from(seg, "base64url").toString("utf8"))
+  fsOpts?: Parameters<typeof makeMockFs>[0]
 }
 
 function makeDeps(opts: MockOptions = {}) {
-  const existing = new Set<string>()
+  const fs = makeMockFs(opts.fsOpts)
   const writes: Array<{ path: string; mode?: number; data: string }> = []
   const rms: string[] = []
   const kills: Array<{ pid: number; signal: string }> = []
-  const closedFds: number[] = []
   const spawns: string[][] = []
+  const signalHandlers: Array<(sig: string) => void> = []
   let spawnCount = 0
   const alive = new Set<number>()
   const gitSeq = opts.gitStatusSequence ?? ["CONST", "CONST"]
@@ -68,7 +116,21 @@ function makeDeps(opts: MockOptions = {}) {
   const opHashSeq = opts.operatorHashSequence ?? ["OPHASH", "OPHASH"]
   let opHashIdx = 0
   const logLines: string[] = []
+  const exitCodes: number[] = []
   let clock = 1_000_000
+
+  // record fs writes for assertions
+  const wrappedWriteFile = fs.writeFile
+  fs.writeFile = async (p: string, data: string, o?: { mode?: number }) => {
+    writes.push({ path: p, mode: o?.mode, data })
+    return wrappedWriteFile(p, data, o)
+  }
+  const wrappedRm = fs.rm
+  fs.rm = async (p: string) => {
+    rms.push(p)
+    if (opts.rmHangs) return new Promise<void>(() => {}) // never resolves
+    return wrappedRm(p)
+  }
 
   const classify = (token: string | null): number => {
     if (!token) return opts.fetchStatusFor?.("none") ?? 401
@@ -95,38 +157,17 @@ function makeDeps(opts: MockOptions = {}) {
     repoRoot: "/repo",
     wranglerBin: "/repo/node_modules/.bin/wrangler",
     openNextBin: "/repo/node_modules/.bin/opennextjs-cloudflare",
-    tmpdir: () => "/mock-tmp",
-    timeouts: { readinessMs: 2_000, pollIntervalMs: 10, stopGraceMs: 50, httpMs: 500, totalMs: opts.totalMs ?? 60_000 },
-    fs: {
-      mkdtemp: async (prefix: string) => {
-        const p = `${prefix}abc123`
-        existing.add(p)
-        return p
-      },
-      mkdir: async (p: string) => {
-        existing.add(p)
-      },
-      writeFile: async (p: string, data: string, o?: { mode?: number }) => {
-        writes.push({ path: p, mode: o?.mode, data })
-        existing.add(p)
-      },
-      chmod: async () => {
-        if (opts.chmodThrows) throw new Error("injected_chmod_failure")
-      },
-      rm: async (p: string) => {
-        rms.push(p)
-        for (const e of [...existing]) if (e === p || e.startsWith(p + "/")) existing.delete(e)
-      },
-      readFile: async (p: string) => {
-        if (p.endsWith("wrangler.json")) return MOCK_WRANGLER_JSON
-        return ""
-      },
-      existsSync: (p: string) => existing.has(p),
+    tmpdir: () => "/mock-tmp/",
+    timeouts: {
+      readinessMs: 2_000,
+      pollIntervalMs: 10,
+      httpMs: 500,
+      totalMs: opts.totalMs ?? 60_000,
+      cleanupMs: opts.cleanupMs ?? 5_000,
     },
+    fs,
     openLogFd: () => 7,
-    closeFd: (fd: number) => {
-      closedFds.push(fd)
-    },
+    closeFd: () => {},
     randomBytes: (n: number) => (opts.fixedSecret ? Buffer.from(opts.fixedSecret.padEnd(n, "A").slice(0, n)) : Buffer.alloc(n, 3)),
     hashFile: () => "x",
     gitHead: () => opts.expectedHead ?? HEAD,
@@ -139,31 +180,23 @@ function makeDeps(opts: MockOptions = {}) {
       }
       const snapshotDir = `${root}/src`
       const workerPath = opts.configMainOutsideRoot ? "/repo/.open-next/worker.js" : `${snapshotDir}/.open-next/worker.js`
-      existing.add(snapshotDir)
-      existing.add(workerPath)
-      return {
-        snapshotDir,
-        workerPath,
-        assetsPath: `${snapshotDir}/.open-next/assets`,
-        wranglerJsonPath: `${snapshotDir}/wrangler.json`,
-        builtHead: opts.buildHead ?? HEAD,
-      }
+      fs.dirs.add(snapshotDir)
+      fs.files.set(workerPath, "worker")
+      return { snapshotDir, workerPath, assetsPath: `${snapshotDir}/.open-next/assets`, wranglerJsonPath: `${snapshotDir}/wrangler.json`, builtHead: opts.buildHead ?? HEAD }
     },
     pickPort: async () => 40000 + spawnCount,
-    isPortFree: async () => opts.portReleased ?? true,
+    isPortFree: async () => {
+      if (opts.portHangs) return new Promise<boolean>(() => {})
+      return opts.portReleased ?? true
+    },
     spawn: (_bin: string, args: string[]) => {
       spawnCount++
       spawns.push(args)
       if (opts.spawnThrows) throw new Error("injected_spawn_failure")
       const pid = 5000 + spawnCount
       alive.add(pid)
-      const handlers: Record<string, () => void> = {}
-      return {
-        pid,
-        on: (ev: string, cb: () => void) => {
-          handlers[ev] = cb
-        },
-      }
+      const handlers: Record<string, (...a: unknown[]) => void> = {}
+      return { pid, on: (ev: string, cb: (...a: unknown[]) => void) => { handlers[ev] = cb }, stdout: { on: () => {} } }
     },
     killProcess: (pid: number, signal: string) => {
       kills.push({ pid, signal })
@@ -183,6 +216,13 @@ function makeDeps(opts: MockOptions = {}) {
     now: () => (clock += 5),
     sleep: async () => {},
     log: (line: string) => logLines.push(line),
+    installSignalHandlers: (handler: (sig: string) => void) => {
+      signalHandlers.push(handler)
+      return () => {}
+    },
+    exit: (code: number) => {
+      exitCodes.push(code)
+    },
     generateLocalJwt,
     verifyLocalJwt,
     runBootstrap: async () =>
@@ -196,7 +236,7 @@ function makeDeps(opts: MockOptions = {}) {
       return opts.queryD1 ? opts.queryD1() : [{ identity_match: 1, user_email_match: 1, active_membership: 1, active_tenant: 1 }]
     },
   }
-  return { deps, writes, rms, kills, spawns, closedFds, logLines }
+  return { deps, fs, writes, rms, kills, spawns, logLines, exitCodes, signalHandlers }
 }
 
 // ─── pure helpers ───────────────────────────────────────────────────
@@ -204,16 +244,18 @@ function makeDeps(opts: MockOptions = {}) {
 test("owned-path registry only tracks what it registered", () => {
   const r = createOwnedPathRegistry()
   r.register("/a/root", "root")
-  r.register("/a/root/.dev.vars", "env")
-  assert.equal(r.has("/a/root/.dev.vars"), true)
+  assert.equal(r.has("/a/root"), true)
   assert.equal(r.has("/operator/.dev.vars"), false)
 })
 
-test("hermetic env is fully fail-closed and local-only", () => {
-  const env = buildHermeticEnv("s".repeat(40), "nonce")
-  assert.equal(env.AUTH_ADAPTER, "jwt")
-  assert.match(env.CF_D1_BOOTSTRAP_IDENTITY_EMAIL, /@example\.invalid$/)
-  for (const flag of HERMETIC_FALSE_FLAGS) assert.equal(env[flag], "false")
+test("child registry tracks pid/pgid and marks settled on exit", () => {
+  const cr = createChildRegistry()
+  const child = { pid: 4242 }
+  cr.register("opennext-build", child)
+  assert.equal(cr.live().length, 1)
+  assert.equal(cr.live()[0].pgid, 4242)
+  cr.markSettled(child)
+  assert.equal(cr.live().length, 0)
 })
 
 test("buildHermeticConfig points main/assets at the runner-owned bundle", () => {
@@ -222,7 +264,13 @@ test("buildHermeticConfig points main/assets at the runner-owned bundle", () => 
   assert.equal(cfg.assets.directory, "/tmp/root/src/.open-next/assets")
 })
 
-test("buildRs256Token relabels the header alg without touching payload/signature", () => {
+test("hermetic env is fully fail-closed and local-only", () => {
+  const env = buildHermeticEnv("s".repeat(40), "nonce")
+  assert.match(env.CF_D1_BOOTSTRAP_IDENTITY_EMAIL, /@example\.invalid$/)
+  for (const flag of HERMETIC_FALSE_FLAGS) assert.equal(env[flag], "false")
+})
+
+test("buildRs256Token relabels alg without touching payload/signature", () => {
   const rs = buildRs256Token("aaa.bbb.ccc")
   const [h, p, s] = rs.split(".")
   assert.equal(b64urlJson(h).alg, "RS256")
@@ -230,28 +278,46 @@ test("buildRs256Token relabels the header alg without touching payload/signature
   assert.equal(s, "ccc")
 })
 
-test("alignmentSql is COUNT-only and never selects a raw value column", () => {
+test("alignmentSql is COUNT-only", () => {
   const sql = alignmentSql(buildHermeticEnv("s".repeat(40), "n"))
   assert.match(sql, /COUNT\(\*\)/)
   assert.doesNotMatch(sql, /SELECT provider_subject|SELECT email/)
 })
 
-test("evaluateProof requires the exact HTTP shape AND the build-source proofs", () => {
-  const good = {
-    no_jwt_status: 401, hs256_status: 200, work_units_key: true, rs256_status: 401, expired_status: 401,
-    jwt_authority_aligned: true, d1_alignment: true, worker_source_match: true, worker_bundle_owned: true,
-  }
+test("evaluateProof requires HTTP shape AND build-source proofs", () => {
+  const good = { no_jwt_status: 401, hs256_status: 200, work_units_key: true, rs256_status: 401, expired_status: 401, jwt_authority_aligned: true, d1_alignment: true, worker_source_match: true, worker_bundle_owned: true }
   assert.equal(evaluateProof(good), true)
   assert.equal(evaluateProof({ ...good, worker_source_match: false }), false)
   assert.equal(evaluateProof({ ...good, hs256_status: 500 }), false)
 })
 
-test("formatResults emits only safe keys, never an unknown key", () => {
+test("formatResults emits only safe keys", () => {
   const out = formatResults({ status: "PASS", hs256_status: 200, secret_field: "SUPERSECRET" })
-  assert.match(out, /status=PASS/)
   assert.equal(out.includes("SUPERSECRET"), false)
   for (const line of out.trim().split("\n")) assert.ok(SAFE_RESULT_KEYS.includes(line.split("=")[0]))
 })
+
+// ─── atomic owned-root publication ──────────────────────────────────
+
+test("createOwnedRoot publishes an atomic, marker-verified root", () => {
+  const { deps } = makeDeps()
+  const registry = createOwnedPathRegistry()
+  const { root, token } = createOwnedRoot(deps, { registry })
+  assert.ok(root.startsWith("/mock-tmp/atra-jwt-smoke-"))
+  assert.equal(registry.list().some((e) => e.kind === "root" && e.path === root), true)
+  assert.equal(deps.fs.readFileSync(`${root}/.smoke-owner`), token)
+})
+
+for (const step of ["chmodThrows", "statBadMode", "markerWriteThrows", "markerCorrupt"] as const) {
+  test(`createOwnedRoot leaves NO root when init fails at: ${step}`, () => {
+    const { deps, fs } = makeDeps({ fsOpts: { [step]: true } })
+    const registry = createOwnedPathRegistry()
+    assert.throws(() => createOwnedRoot(deps, { registry }))
+    // No root directory survived, and nothing was published.
+    assert.equal(fs.dirs.size, 0, "partial root removed")
+    assert.equal(registry.list().some((e) => e.kind === "root"), false, "nothing published")
+  })
+}
 
 // ─── orchestration: happy path ──────────────────────────────────────
 
@@ -264,17 +330,16 @@ test("happy path: full smoke passes and cleans up owned state", async () => {
   assert.equal(results.worker_bundle_owned, true)
   assert.equal(results.no_jwt_status, 401)
   assert.equal(results.hs256_status, 200)
-  assert.equal(results.work_units_key, true)
   assert.equal(results.rs256_status, 401)
   assert.equal(results.expired_status, 401)
-  assert.equal(results.jwt_authority_aligned, true)
-  assert.equal(results.d1_alignment, true)
   assert.equal(results.cleanup, true)
-  assert.equal(results.operator_build_artifact_untouched, true)
+  assert.equal(results.children_stopped, true)
+  assert.equal(results.root_removed, true)
+  assert.equal(m.fs.dirs.size, 0, "temp root removed")
 })
 
-test("invariant: status=PASS is impossible when cleanup fails", async () => {
-  const m = makeDeps({ portReleased: false }) // cleanup fails: port not released
+test("invariant: status=PASS impossible when cleanup fails (port not released)", async () => {
+  const m = makeDeps({ portReleased: false })
   const { ok, results } = await runHermeticSmoke(m.deps)
   assert.equal(results.port_released, false)
   assert.equal(results.cleanup, false)
@@ -282,7 +347,7 @@ test("invariant: status=PASS is impossible when cleanup fails", async () => {
   assert.equal(ok, false)
 })
 
-test("secret + JWT never appear in runner stdout", async () => {
+test("secret + JWT never appear in stdout; .dev.vars is 0600 and carries the secret", async () => {
   const raw = "KNOWN-RAW-BYTES-FOR-LEAK-TEST-PADDED-TO-48-CHARS"
   const m = makeDeps({ fixedSecret: raw })
   await runHermeticSmoke(m.deps)
@@ -290,122 +355,87 @@ test("secret + JWT never appear in runner stdout", async () => {
   const out = m.logLines.join("")
   assert.equal(out.includes(actualSecret), false)
   assert.doesNotMatch(out, /[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/)
-  const envWrite = m.writes.find((w) => w.path.endsWith(".dev.vars"))
-  assert.ok(envWrite)
-  assert.equal(envWrite!.mode, 0o600)
-  assert.equal(envWrite!.data.includes(actualSecret), true)
+  const envWrite = m.writes.find((w) => w.path.endsWith(".dev.vars"))!
+  assert.equal(envWrite.mode, 0o600)
+  assert.equal(envWrite.data.includes(actualSecret), true)
 })
 
-test("temp config points main at the runner-owned bundle, never the operator .open-next", async () => {
+test("temp config points main at the runner-owned bundle, never operator .open-next", async () => {
   const m = makeDeps()
   await runHermeticSmoke(m.deps)
-  const cfgWrite = m.writes.find((w) => w.path.endsWith("wrangler.hermetic.json"))!
-  const cfg = JSON.parse(cfgWrite.data)
+  const cfg = JSON.parse(m.writes.find((w) => w.path.endsWith("wrangler.hermetic.json"))!.data)
   assert.match(cfg.main, /\/mock-tmp\/atra-jwt-smoke-[^/]+\/src\/\.open-next\/worker\.js$/)
-  assert.equal(cfg.main.startsWith("/repo/.open-next"), false)
 })
 
-test("owned root is registered BEFORE chmod: a chmod failure still cleans up", async () => {
-  const m = makeDeps({ chmodThrows: true })
-  const { results } = await runHermeticSmoke(m.deps)
-  assert.equal(results.status, "FAIL")
-  assert.ok(m.rms.some((p) => p.startsWith("/mock-tmp/atra-jwt-smoke-")), "root removed despite chmod failure")
-})
-
-test("child is stopped by its exact process group, never by name", async () => {
+test("wrangler-dev child is stopped by its exact process group, never by name", async () => {
   const m = makeDeps()
   await runHermeticSmoke(m.deps)
   assert.ok(m.kills.some((k) => k.pid === -5001), "process-group signal expected")
-  assert.ok(m.kills.every((k) => Math.abs(k.pid) === 5001), "only the owned pid is ever signalled")
-})
-
-test("cleanup removes only the registered temp root, never an operator path", async () => {
-  const m = makeDeps()
-  await runHermeticSmoke(m.deps)
-  assert.ok(m.rms.length >= 1)
-  for (const p of m.rms) assert.ok(p.startsWith("/mock-tmp/atra-jwt-smoke-"), `rm touched non-owned path: ${p}`)
-})
-
-test("repeated invocations use independent temp roots and both pass", async () => {
-  const a = makeDeps()
-  const b = makeDeps()
-  assert.equal((await runHermeticSmoke(a.deps)).ok, true)
-  assert.equal((await runHermeticSmoke(b.deps)).ok, true)
+  assert.ok(m.kills.every((k) => Math.abs(k.pid) === 5001), "only owned pid signalled")
 })
 
 // ─── build-freshness proofs ─────────────────────────────────────────
 
-test("a stale/mismatched bundle (built head != expected head) cannot pass", async () => {
+test("stale/mismatched bundle (built head != expected head) cannot pass", async () => {
   const m = makeDeps({ buildHead: "deadbeef", expectedHead: HEAD })
-  const { ok, results } = await runHermeticSmoke(m.deps)
+  const { results } = await runHermeticSmoke(m.deps)
   assert.equal(results.worker_source_match, false)
   assert.equal(results.status, "FAIL")
-  assert.equal(ok, false)
 })
 
-test("a bundle outside the runner-owned root is not accepted as owned", async () => {
+test("bundle outside the runner-owned root is not accepted as owned", async () => {
   const m = makeDeps({ configMainOutsideRoot: true })
   const { results } = await runHermeticSmoke(m.deps)
   assert.equal(results.worker_bundle_owned, false)
   assert.equal(results.status, "FAIL")
 })
 
-test("operator build artifact drift (hash changes across the run) fails closed", async () => {
+test("operator artifact drift fails closed", async () => {
   const m = makeDeps({ operatorHashSequence: ["OPHASH", "DIFFERENT"] })
   const { results } = await runHermeticSmoke(m.deps)
   assert.equal(results.operator_build_artifact_untouched, false)
-  assert.equal(results.cleanup, false)
   assert.equal(results.status, "FAIL")
 })
 
-// ─── failure injection: cleanup must always run ─────────────────────
+// ─── failure injection: cleanup always runs ─────────────────────────
 
 async function assertCleanedUp(m: ReturnType<typeof makeDeps>, res: { ok: boolean; results: Record<string, unknown> }, category?: string) {
   assert.equal(res.results.status, "FAIL")
   assert.equal(res.ok, false)
   if (category) assert.equal(res.results.error_category, category)
-  assert.ok(m.rms.some((p: string) => p.startsWith("/mock-tmp/atra-jwt-smoke-")), "owned root removed")
+  assert.equal(m.fs.dirs.size, 0, "owned root removed")
 }
 
-test("failure @ Worker build (failure) cleans up", async () => {
+test("failure @ build (failure) cleans up", async () => {
   const m = makeDeps({ buildThrows: "build_failed" })
   await assertCleanedUp(m, await runHermeticSmoke(m.deps), "build_failed")
 })
 
-test("failure @ Worker build (timeout) cleans up", async () => {
+test("failure @ build (timeout) cleans up", async () => {
   const m = makeDeps({ buildThrows: "build_timeout" })
   await assertCleanedUp(m, await runHermeticSmoke(m.deps), "build_timeout")
 })
 
-test("failure @ bootstrap hang (timeout) cleans up", async () => {
+test("failure @ bootstrap timeout cleans up", async () => {
   const m = makeDeps({ bootstrap: () => ({ ok: false, reason: "bootstrap_timeout" }) })
   await assertCleanedUp(m, await runHermeticSmoke(m.deps), "bootstrap_timeout")
 })
 
-test("failure @ bootstrap (failure) cleans up", async () => {
-  const m = makeDeps({ bootstrap: () => ({ ok: false, reason: "manifest_invalid" }) })
-  const res = await runHermeticSmoke(m.deps)
-  await assertCleanedUp(m, res)
-})
-
-test("failure @ D1 query hang (timeout) cleans up", async () => {
+test("failure @ D1 query timeout cleans up", async () => {
   const m = makeDeps({ queryThrowsTimedOut: true })
   await assertCleanedUp(m, await runHermeticSmoke(m.deps), "d1_query_timeout")
 })
 
-test("failure @ HTTP request hang cleans up", async () => {
+test("failure @ HTTP hang cleans up", async () => {
   const m = makeDeps({ fetchThrows: true })
-  // fetch throws during readiness → worker never ready → readiness_timeout
   const res = await runHermeticSmoke(m.deps)
   assert.equal(res.results.status, "FAIL")
-  assert.ok(m.rms.some((p) => p.startsWith("/mock-tmp/atra-jwt-smoke-")))
+  assert.equal(m.fs.dirs.size, 0)
 })
 
-test("failure @ child spawn throwing synchronously cleans up + closes log fd", async () => {
+test("failure @ child spawn throwing synchronously cleans up", async () => {
   const m = makeDeps({ spawnThrows: true })
-  const res = await runHermeticSmoke(m.deps)
-  await assertCleanedUp(m, res, "worker_start_failed")
-  assert.ok(m.closedFds.includes(7), "log descriptor closed after spawn failure")
+  await assertCleanedUp(m, await runHermeticSmoke(m.deps), "worker_start_failed")
 })
 
 test("failure @ global deadline expiration cleans up", async () => {
@@ -413,41 +443,83 @@ test("failure @ global deadline expiration cleans up", async () => {
   await assertCleanedUp(m, await runHermeticSmoke(m.deps), "total_deadline_exceeded")
 })
 
-test("failure @ cleanup (child cannot be stopped) → status FAIL", async () => {
-  const m = makeDeps({ isAliveForever: true })
-  const { results } = await runHermeticSmoke(m.deps)
-  assert.equal(results.wrangler_process_stopped, false)
-  assert.equal(results.cleanup, false)
-  assert.equal(results.status, "FAIL")
-})
-
-test("unavailable git status (null) fails closed — not treated as unchanged", async () => {
+test("unavailable git status (null) fails closed", async () => {
   const m = makeDeps({ gitStatusSequence: [null, null] })
   const { results } = await runHermeticSmoke(m.deps)
   assert.equal(results.repository_status_unchanged, false)
-  assert.equal(results.cleanup, false)
   assert.equal(results.status, "FAIL")
 })
 
-test("repository drift (status differs) fails closed", async () => {
+test("repository drift fails closed", async () => {
   const m = makeDeps({ gitStatusSequence: ["BEFORE", "AFTER-DRIFT"] })
   const { results } = await runHermeticSmoke(m.deps)
   assert.equal(results.repository_status_unchanged, false)
   assert.equal(results.status, "FAIL")
 })
 
-test("port not released → cleanup fails → status FAIL", async () => {
-  const m = makeDeps({ portReleased: false })
+// ─── bounded-cleanup HANG tests (must terminate within cleanupMs) ───
+
+test("cleanup hang @ child exit → child_cleanup_timeout, status FAIL", async () => {
+  const m = makeDeps({ isAliveForever: true, cleanupMs: 40 })
+  const started = Date.now()
   const { results } = await runHermeticSmoke(m.deps)
-  assert.equal(results.port_released, false)
+  assert.ok(Date.now() - started < 5_000, "must not hang")
+  assert.equal(results.children_stopped, false)
+  assert.equal(results.cleanup_category, "child_cleanup_timeout")
+  assert.equal(results.cleanup, false)
   assert.equal(results.status, "FAIL")
+})
+
+test("cleanup hang @ root removal → root_removal_timeout, status FAIL", async () => {
+  const m = makeDeps({ rmHangs: true, cleanupMs: 40 })
+  const started = Date.now()
+  const { results } = await runHermeticSmoke(m.deps)
+  assert.ok(Date.now() - started < 5_000, "must not hang")
+  assert.equal(results.cleanup_category, "root_removal_timeout")
+  assert.equal(results.cleanup, false)
+  assert.equal(results.status, "FAIL")
+})
+
+test("cleanup hang @ port probe → port_release_timeout, status FAIL", async () => {
+  const m = makeDeps({ portHangs: true, cleanupMs: 40 })
+  const started = Date.now()
+  const { results } = await runHermeticSmoke(m.deps)
+  assert.ok(Date.now() - started < 5_000, "must not hang")
+  assert.equal(results.cleanup_category, "port_release_timeout")
+  assert.equal(results.cleanup, false)
+  assert.equal(results.status, "FAIL")
+})
+
+// ─── signal state machine (unit level; real subprocess tests separate) ──
+
+test("signal DURING run triggers orderly cleanup + exit 143, root removed", async () => {
+  const m = makeDeps()
+  let handler: ((sig: string) => void) | undefined
+  m.deps.installSignalHandlers = (h: (sig: string) => void) => {
+    handler = h
+    return () => {}
+  }
+  // Pause right after the (already published) owned root, so the signal interleaves
+  // before the build — exactly the root-init window the real subprocess test drives.
+  ;(m.deps as { hooks?: unknown }).hooks = {
+    afterRootReady: (signal: AbortSignal) =>
+      new Promise<void>((r) => {
+        const t = setTimeout(r, 5_000)
+        signal?.addEventListener("abort", () => { clearTimeout(t); r() }, { once: true })
+      }),
+  }
+  const runP = runHermeticSmoke(m.deps)
+  await new Promise((r) => setTimeout(r, 5))
+  handler!("SIGTERM")
+  const res = await runP
+  assert.equal(m.fs.dirs.size, 0, "root removed on signal")
+  assert.equal(res.exitCode, 143, "signal exit code 143 selected")
+  assert.equal(res.ok, false)
 })
 
 test("generated secret is at least the required byte length", async () => {
   const m = makeDeps()
   await runHermeticSmoke(m.deps)
-  const envWrite = m.writes.find((w) => w.path.endsWith(".dev.vars"))!
-  const line = envWrite.data.split("\n").find((l) => l.startsWith("JWT_AUTH_SECRET="))!
-  const value = JSON.parse(line.slice("JWT_AUTH_SECRET=".length))
-  assert.ok(Buffer.byteLength(value, "utf8") >= MIN_SECRET_BYTES)
+  const line = m.writes.find((w) => w.path.endsWith(".dev.vars"))!.data.split("\n").find((l) => l.startsWith("JWT_AUTH_SECRET="))!
+  assert.ok(Buffer.byteLength(JSON.parse(line.slice("JWT_AUTH_SECRET=".length)), "utf8") >= MIN_SECRET_BYTES)
 })

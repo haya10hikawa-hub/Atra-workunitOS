@@ -183,12 +183,21 @@ Expired JWT     -> 401
   (build, bootstrap, D1 query, Wrangler startup, readiness, each HTTP request,
   graceful stop); a timeout fails closed with a stable category and triggers
   exact-child termination and cleanup.
-- **Fail-closed, self-cleaning.** `status=PASS` requires **both** the proof gate and
-  cleanup to pass — `status=PASS` with `cleanup=false` is impossible, and an
-  unreadable `git status` fails closed. The runner tracks the exact child process
-  group and every path it created (validated by a non-secret ownership marker before
-  any emergency delete) and removes them in `finally` on success, failure,
-  `SIGINT`/`SIGTERM`, timeout, or assertion error, only ever deleting paths it owns.
+- **Signal-safe ownership.** The temp root is published atomically (synchronous
+  create → `0700` → `0600` ownership marker → verify → register) so no signal can
+  observe a half-created, unremovable root. Every long-running operation
+  (`git archive`, `tar`, the `node_modules` copy, the OpenNext build, each Wrangler
+  D1 call, `wrangler dev`) runs as a **detached child in its own process group**,
+  registered in a central registry the instant it spawns and unregistered only on
+  confirmed exit — so a signal terminates *every* owned group (never by name).
+- **Bounded, fail-closed cleanup.** Cleanup has its own `cleanupMs` budget: if
+  stopping children, removing the root, or probing port release exceeds it, the run
+  reports a stable `*_timeout` category, `cleanup=false`, and `status=FAIL`.
+  `status=PASS` requires **both** the proof gate and cleanup — `status=PASS` with
+  `cleanup=false` is impossible — and an unreadable `git status` fails closed. On
+  `SIGINT`/`SIGTERM` the runner sets an abort flag, terminates all owned groups,
+  runs bounded cleanup, then exits **130**/**143** (a second signal force-kills all
+  groups but deletes no unverified path). It only ever deletes paths it registered.
 - **Local-only.** No remote D1, no `wrangler whoami`, no `--remote`, no deploy, no
   production Cloudflare. Stdout is machine-readable and secret-free.
 - **Scope.** A green run proves the **local** flow only. It does **not** prove

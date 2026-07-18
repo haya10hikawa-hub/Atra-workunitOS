@@ -6,30 +6,32 @@
 // build state. OpenNext's build derives its app dir from `process.cwd()` and
 // writes BOTH `.next` and `.open-next` there, so its output cannot be safely
 // redirected. Instead the runner snapshots the EXACT current HEAD with
-// `git archive HEAD` into its own temp root, symlinks the installed
-// `node_modules` (read-only; `rm` unlinks the symlink, never its target), and
-// builds the Worker INSIDE that snapshot. The temp wrangler config then points
-// only at the snapshot's `.open-next`. The operator `.open-next` is never read,
-// written, or created.
+// `git archive HEAD` into its own temp root, copy-on-write clones the installed
+// `node_modules` into the snapshot (a real directory, so Next infers the correct
+// workspace root; CoW isolates any build-time write so the operator tree is never
+// modified; cleanup `rm -rf` frees the clone), and builds the Worker INSIDE that
+// snapshot. The temp wrangler config then points only at the snapshot's
+// `.open-next`. The operator `.open-next` is never read, written, or created.
 //
-// ── Isolation mechanism (Wrangler 4.99.0, verified from `wrangler … --help`) ──
-// Every stateful artifact lives inside ONE private temp root (mode 0700) that this
-// invocation owns and removes: the exact-HEAD source snapshot + its build, a 0600
-// `.dev.vars` (the ONLY secret-bearing file), a temp `wrangler --config` with
-// absolute snapshot paths, an isolated `--persist-to` D1 shared by BOTH the
-// bootstrap and the Worker, and captured logs. The secret is generated in memory
-// and only written to the 0600 file, never passed as a command-line argument.
-// No `--remote`, no `wrangler whoami`, no deploy: local only.
+// ── Signal-safe ownership ──
+// One private temp root (mode 0700) is published ATOMICALLY (synchronous create →
+// chmod → 0600 ownership marker → marker verify → register) so no signal can
+// observe a half-initialized, unremovable root. Every long-running operation
+// (git archive, tar, node_modules copy, OpenNext build, wrangler D1, wrangler dev)
+// runs as a DETACHED child in its own process group, registered in a central child
+// registry the instant it spawns and unregistered only on confirmed exit. A signal
+// (SIGINT→130 / SIGTERM→143) terminates every live owned group, runs bounded
+// cleanup, then exits; a second signal force-kills all groups but deletes no
+// unverified path. No process is ever killed by name.
 //
-// ── One global deadline ──
-// `deadline = start + totalMs`. Every blocking step (build, bootstrap, D1 query,
-// Wrangler startup, readiness, each HTTP request, graceful stop) receives the
-// remaining budget and fails closed with a stable category. A timeout triggers
-// exact-child termination and owned-state cleanup.
+// ── One global deadline + bounded cleanup ──
+// `deadline = start + totalMs` bounds every blocking step. Cleanup has its own
+// `cleanupMs` budget with stable timeout categories (child_cleanup_timeout /
+// root_removal_timeout / port_release_timeout → cleanup_timeout).
 //
 // ── Fail-closed status ──
-// The final status is a two-stage AND of `proof_passed` and `cleanup_passed`, so
-// `status=PASS` is impossible unless cleanup fully succeeded.
+// `status=PASS` requires BOTH the proof gate and cleanup to pass, so `status=PASS`
+// with `cleanup=false` is impossible.
 
 import { join } from "node:path"
 
@@ -71,8 +73,6 @@ export class SmokeError extends Error {
 // ─── owned-path registry ────────────────────────────────────────────
 //
 // The runner may ONLY remove a path it registered as created by THIS invocation.
-// Nothing else is ever deleted — an operator's pre-existing files are out of reach
-// because they are never registered.
 
 export function createOwnedPathRegistry() {
   const entries = []
@@ -86,6 +86,32 @@ export function createOwnedPathRegistry() {
     },
     has(path) {
       return entries.some((e) => e.path === path)
+    },
+  }
+}
+
+// ─── central owned-child registry ───────────────────────────────────
+//
+// Every detached child (process-group leader, so pgid === pid) is registered the
+// instant it spawns and marked settled only on confirmed exit. Signal + cleanup
+// iterate `live()` and kill each group; no process is ever matched by name.
+
+export function createChildRegistry() {
+  const entries = []
+  return {
+    register(kind, child) {
+      const entry = { kind, pid: child?.pid ?? null, pgid: child?.pid ?? null, started: Date.now(), settled: false, child }
+      entries.push(entry)
+      return entry
+    },
+    markSettled(child) {
+      for (const e of entries) if (e.child === child) e.settled = true
+    },
+    live() {
+      return entries.filter((e) => !e.settled && typeof e.pid === "number")
+    },
+    all() {
+      return entries.map((e) => ({ kind: e.kind, pid: e.pid, pgid: e.pgid, started: e.started, settled: e.settled }))
     },
   }
 }
@@ -125,8 +151,7 @@ export function renderDevVars(env) {
   )
 }
 
-/** Temp wrangler config pointing `main`/assets at the runner-owned snapshot build.
- *  D1 bindings and vars are preserved from the committed config. */
+/** Temp wrangler config pointing `main`/assets at the runner-owned snapshot build. */
 export function buildHermeticConfig(repoConfigText, workerPath, assetsPath) {
   const cfg = JSON.parse(repoConfigText)
   cfg.main = workerPath
@@ -136,8 +161,7 @@ export function buildHermeticConfig(repoConfigText, workerPath, assetsPath) {
 
 // ─── token shaping (no RSA dependency) ──────────────────────────────
 
-/** Relabel a valid HS256 token's header as RS256, keeping payload+signature.
- *  The Worker rejects a non-HS256 `alg` before any signature check → 401. */
+/** Relabel a valid HS256 token's header as RS256, keeping payload+signature. */
 export function buildRs256Token(hs256Token) {
   const parts = String(hs256Token).split(".")
   if (parts.length !== 3) throw new SmokeError("rs256_construction_failed")
@@ -202,10 +226,9 @@ async function defaultDeps() {
   const os = await import("node:os")
   // The OpenNext/Next build resolves internal temp paths from the project location
   // and fails to `mkdir` under deeply-nested macOS `/var/folders` (`os.tmpdir()`)
-  // roots. Prefer a shallow, writable `/tmp` base (== the location where `cf:build`
-  // already works). The base is realpath-canonicalized: `/tmp` is a symlink to
-  // `/private/tmp` on macOS, and the migration-manifest validator rejects paths
-  // that resolve outside the (non-canonical) repo root as `path_escapes_repo`.
+  // roots. Prefer a shallow, writable `/tmp` base; realpath-canonicalize it because
+  // `/tmp` is a symlink to `/private/tmp` on macOS and the migration-manifest
+  // validator rejects paths resolving outside the (non-canonical) repo root.
   const pickTempBase = () => {
     for (const c of ["/tmp", os.tmpdir()]) {
       try {
@@ -227,13 +250,18 @@ async function defaultDeps() {
   return {
     tmpdir: pickTempBase,
     fs: {
-      mkdtemp: (prefix) => fsp.mkdtemp(prefix),
       mkdir: (p, opts) => fsp.mkdir(p, opts),
       writeFile: (p, data, opts) => fsp.writeFile(p, data, opts),
-      chmod: (p, mode) => fsp.chmod(p, mode),
       rm: (p, opts) => fsp.rm(p, opts),
       readFile: (p, enc) => fsp.readFile(p, enc),
       existsSync: (p) => fs.existsSync(p),
+      // synchronous ops for the atomic owned-root publication
+      mkdtempSync: (prefix) => fs.mkdtempSync(prefix),
+      chmodSync: (p, mode) => fs.chmodSync(p, mode),
+      statSync: (p) => fs.statSync(p),
+      writeFileSync: (p, data, opts) => fs.writeFileSync(p, data, opts),
+      readFileSync: (p, enc) => fs.readFileSync(p, enc),
+      rmSync: (p, opts) => fs.rmSync(p, opts),
     },
     openLogFd: (p) => fs.openSync(p, "a", 0o600),
     closeFd: (fd) => {
@@ -249,7 +277,6 @@ async function defaultDeps() {
       const r = cp.spawnSync("git", ["rev-parse", "HEAD"], { cwd: undefined, encoding: "utf8", timeout: 10_000 })
       return r.status === 0 ? r.stdout.trim() : null
     },
-    spawnSyncBounded: (bin, args, opts) => cp.spawnSync(bin, args, opts),
     pickPort: () =>
       new Promise((res, rej) => {
         const s = net.createServer()
@@ -289,6 +316,17 @@ async function defaultDeps() {
     now: () => Date.now(),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     log: (line) => process.stdout.write(line),
+    installSignalHandlers: (handler) => {
+      const si = () => handler("SIGINT")
+      const st = () => handler("SIGTERM")
+      process.on("SIGINT", si)
+      process.on("SIGTERM", st)
+      return () => {
+        process.off("SIGINT", si)
+        process.off("SIGTERM", st)
+      }
+    },
+    exit: (code) => process.exit(code),
   }
 }
 
@@ -300,7 +338,6 @@ const DEFAULT_TIMEOUTS = Object.freeze({
   readinessMs: 60_000,
   httpMs: 20_000,
   pollIntervalMs: 400,
-  stopGraceMs: 4_000,
   cleanupMs: 15_000,
 })
 
@@ -314,61 +351,147 @@ function budget(d, deadline, cap) {
   return Math.max(1, Math.min(cap, rem))
 }
 
-// ─── current-source, runner-owned Worker build ──────────────────────
+/** Race an async factory against a deadline; never rejects. */
+function raceDeadline(d, deadline, factory, category) {
+  const ms = Math.max(0, deadline - d.now())
+  return new Promise((resolve) => {
+    let done = false
+    const timer = d.setTimer(() => {
+      if (done) return
+      done = true
+      resolve({ timedOut: true, category })
+    }, ms)
+    Promise.resolve()
+      .then(factory)
+      .then(
+        (value) => {
+          if (done) return
+          done = true
+          d.clearTimer(timer)
+          resolve({ timedOut: false, value })
+        },
+        () => {
+          if (done) return
+          done = true
+          d.clearTimer(timer)
+          resolve({ timedOut: false, value: undefined })
+        },
+      )
+  })
+}
+
+// ─── atomic owned-root publication ──────────────────────────────────
 
 /**
- * Snapshot the exact current HEAD into `<root>/src`, symlink `node_modules`, and
- * build the OpenNext Worker inside the snapshot. Returns runner-owned paths and
- * the built HEAD. Throws SmokeError("build_timeout"|"build_failed").
+ * Create, harden, and publish the private temp root as ONE synchronous unit so no
+ * signal handler can observe a half-created, unremovable root. On any failure the
+ * partially created root is removed and a SmokeError is thrown.
+ * @returns {{ root: string, token: string }}
  */
-async function defaultBuildWorker(d, { root, deadline, timeouts }) {
+export function createOwnedRoot(d, { registry }) {
+  const root = d.fs.mkdtempSync(join(d.tmpdir(), "atra-jwt-smoke-"))
+  try {
+    d.fs.chmodSync(root, 0o700)
+    const mode = d.fs.statSync(root).mode & 0o777
+    if (mode !== 0o700) throw new SmokeError("root_mode_invalid")
+    const token = d.randomBytes(16).toString("hex")
+    const markerPath = join(root, ".smoke-owner")
+    d.fs.writeFileSync(markerPath, token, { mode: 0o600 })
+    if (d.fs.readFileSync(markerPath, "utf8") !== token) throw new SmokeError("root_marker_mismatch")
+    // Publish only AFTER the marker is written and verified (no race).
+    registry.register(root, "root")
+    return { root, token }
+  } catch (err) {
+    try {
+      d.fs.rmSync(root, { recursive: true, force: true })
+    } catch {
+      /* best effort */
+    }
+    throw err instanceof SmokeError ? err : new SmokeError("root_init_failed")
+  }
+}
+
+function markerMatches(d, root, token) {
+  if (!token) return false
+  try {
+    return d.fs.readFileSync(join(root, ".smoke-owner"), "utf8") === token
+  } catch {
+    return false
+  }
+}
+
+// ─── bounded child spawn (detached, registered, deadline-bounded) ────
+
+/**
+ * Spawn a detached child in its own process group, register it centrally, and
+ * resolve `{ status, signal, stdout, timedOut, spawnFailed }`. On timeout the
+ * process group is SIGKILLed. Never rejects.
+ */
+function spawnCapture(d, kind, bin, args, { cwd, deadline, cap, childRegistry, logFd = null, capture = false } = {}) {
+  const ms = budget(d, deadline, cap)
+  return new Promise((resolve) => {
+    let child
+    try {
+      const stdio = capture ? ["ignore", "pipe", "pipe"] : ["ignore", logFd ?? "ignore", logFd ?? "ignore"]
+      child = d.spawn(bin, args, { cwd, detached: true, stdio })
+    } catch {
+      resolve({ status: null, stdout: "", spawnFailed: true })
+      return
+    }
+    childRegistry.register(kind, child)
+    if (typeof d.onOwnedChildSpawn === "function") d.onOwnedChildSpawn(kind, child)
+    let out = ""
+    if (capture && child.stdout && typeof child.stdout.on === "function") child.stdout.on("data", (c) => { out += c })
+    let settled = false
+    const finish = (res) => {
+      if (settled) return
+      settled = true
+      d.clearTimer(timer)
+      childRegistry.markSettled(child)
+      if (typeof d.onOwnedChildExit === "function") d.onOwnedChildExit(kind, child)
+      resolve(res)
+    }
+    const timer = d.setTimer(() => {
+      if (typeof child.pid === "number") {
+        d.killProcess(-child.pid, "SIGKILL")
+        d.killProcess(child.pid, "SIGKILL")
+      }
+      finish({ status: null, stdout: out, timedOut: true })
+    }, ms)
+    if (typeof child.on === "function") {
+      child.on("exit", (code, signal) => finish({ status: code, signal, stdout: out }))
+      child.on("error", () => finish({ status: null, stdout: out, spawnFailed: true }))
+    }
+  })
+}
+
+// ─── current-source, runner-owned Worker build ──────────────────────
+
+async function defaultBuildWorker(d, { root, deadline, timeouts, childRegistry }) {
   const builtHead = d.gitHead()
   if (!builtHead) throw new SmokeError("build_failed")
   const snapshotDir = join(root, "src")
   await d.fs.mkdir(snapshotDir, { recursive: true })
   const tarPath = join(root, "src.tar")
 
+  const step = (r) => {
+    if (r.timedOut) throw new SmokeError("build_timeout")
+    if (r.spawnFailed || r.status !== 0) throw new SmokeError("build_failed")
+  }
+
   // 1. exact-HEAD source snapshot (git archive is committed-tree only)
-  const archive = d.spawnSyncBounded("git", ["-C", d.repoRoot, "archive", "--format=tar", "-o", tarPath, builtHead], {
-    encoding: "utf8",
-    timeout: budget(d, deadline, timeouts.buildMs),
-  })
-  if (archive.signal || (archive.error && archive.error.code === "ETIMEDOUT")) throw new SmokeError("build_timeout")
-  if (archive.status !== 0) throw new SmokeError("build_failed")
-  const extract = d.spawnSyncBounded("tar", ["-xf", tarPath, "-C", snapshotDir], {
-    encoding: "utf8",
-    timeout: budget(d, deadline, timeouts.buildMs),
-  })
-  if (extract.signal || (extract.error && extract.error.code === "ETIMEDOUT")) throw new SmokeError("build_timeout")
-  if (extract.status !== 0) throw new SmokeError("build_failed")
+  step(await spawnCapture(d, "git-archive", "git", ["-C", d.repoRoot, "archive", "--format=tar", "-o", tarPath, builtHead], { cwd: d.repoRoot, deadline, cap: timeouts.buildMs, childRegistry }))
+  step(await spawnCapture(d, "tar-extract", "tar", ["-xf", tarPath, "-C", snapshotDir], { cwd: root, deadline, cap: timeouts.buildMs, childRegistry }))
   await d.fs.rm(tarPath, { force: true })
 
-  // 2. installed deps as a REAL directory inside the snapshot. A top-level
-  //    `node_modules` symlink (or per-entry symlinks) whose realpath escapes into
-  //    the operator worktree makes Next infer the wrong workspace root and bake
-  //    absolute `/.next/...` requires into the Worker. A copy-on-write clone
-  //    (`cp -c` on APFS) is near-instant, and CoW isolates any build-time write so
-  //    the operator's `node_modules` is never modified. Cleanup `rm -rf` frees the
-  //    clone. On non-APFS platforms a plain recursive copy is used.
+  // 2. installed deps as a REAL directory (CoW clone; isolates any build write).
   const cpArgs = process.platform === "darwin" ? ["-R", "-c"] : ["-R"]
-  const copy = d.spawnSyncBounded("cp", [...cpArgs, join(d.repoRoot, "node_modules"), join(snapshotDir, "node_modules")], {
-    encoding: "utf8",
-    timeout: budget(d, deadline, timeouts.buildMs),
-  })
-  if (copy.signal || (copy.error && copy.error.code === "ETIMEDOUT")) throw new SmokeError("build_timeout")
-  if (copy.status !== 0) throw new SmokeError("build_failed")
+  step(await spawnCapture(d, "node-modules-copy", "cp", [...cpArgs, join(d.repoRoot, "node_modules"), join(snapshotDir, "node_modules")], { cwd: root, deadline, cap: timeouts.buildMs, childRegistry }))
 
   // 3. build the Worker INSIDE the snapshot (cancellable async child)
   const logFd = typeof d.openLogFd === "function" ? d.openLogFd(join(root, "build.log")) : null
   try {
-    await runBoundedChild(d, d.openNextBin, ["build"], {
-      cwd: snapshotDir,
-      deadline,
-      cap: timeouts.buildMs,
-      timeoutCategory: "build_timeout",
-      failCategory: "build_failed",
-      logFd,
-    })
+    step(await spawnCapture(d, "opennext-build", d.openNextBin, ["build"], { cwd: snapshotDir, deadline, cap: timeouts.buildMs, childRegistry, logFd }))
   } finally {
     if (typeof d.closeFd === "function" && logFd != null) d.closeFd(logFd)
   }
@@ -384,48 +507,9 @@ async function defaultBuildWorker(d, { root, deadline, timeouts }) {
   }
 }
 
-/** Run a child bounded by the global deadline; kill its process group on timeout. */
-function runBoundedChild(d, bin, args, { cwd, deadline, cap, timeoutCategory, failCategory, logFd }) {
-  const ms = budget(d, deadline, cap)
-  return new Promise((resolve, reject) => {
-    let child
-    try {
-      child = d.spawn(bin, args, { cwd, detached: true, stdio: ["ignore", logFd ?? "ignore", logFd ?? "ignore"] })
-    } catch {
-      reject(new SmokeError(failCategory))
-      return
-    }
-    let settled = false
-    const timer = d.setTimer(() => {
-      if (settled) return
-      settled = true
-      if (typeof child.pid === "number") {
-        d.killProcess(-child.pid, "SIGKILL")
-        d.killProcess(child.pid, "SIGKILL")
-      }
-      reject(new SmokeError(timeoutCategory))
-    }, ms)
-    if (typeof child.on === "function") {
-      child.on("exit", (code) => {
-        if (settled) return
-        settled = true
-        d.clearTimer(timer)
-        if (code === 0) resolve()
-        else reject(new SmokeError(failCategory))
-      })
-      child.on("error", () => {
-        if (settled) return
-        settled = true
-        d.clearTimer(timer)
-        reject(new SmokeError(failCategory))
-      })
-    }
-  })
-}
-
 // ─── Worker process lifecycle (wrangler dev) ────────────────────────
 
-async function startWorker(d, { runRoot, configPath, persistTo, logPath, deadline, timeouts }) {
+async function startWorker(d, { runRoot, configPath, persistTo, logPath, deadline, timeouts, childRegistry }) {
   for (let attempt = 0; attempt < 5; attempt++) {
     if (remainingMs(d, deadline) <= 0) throw new SmokeError("total_deadline_exceeded")
     const port = await d.pickPort()
@@ -441,11 +525,14 @@ async function startWorker(d, { runRoot, configPath, persistTo, logPath, deadlin
       if (typeof d.closeFd === "function" && logFd != null) d.closeFd(logFd)
       throw new SmokeError("worker_start_failed")
     }
-    if (typeof d.onSpawn === "function") d.onSpawn(child)
+    childRegistry.register("wrangler-dev", child)
+    if (typeof d.onOwnedChildSpawn === "function") d.onOwnedChildSpawn("wrangler-dev", child)
     let exitedEarly = false
     if (typeof child.on === "function") {
       child.on("exit", () => {
         exitedEarly = true
+        childRegistry.markSettled(child)
+        if (typeof d.onOwnedChildExit === "function") d.onOwnedChildExit("wrangler-dev", child)
       })
       child.on("error", () => {
         exitedEarly = true
@@ -458,7 +545,7 @@ async function startWorker(d, { runRoot, configPath, persistTo, logPath, deadlin
       if (typeof d.closeFd === "function" && logFd != null) d.closeFd(logFd)
     }
     if (ready === "ready") return { child, port }
-    await stopChild(d, child, timeouts)
+    // startup failure / port race: the child stays registered and is reaped by cleanup.
     if (ready === "timeout") throw new SmokeError("readiness_timeout")
     if (ready === "deadline") throw new SmokeError("total_deadline_exceeded")
   }
@@ -489,56 +576,89 @@ function abortAfter(d, ms) {
   return ac.signal
 }
 
-async function stopChild(d, child, timeouts) {
-  if (!child || typeof child.pid !== "number") return true
-  const pid = child.pid
-  d.killProcess(-pid, "SIGTERM")
-  d.killProcess(pid, "SIGTERM")
-  const graceDeadline = d.now() + timeouts.stopGraceMs
-  while (d.now() < graceDeadline) {
-    if (!d.isAlive(pid)) return true
-    await d.sleep(100)
+// ─── bounded cleanup ────────────────────────────────────────────────
+
+async function waitChildrenExit(d, childRegistry, cleanupDeadline) {
+  let escalated = false
+  while (d.now() < cleanupDeadline) {
+    const live = childRegistry.live().filter((e) => d.isAlive(e.pid))
+    if (live.length === 0) return true
+    if (!escalated) {
+      for (const e of live) {
+        d.killProcess(-e.pgid, "SIGKILL")
+        d.killProcess(e.pgid, "SIGKILL")
+      }
+      escalated = true
+    }
+    await d.sleep(50)
   }
-  d.killProcess(-pid, "SIGKILL")
-  d.killProcess(pid, "SIGKILL")
-  await d.sleep(100)
-  return !d.isAlive(pid)
+  return childRegistry.live().every((e) => !d.isAlive(e.pid))
 }
 
-// ─── cleanup ────────────────────────────────────────────────────────
-
-async function performCleanup(d, { child, registry, port, repoStatusBefore, operatorHashBefore, timeouts }) {
+async function performCleanup(d, { childRegistry, registry, port, repoStatusBefore, operatorHashBefore, token, timeouts }) {
+  const cleanupDeadline = d.now() + timeouts.cleanupMs
   const report = {}
-  report.wrangler_process_stopped = await stopChild(d, child, timeouts)
+  let timeoutCategory = null
 
-  const root = registry.list().find((e) => e.kind === "root")
-  if (root) {
-    try {
-      await d.fs.rm(root.path, { recursive: true, force: true })
-    } catch {
-      /* force:true already tolerant */
-    }
+  // 1. terminate every live owned process group (idempotent).
+  for (const e of childRegistry.live()) {
+    d.killProcess(-e.pgid, "SIGTERM")
+    d.killProcess(e.pgid, "SIGTERM")
   }
-  const gone = (path) => !d.fs.existsSync(path)
-  const byKind = (kind) => registry.list().find((e) => e.kind === kind)
+  // 2. wait for confirmed exits (bounded; escalates to SIGKILL).
+  report.children_stopped = await waitChildrenExit(d, childRegistry, cleanupDeadline)
+  if (!report.children_stopped) timeoutCategory = timeoutCategory ?? "child_cleanup_timeout"
+
+  // 4. remove the marker-verified owned root (bounded).
+  const rootEntry = registry.list().find((e) => e.kind === "root")
+  if (rootEntry) {
+    if (markerMatches(d, rootEntry.path, token)) {
+      const r = await raceDeadline(d, cleanupDeadline, () => d.fs.rm(rootEntry.path, { recursive: true, force: true }), "root_removal_timeout")
+      if (r.timedOut) timeoutCategory = timeoutCategory ?? "root_removal_timeout"
+    }
+    report.root_removed = !d.fs.existsSync(rootEntry.path)
+  } else {
+    report.root_removed = true
+  }
+
+  // 5. verify registered artifacts are gone.
+  const gone = (p) => !d.fs.existsSync(p)
+  const byKind = (k) => registry.list().find((e) => e.kind === k)
   report.temporary_env_removed = !byKind("env") || gone(byKind("env").path)
   report.temporary_config_removed = !byKind("config") || gone(byKind("config").path)
   report.temporary_tokens_removed = true // tokens live only in memory; none written to disk
   report.temporary_d1_state_removed = !byKind("d1") || gone(byKind("d1").path)
   report.temporary_logs_removed = !byKind("log") || gone(byKind("log").path)
   report.temporary_build_removed = !byKind("root") || gone(join(byKind("root").path, "src"))
-  report.port_released = port == null ? true : await d.isPortFree(port)
 
-  // Fail closed if git status cannot be read either before OR after the run.
+  // 6. port release (bounded).
+  if (port == null) {
+    report.port_released = true
+  } else {
+    const r = await raceDeadline(d, cleanupDeadline, () => d.isPortFree(port), "port_release_timeout")
+    if (r.timedOut) {
+      report.port_released = false
+      timeoutCategory = timeoutCategory ?? "port_release_timeout"
+    } else {
+      report.port_released = r.value === true
+    }
+  }
+
+  // 7. git status must be readable before AND after, and unchanged.
   const after = safeGitStatus(d)
   report.repository_status_unchanged = repoStatusBefore != null && after != null && after === repoStatusBefore
+  // 8. operator artifact byte-identical (or stays absent).
+  const opAfter = typeof d.hashOperatorArtifact === "function" ? d.hashOperatorArtifact() : null
+  report.operator_build_artifact_untouched = operatorHashBefore === opAfter
 
-  // The operator's `.open-next/worker.js` must be byte-identical (or stay absent).
-  const operatorHashAfter = typeof d.hashOperatorArtifact === "function" ? d.hashOperatorArtifact() : null
-  report.operator_build_artifact_untouched = operatorHashBefore === operatorHashAfter
-
+  if (timeoutCategory) {
+    report.cleanup_category = timeoutCategory
+    report.cleanup_timeout = true
+  }
   report.cleanup =
-    report.wrangler_process_stopped &&
+    !timeoutCategory &&
+    report.children_stopped &&
+    report.root_removed &&
     report.temporary_env_removed &&
     report.temporary_config_removed &&
     report.temporary_tokens_removed &&
@@ -564,12 +684,12 @@ function safeGitStatus(d) {
 // ─── the state machine ──────────────────────────────────────────────
 
 /**
- * Run the full hermetic smoke. Always cleans up owned state in `finally`, for
- * success AND every failure path. `status=PASS` requires BOTH the proof gate and
- * cleanup to pass. Returns safe results; never throws for an expected failure.
+ * Run the full hermetic smoke. Installs signal handlers, owns all children and the
+ * temp root, and always runs bounded cleanup — on success, failure, or signal.
+ * `status=PASS` requires BOTH the proof gate and cleanup to pass.
  *
  * @param {Record<string, unknown>} [overrides] injectable dependencies (see defaults)
- * @returns {Promise<{ ok: boolean, results: Record<string, unknown> }>}
+ * @returns {Promise<{ ok: boolean, results: Record<string, unknown>, exitCode: number }>}
  */
 export async function runHermeticSmoke(overrides = {}) {
   const base = await defaultDeps()
@@ -581,55 +701,121 @@ export async function runHermeticSmoke(overrides = {}) {
   const deadline = d.now() + timeouts.totalMs
 
   const registry = createOwnedPathRegistry()
+  const childRegistry = createChildRegistry()
   const results = {}
   const repoStatusBefore = safeGitStatus(d)
   const operatorHashBefore = typeof d.hashOperatorArtifact === "function" ? d.hashOperatorArtifact() : null
   const expectedHead = typeof d.gitHead === "function" ? d.gitHead() : null
-  let child = null
   let port = null
+  let ownerToken = null
+
+  let aborting = false
+  let signalCode = null
+  let finalized = false
+  let finalizePromise = null
+  const abortController = new AbortController()
+
+  async function finalize({ signal = false } = {}) {
+    if (finalized) return finalizePromise
+    finalized = true
+    finalizePromise = (async () => {
+      const cleanupReport = await performCleanup(d, { childRegistry, registry, port, repoStatusBefore, operatorHashBefore, token: ownerToken, timeouts })
+      Object.assign(results, cleanupReport)
+      const proofPassed = evaluateProof(results)
+      results.status = proofPassed && cleanupReport.cleanup === true && !signal ? "PASS" : "FAIL"
+      d.log(formatResults(results))
+      return results
+    })()
+    return finalizePromise
+  }
+
+  // Conclude the run: the CALLER owns `process.exit(exitCode)`, so there is a single
+  // exit authority and no race between a signal handler and the caller.
+  function conclude() {
+    removeSignals()
+    const exitCode = aborting ? signalCode ?? 1 : results.status === "PASS" ? 0 : 1
+    return { ok: results.status === "PASS" && !aborting, results, exitCode }
+  }
+
+  function onSignal(sig) {
+    const code = sig === "SIGINT" ? 130 : 143
+    if (aborting) {
+      // second signal: force-kill every owned group; delete no unverified path.
+      for (const e of childRegistry.live()) {
+        d.killProcess(-e.pgid, "SIGKILL")
+        d.killProcess(e.pgid, "SIGKILL")
+      }
+      return
+    }
+    aborting = true
+    signalCode = code
+    results.error_category = results.error_category ?? "aborted_by_signal"
+    // Interrupt any test-only pause hook and any abort-aware wait, then terminate
+    // every live owned group and run bounded cleanup. The main run awaits the same
+    // `finalizePromise` and returns the signal exit code to the caller.
+    try {
+      abortController.abort()
+    } catch {
+      /* no-op */
+    }
+    for (const e of childRegistry.live()) {
+      d.killProcess(-e.pgid, "SIGTERM")
+      d.killProcess(e.pgid, "SIGTERM")
+    }
+    void finalize({ signal: true })
+  }
+
+  const removeSignals = typeof d.installSignalHandlers === "function" ? d.installSignalHandlers(onSignal) : () => {}
 
   try {
-    // 1. private temp root — register BEFORE any fallible post-creation step so a
-    //    chmod/marker failure still removes the root.
-    const root = await d.fs.mkdtemp(join(d.tmpdir(), "atra-jwt-smoke-"))
-    registry.register(root, "root")
-    const ownerToken = d.randomBytes(16).toString("hex")
-    if (typeof d.onRoot === "function") d.onRoot(root, ownerToken)
-    await d.fs.chmod(root, 0o700)
-    // Non-secret ownership marker: lets the emergency handler prove the root is
-    // ours before deleting it (never a bare string-prefix check).
-    await d.fs.writeFile(join(root, ".smoke-owner"), ownerToken, { mode: 0o600 })
+    // 1. atomic owned-root publication (synchronous — no signal can interleave).
+    const owned = createOwnedRoot(d, { registry })
+    const root = owned.root
+    ownerToken = owned.token
+    if (typeof d.onRootReady === "function") d.onRootReady(root, ownerToken)
+    // test-only async pause point (never enabled by the production CLI).
+    if (d.hooks && typeof d.hooks.afterRootReady === "function") await d.hooks.afterRootReady(abortController.signal)
+    if (aborting) { await finalizePromise; return conclude() }
 
     const envPath = registry.register(join(root, ".dev.vars"), "env")
     const configPath = registry.register(join(root, "wrangler.hermetic.json"), "config")
     const persistTo = registry.register(join(root, "state"), "d1")
     const logPath = registry.register(join(root, "dev.log"), "log")
 
-    // 2. current-source, runner-owned Worker build (fails closed on timeout)
-    const build = await buildWorker({ root, deadline, timeouts })
+    // 2. current-source, runner-owned Worker build.
+    const build = await buildWorker({ root, deadline, timeouts, childRegistry })
+    if (aborting) { await finalizePromise; return conclude() }
     results.worker_source_match =
       typeof build.builtHead === "string" && build.builtHead.length > 0 && build.builtHead === expectedHead
     results.worker_bundle_owned =
       typeof build.workerPath === "string" && build.workerPath.startsWith(root) && d.fs.existsSync(build.workerPath)
 
-    // 3. synthetic secret + identity (secret is never a CLI argument)
+    // 3. synthetic secret + identity (secret is never a CLI argument).
     const secret = d.randomBytes(48).toString("base64url")
     if (Buffer.byteLength(secret, "utf8") < MIN_SECRET_BYTES) throw new SmokeError("secret_too_short")
     const nonce = d.randomBytes(6).toString("hex")
     const env = buildHermeticEnv(secret, nonce)
 
-    // 4. write the ONLY secret-bearing file (0600) + temp config (0600, snapshot paths)
+    // 4. write the ONLY secret-bearing file (0600) + temp config (0600).
     await d.fs.writeFile(envPath, renderDevVars(env), { mode: 0o600 })
     const repoConfigText = await d.fs.readFile(build.wranglerJsonPath, "utf8")
     await d.fs.writeFile(configPath, buildHermeticConfig(repoConfigText, build.workerPath, build.assetsPath), { mode: 0o600 })
 
-    // 5. bootstrap migrations + identity into the ISOLATED D1 (current-source)
+    // 5. bootstrap migrations + identity into the ISOLATED D1 (async, cancellable).
     if (remainingMs(d, deadline) <= 0) throw new SmokeError("total_deadline_exceeded")
-    const wrangler = { bin: d.wranglerBin, cwd: build.snapshotDir, configPath, persistTo, remaining: () => Math.min(timeouts.bootstrapMs, remainingMs(d, deadline)) }
-    const boot = await d.runBootstrap({ env, repoRoot: build.snapshotDir, wrangler })
+    const makeExec = (cap) => (wargs, { label } = {}) =>
+      spawnCapture(d, `d1:${label ?? "exec"}`, d.wranglerBin, [...wargs, "--config", configPath, "--persist-to", persistTo], {
+        cwd: build.snapshotDir,
+        deadline,
+        cap,
+        childRegistry,
+        capture: true,
+      })
+    const boot = await d.runBootstrap({ env, repoRoot: build.snapshotDir, exec: makeExec(timeouts.bootstrapMs) })
+    if (aborting) { await finalizePromise; return conclude() }
     if (!boot.ok) throw new SmokeError(boot.reason === "bootstrap_timeout" ? "bootstrap_timeout" : `bootstrap_failed:${boot.reason}`)
 
-    // JWT authority alignment (in-memory generate + verify)
+    // JWT authority alignment (in-memory generate + verify).
     const nowSec = () => Math.floor(d.now() / 1000)
     const fresh = await d.generateLocalJwt(env, { nowSeconds: nowSec(), ttlSeconds: 300 })
     const v = await d.verifyLocalJwt(fresh, env, { nowSeconds: nowSec() + 1 })
@@ -640,20 +826,15 @@ export async function runHermeticSmoke(overrides = {}) {
     results.jwt_email_present = v.emailPresent === true
     results.bootstrap_provider_is_jwt = env.CF_D1_BOOTSTRAP_IDENTITY_PROVIDER === "jwt"
 
-    // D1 alignment (COUNT-only, against the SAME isolated D1)
+    // D1 alignment (COUNT-only, against the SAME isolated D1).
     if (remainingMs(d, deadline) <= 0) throw new SmokeError("total_deadline_exceeded")
     let rows
     try {
-      rows = await d.queryD1({
-        sql: alignmentSql(env),
-        binding: "CONTROL_DB",
-        label: "align",
-        repoRoot: build.snapshotDir,
-        wrangler: { ...wrangler, remaining: () => Math.min(timeouts.d1QueryMs, remainingMs(d, deadline)) },
-      })
+      rows = await d.queryD1({ sql: alignmentSql(env), binding: "CONTROL_DB", label: "align", exec: makeExec(timeouts.d1QueryMs) })
     } catch (err) {
       throw new SmokeError(err && err.timedOut ? "d1_query_timeout" : "d1_query_failed")
     }
+    if (aborting) { await finalizePromise; return conclude() }
     const row = rows && rows[0] ? rows[0] : {}
     results.identity_user_exists = toNumber(row.identity_match) > 0
     results.bootstrap_subject_matches_jwt = toNumber(row.identity_match) > 0
@@ -661,10 +842,13 @@ export async function runHermeticSmoke(overrides = {}) {
     results.active_membership_exists = toNumber(row.active_membership) > 0
     results.active_tenant_exists = toNumber(row.active_tenant) > 0
 
-    // 6. start the Worker on an ephemeral port + wait for readiness
-    ;({ child, port } = await startWorker(d, { runRoot: build.snapshotDir, configPath, persistTo, logPath, deadline, timeouts }))
+    // 6. start the Worker on an ephemeral port + wait for readiness.
+    ;({ port } = await startWorker(d, { runRoot: build.snapshotDir, configPath, persistTo, logPath, deadline, timeouts, childRegistry }))
+    // test-only async pause point (never enabled by the production CLI).
+    if (d.hooks && typeof d.hooks.afterWorkerReady === "function") await d.hooks.afterWorkerReady(abortController.signal)
+    if (aborting) { await finalizePromise; return conclude() }
 
-    // 7. five HTTP cases (each request bounded by the global deadline)
+    // 7. five HTTP cases (each request bounded by the global deadline).
     const inbox = `http://127.0.0.1:${port}/api/workunit/inbox`
     results.no_jwt_status = await httpStatus(d, inbox, null, deadline, timeouts)
     const hs = await httpJson(d, inbox, fresh, deadline, timeouts)
@@ -674,10 +858,7 @@ export async function runHermeticSmoke(overrides = {}) {
     const expired = await d.generateLocalJwt(env, { nowSeconds: nowSec() - 4000, ttlSeconds: 300 })
     results.expired_status = await httpStatus(d, inbox, expired, deadline, timeouts)
 
-    // A 200 here can ONLY happen if the Worker read the identity the bootstrap
-    // seeded into the isolated `--persist-to` DB — i.e. they share one local D1.
     results.worker_and_bootstrap_share_local_d1 = results.hs256_status === 200
-
     results.jwt_authority_aligned =
       results.jwt_algorithm_is_hs256 &&
       results.jwt_signature_valid &&
@@ -693,18 +874,17 @@ export async function runHermeticSmoke(overrides = {}) {
       results.active_tenant_exists &&
       results.worker_and_bootstrap_share_local_d1
   } catch (err) {
-    results.error_category = err instanceof SmokeError ? err.category : "unexpected_error"
+    results.error_category = results.error_category ?? (err instanceof SmokeError ? err.category : "unexpected_error")
   }
 
-  // ── two-stage, fail-closed status ──
-  const proofPassed = evaluateProof(results)
-  const cleanupReport = await performCleanup(d, { child, registry, port, repoStatusBefore, operatorHashBefore, timeouts })
-  Object.assign(results, cleanupReport)
-  const cleanupPassed = cleanupReport.cleanup === true
-  results.status = proofPassed && cleanupPassed ? "PASS" : "FAIL"
-
-  d.log(formatResults(results))
-  return { ok: results.status === "PASS", results }
+  if (aborting) {
+    // the signal handler triggered finalize; await its bounded cleanup, then let
+    // the CALLER own the exit (single exit authority via the returned exitCode).
+    await finalizePromise
+    return conclude()
+  }
+  await finalize({})
+  return conclude()
 }
 
 async function httpStatus(d, url, token, deadline, timeouts) {
