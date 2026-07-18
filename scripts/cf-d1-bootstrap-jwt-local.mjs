@@ -80,13 +80,31 @@ export function buildIdempotentBootstrapSql(values, now = new Date().toISOString
   ].join("\n")
 }
 
-// A wrangler invocation is fully described by { bin, cwd, extraArgs }. Threading
-// these through every d1 call is what lets the hermetic smoke runner point BOTH
-// the migrations and the seed at an isolated `--config` + `--persist-to` without
-// the CLI default path (operator `.dev.vars` / default `.wrangler`) changing.
-function createWranglerRunner({ wranglerBin = WRANGLER_BIN, cwd = REPO_ROOT, extraArgs = [] } = {}) {
+// A wrangler invocation is fully described by { bin, cwd, extraArgs, remaining }.
+// Threading these through every d1 call is what lets the hermetic smoke runner
+// point BOTH the migrations and the seed at an isolated `--config` + `--persist-to`
+// without the CLI default path (operator `.dev.vars` / default `.wrangler`)
+// changing. `remaining()` returns the caller's remaining time budget (ms); each
+// spawn is bounded by it and a timeout is surfaced as `err.timedOut` so the
+// hermetic runner can report a stable `*_timeout` category.
+function timedOutError(label) {
+  const e = new Error(label ?? "wrangler_timeout")
+  e.timedOut = true
+  return e
+}
+
+function createWranglerRunner({ wranglerBin = WRANGLER_BIN, cwd = REPO_ROOT, extraArgs = [], remaining } = {}) {
   return function run(args, opts = {}) {
-    const result = spawnSync(wranglerBin, [...args, ...extraArgs], { cwd, encoding: "utf8", ...opts })
+    const spawnOpts = { cwd, encoding: "utf8", ...opts }
+    if (typeof remaining === "function") {
+      const rem = remaining()
+      if (!(rem > 0)) throw timedOutError(opts.safeLabel)
+      spawnOpts.timeout = rem
+    }
+    const result = spawnSync(wranglerBin, [...args, ...extraArgs], spawnOpts)
+    if (result.signal || (result.error && result.error.code === "ETIMEDOUT")) {
+      throw timedOutError(opts.safeLabel)
+    }
     if (result.status !== 0) {
       throw new Error(opts.safeLabel ?? "wrangler_failed")
     }
@@ -161,18 +179,19 @@ function isolationArgs(wrangler = {}) {
  * seeded value. `wrangler` selects the binary, working directory, and the
  * `--config`/`--persist-to` isolation used by the hermetic smoke runner.
  *
- * @param {{ env: Record<string,string|undefined>, repoRoot?: string, wrangler?: { bin?: string, cwd?: string, configPath?: string, persistTo?: string } }} params
+ * @param {{ env: Record<string,string|undefined>, repoRoot?: string, wrangler?: { bin?: string, cwd?: string, configPath?: string, persistTo?: string, remaining?: () => number } }} params
  * @returns {{ ok: true, counts: Record<string, number> } | { ok: false, reason: string }}
  */
 export function runLocalJwtBootstrap({ env, repoRoot = REPO_ROOT, wrangler = {} } = {}) {
   const plan = buildLocalJwtBootstrapPlan(env, repoRoot)
   if (!plan.ok) return { ok: false, reason: plan.reason }
-  const run = createWranglerRunner({ wranglerBin: wrangler.bin, cwd: wrangler.cwd, extraArgs: isolationArgs(wrangler) })
+  const run = createWranglerRunner({ wranglerBin: wrangler.bin, cwd: wrangler.cwd, extraArgs: isolationArgs(wrangler), remaining: wrangler.remaining })
   try {
     applyLocalMigrations(run, repoRoot)
     executeSqlText(run, "CONTROL_DB", buildIdempotentBootstrapSql(plan.values), "bootstrap")
     return { ok: true, counts: verifyCounts(run) }
   } catch (err) {
+    if (err && err.timedOut) return { ok: false, reason: "bootstrap_timeout" }
     return { ok: false, reason: err instanceof Error ? err.message : "bootstrap_failed" }
   }
 }
@@ -180,12 +199,13 @@ export function runLocalJwtBootstrap({ env, repoRoot = REPO_ROOT, wrangler = {} 
 /**
  * Run a COUNT-only (or metadata-only) query against a caller-chosen isolated local
  * D1. Callers must pass predicate-shaped SQL that returns numbers, never values.
+ * A wrangler timeout propagates as an Error with `.timedOut === true`.
  *
- * @param {{ sql: string, binding?: string, label?: string, wrangler?: { bin?: string, cwd?: string, configPath?: string, persistTo?: string } }} params
+ * @param {{ sql: string, binding?: string, label?: string, wrangler?: { bin?: string, cwd?: string, configPath?: string, persistTo?: string, remaining?: () => number } }} params
  * @returns {Array<Record<string, unknown>>}
  */
 export function queryLocalD1Json({ sql, binding = "CONTROL_DB", label = "query", wrangler = {} }) {
-  const run = createWranglerRunner({ wranglerBin: wrangler.bin, cwd: wrangler.cwd, extraArgs: isolationArgs(wrangler) })
+  const run = createWranglerRunner({ wranglerBin: wrangler.bin, cwd: wrangler.cwd, extraArgs: isolationArgs(wrangler), remaining: wrangler.remaining })
   return queryJson(run, binding, sql, label)
 }
 

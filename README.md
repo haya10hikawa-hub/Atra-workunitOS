@@ -163,16 +163,32 @@ RS256 JWT       -> 401
 Expired JWT     -> 401
 ```
 
+- **Current-source, runner-owned build.** The Worker bundle is built from the
+  **exact current `HEAD`** (`git archive HEAD` → a runner-owned snapshot with a
+  copy-on-write clone of `node_modules`) and OpenNext builds *inside* that snapshot.
+  The temp `wrangler --config` points only at the snapshot's `.open-next`. The run
+  never reads, modifies, or creates the operator's repository-root `.open-next`, and
+  the safe output includes `worker_source_match=true` / `worker_bundle_owned=true`.
+  A stale or non-`HEAD` bundle can never produce a passing run.
 - **Owned, isolated state.** Every artifact lives in one private temporary root
-  (mode `0700`): a `0600` `.dev.vars`, a temporary `wrangler --config`, an isolated
-  `--persist-to` local D1, and a captured log. A cryptographically random,
-  local-only HS256 secret (≥ 32 bytes) is generated per run and written only to the
-  `0600` file — never passed as a command-line argument. It does **not** read or
-  modify your `.dev.vars`, default `.wrangler/`, `JWT_*` environment variables, or
-  local D1 state, and it selects an **ephemeral** port (never a fixed `8788`).
-- **Self-cleaning.** The runner tracks the exact child process group and every path
-  it created, and removes them in `finally` on success, failure, `SIGINT`/`SIGTERM`,
-  timeout, or assertion error. It only ever deletes paths it registered as its own.
+  (mode `0700`, registered before any fallible step): the source snapshot + build, a
+  `0600` `.dev.vars`, a temporary `wrangler --config`, an isolated `--persist-to`
+  local D1 shared by both the bootstrap and the Worker, and captured logs. A
+  cryptographically random, local-only HS256 secret (≥ 32 bytes) is generated per
+  run and written only to the `0600` file — never passed as a command-line argument.
+  It does **not** read or modify your `.dev.vars`, default `.wrangler/`, `JWT_*`
+  environment variables, `.open-next`, or local D1 state, and selects an **ephemeral**
+  port (never a fixed `8788`).
+- **One global deadline.** A single monotonic budget bounds every blocking step
+  (build, bootstrap, D1 query, Wrangler startup, readiness, each HTTP request,
+  graceful stop); a timeout fails closed with a stable category and triggers
+  exact-child termination and cleanup.
+- **Fail-closed, self-cleaning.** `status=PASS` requires **both** the proof gate and
+  cleanup to pass — `status=PASS` with `cleanup=false` is impossible, and an
+  unreadable `git status` fails closed. The runner tracks the exact child process
+  group and every path it created (validated by a non-secret ownership marker before
+  any emergency delete) and removes them in `finally` on success, failure,
+  `SIGINT`/`SIGTERM`, timeout, or assertion error, only ever deleting paths it owns.
 - **Local-only.** No remote D1, no `wrangler whoami`, no `--remote`, no deploy, no
   production Cloudflare. Stdout is machine-readable and secret-free.
 - **Scope.** A green run proves the **local** flow only. It does **not** prove
