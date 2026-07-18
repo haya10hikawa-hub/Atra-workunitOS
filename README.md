@@ -103,20 +103,39 @@ GITHUB_SOURCE_MODE=fake
 `wrangler dev` and for the `auth:jwt:*` / `cf:d1:bootstrap:jwt-local` CLI tools.
 It is **git-ignored and must never be committed** — set the values locally only.
 Keep every development/fallback flag `false` (Worker runtime rejects `true`
-fail-closed before auth). Provide these variable names (placeholders shown empty —
-fill in local-only synthetic values; the secret must be at least 32 bytes):
+fail-closed before auth). Provide these variable names, filling in local-only
+synthetic values (the secret must be at least 32 bytes).
+
+`.dev.vars` is parsed with the standard dotenv grammar (the same grammar Wrangler
+uses), so a comment on a value line is **not** part of the value. Never put a
+comment after an unfilled value — write comments on their own lines and quote
+empty placeholders, so an empty variable stays empty for both the CLI and
+Wrangler:
 
 ```bash
 # .dev.vars — LOCAL ONLY, never committed. Do not put real secrets/identities here.
-AUTH_ADAPTER=jwt
-JWT_AUTH_SECRET=            # >= 32 bytes; local secret only
-JWT_AUTH_ISSUER=workunit-os
-JWT_AUTH_AUDIENCE=workunit-os-api
-LOCAL_JWT_TTL_SECONDS=3600  # default 3600, max 86400
-CF_D1_BOOTSTRAP_IDENTITY_PROVIDER=jwt
-CF_D1_BOOTSTRAP_IDENTITY_SUBJECT=   # local synthetic subject
-CF_D1_BOOTSTRAP_IDENTITY_EMAIL=     # local synthetic email
+AUTH_ADAPTER="jwt"
+
+# Local-only secret, at least 32 bytes.
+JWT_AUTH_SECRET=""
+
+JWT_AUTH_ISSUER="workunit-os"
+JWT_AUTH_AUDIENCE="workunit-os-api"
+LOCAL_JWT_TTL_SECONDS="3600"
+
+CF_D1_BOOTSTRAP_IDENTITY_PROVIDER="jwt"
+
+# Local synthetic identity only.
+CF_D1_BOOTSTRAP_IDENTITY_SUBJECT=""
+CF_D1_BOOTSTRAP_IDENTITY_EMAIL=""
 ```
+
+Copying this template as-is **fails closed**: every required value
+(`JWT_AUTH_SECRET`, `JWT_AUTH_ISSUER`, `JWT_AUTH_AUDIENCE`,
+`CF_D1_BOOTSTRAP_IDENTITY_SUBJECT`, `CF_D1_BOOTSTRAP_IDENTITY_EMAIL`) is empty, so
+the CLI tools refuse to generate a token or seed an identity until you fill in
+local-only synthetic values (the secret must be at least 32 bytes). Keep every
+development/fallback flag `false`.
 
 `cf:d1:bootstrap:jwt-local` and `auth:jwt:local` resolve the **same** subject and
 email from `.dev.vars`, so the seeded local identity always matches the generated

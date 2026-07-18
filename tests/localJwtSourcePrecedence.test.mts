@@ -10,6 +10,8 @@ import {
   describeLocalJwtAuthority,
   generateLocalJwt,
   verifyLocalJwt,
+  parseDevVars,
+  validateLocalJwtEnv,
   PROTECTED_LOCAL_JWT_KEYS,
 } from "../scripts/lib/localJwt.mjs"
 import { buildLocalJwtBootstrapPlan } from "../scripts/cf-d1-bootstrap-jwt-local.mjs"
@@ -140,6 +142,128 @@ test("RS256 and expired tokens remain rejected", async () => {
   assert.equal((await verifyLocalJwt(rs256, env, { nowSeconds: 1_800_000_100 })).ok, false)
   const expired = await generateLocalJwt(env, { nowSeconds: 1_800_000_000, ttlSeconds: 1 })
   assert.equal((await verifyLocalJwt(expired, env, { nowSeconds: 1_800_000_050 })).ok, false)
+})
+
+// ─── dotenv-grammar parity ─────────────────────────────────────────
+//
+// The CLI must interpret `.dev.vars` with the SAME dotenv grammar the Wrangler
+// Worker runtime uses; a supported line must never resolve to a different value
+// in the CLI than in Wrangler. These lock the parser semantics from Phase 3.
+
+// The exact lines the previous (custom-parser) README shipped. Under the old
+// parser the trailing comment text became the VALUE — and the 32-byte secret
+// comment could pass the min-length check while Wrangler saw an empty value,
+// recreating the authority split. They must now all resolve empty.
+const PREVIOUS_README_LINES = [
+  "JWT_AUTH_SECRET=            # >= 32 bytes; local secret only",
+  "CF_D1_BOOTSTRAP_IDENTITY_SUBJECT=   # local synthetic subject",
+  "CF_D1_BOOTSTRAP_IDENTITY_EMAIL=     # local synthetic email",
+].join("\n")
+
+test("parser: inline comment stripped, quoted # literal, = preserved, empty quotes empty (CRLF)", () => {
+  const parsed = parseDevVars(
+    [
+      "A=value # trailing comment",
+      'B="# literal"',
+      "C=value=with=equals",
+      'D=""',
+      'E="" # comment',
+      "  F  =  spaced value  ",
+      "G='single quoted'",
+      "# whole-line comment",
+      "",
+    ].join("\r\n"),
+  )
+  assert.equal(parsed.A, "value") // unquoted inline comment removed
+  assert.equal(parsed.B, "# literal") // quoted # stays part of the value
+  assert.equal(parsed.C, "value=with=equals") // `=` inside the value preserved
+  assert.equal(parsed.D, "") // empty quoted placeholder stays empty
+  assert.equal(parsed.E, "") // empty quoted + trailing comment stays empty
+  assert.equal(parsed.F, "spaced value") // surrounding whitespace trimmed
+  assert.equal(parsed.G, "single quoted") // single quotes stripped
+  assert.equal(Object.prototype.hasOwnProperty.call(parsed, "whole-line comment"), false)
+})
+
+test("regression: the previous README lines resolve empty, never the comment text", () => {
+  const parsed = parseDevVars(PREVIOUS_README_LINES)
+  assert.equal(parsed.JWT_AUTH_SECRET, "")
+  assert.equal(parsed.CF_D1_BOOTSTRAP_IDENTITY_SUBJECT, "")
+  assert.equal(parsed.CF_D1_BOOTSTRAP_IDENTITY_EMAIL, "")
+  // The comment text must never survive as a value (the old min-length bypass).
+  const serialized = JSON.stringify(parsed)
+  assert.equal(serialized.includes("32 bytes"), false)
+  assert.equal(serialized.includes("synthetic"), false)
+})
+
+test("regression: a previous-README `.dev.vars` fails closed (empty secret ≠ 32-byte comment)", () => {
+  const contents = [
+    "JWT_AUTH_ISSUER=workunit-os",
+    "JWT_AUTH_AUDIENCE=workunit-os-api",
+    "CF_D1_BOOTSTRAP_IDENTITY_PROVIDER=jwt",
+    PREVIOUS_README_LINES,
+    "",
+  ].join("\n")
+  withDevVarsRepo(contents, (repoRoot) => {
+    const a = resolveLocalJwtAuthority(repoRoot, {})
+    assert.equal(a.ok, true)
+    if (!a.ok) return
+    // Empty protected values are dropped, so the resolved env carries none of them.
+    assert.equal(a.env.JWT_AUTH_SECRET, undefined)
+    assert.equal(a.env.CF_D1_BOOTSTRAP_IDENTITY_SUBJECT, undefined)
+    assert.equal(a.env.CF_D1_BOOTSTRAP_IDENTITY_EMAIL, undefined)
+    const v = validateLocalJwtEnv(a.env)
+    assert.equal(v.ok, false)
+    if (v.ok) return
+    for (const key of ["JWT_AUTH_SECRET", "CF_D1_BOOTSTRAP_IDENTITY_SUBJECT", "CF_D1_BOOTSTRAP_IDENTITY_EMAIL"]) {
+      assert.ok(v.failures.some((f) => f.includes(key)), key)
+    }
+  })
+})
+
+test("the corrected README `.dev.vars` template parses and fails closed while empty", () => {
+  const readme = readFileSync(resolve(REPO_ROOT, "README.md"), "utf8")
+  const marker = "# .dev.vars — LOCAL ONLY"
+  const start = readme.indexOf(marker)
+  assert.ok(start >= 0, "README .dev.vars template block not found")
+  const end = readme.indexOf("\n```", start)
+  assert.ok(end > start, "README .dev.vars template fence not terminated")
+  const template = readme.slice(start, end)
+  const parsed = parseDevVars(template)
+  // Structural non-secret values are present, clean (comments and quotes removed).
+  assert.equal(parsed.JWT_AUTH_ISSUER, "workunit-os")
+  assert.equal(parsed.JWT_AUTH_AUDIENCE, "workunit-os-api")
+  assert.equal(parsed.CF_D1_BOOTSTRAP_IDENTITY_PROVIDER, "jwt")
+  // Required secret/identity placeholders are empty → the template fails closed.
+  const v = validateLocalJwtEnv(parsed)
+  assert.equal(v.ok, false)
+  if (v.ok) return
+  for (const key of ["JWT_AUTH_SECRET", "CF_D1_BOOTSTRAP_IDENTITY_SUBJECT", "CF_D1_BOOTSTRAP_IDENTITY_EMAIL"]) {
+    assert.ok(v.failures.some((f) => f.includes(key)), key)
+  }
+})
+
+test("an inline-comment `.dev.vars` value equals the clean ambient value (no false conflict)", () => {
+  const contents = [
+    "JWT_AUTH_SECRET=dev-vars-canonical-secret-at-least-32-bytes # local only",
+    "JWT_AUTH_ISSUER=workunit-os # issuer comment",
+    "JWT_AUTH_AUDIENCE=workunit-os-api",
+    "CF_D1_BOOTSTRAP_IDENTITY_PROVIDER=jwt",
+    "CF_D1_BOOTSTRAP_IDENTITY_SUBJECT=cf-d1-bootstrap:precedence-subject",
+    "CF_D1_BOOTSTRAP_IDENTITY_EMAIL=precedence@example.invalid",
+    "",
+  ].join("\n")
+  withDevVarsRepo(contents, (repoRoot) => {
+    // Ambient carries the CLEAN values Wrangler would compute after comment strip;
+    // parity means the CLI parser reaches the same values → no authority conflict.
+    const a = resolveLocalJwtAuthority(repoRoot, {
+      JWT_AUTH_SECRET: "dev-vars-canonical-secret-at-least-32-bytes",
+      JWT_AUTH_ISSUER: "workunit-os",
+    })
+    assert.equal(a.ok, true)
+    if (!a.ok) return
+    assert.equal(a.env.JWT_AUTH_SECRET, "dev-vars-canonical-secret-at-least-32-bytes")
+    assert.equal(a.env.JWT_AUTH_ISSUER, "workunit-os")
+  })
 })
 
 test("safe authority diagnostics never leak a value", () => {

@@ -1,6 +1,7 @@
 import { createHmac, createHash, timingSafeEqual } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
+import dotenv from "dotenv"
 
 export const DEFAULT_LOCAL_JWT_TTL_SECONDS = 3600
 export const MAX_LOCAL_JWT_TTL_SECONDS = 86_400
@@ -12,15 +13,18 @@ export const LOCAL_JWT_REQUIRED_ENV = Object.freeze([
   "CF_D1_BOOTSTRAP_IDENTITY_EMAIL",
 ])
 
+/**
+ * Parse `.dev.vars` with the SAME dotenv grammar the Wrangler Worker runtime uses
+ * to load `.dev.vars`, so the CLI can never interpret a supported line differently
+ * from Wrangler. Delegating to the standard `dotenv` parser (the de-facto grammar
+ * Wrangler mirrors) is what eliminates the authority split: inline comments are
+ * stripped (`KEY=value # c` → `value`), unfilled placeholders collapse to empty
+ * (`KEY=            # note` → ``), quoted `#` stays literal (`KEY="# x"` → `# x`),
+ * and `=` inside a value is preserved. `dotenv.parse` never throws — malformed
+ * input yields its documented deterministic best-effort object.
+ */
 export function parseDevVars(text) {
-  const out = {}
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim()
-    if (!line || line.startsWith("#") || !line.includes("=")) continue
-    const [key, ...rest] = line.split("=")
-    out[key] = rest.join("=").trim().replace(/^(["'])(.*)\1$/, "$2")
-  }
-  return out
+  return dotenv.parse(typeof text === "string" ? text : "")
 }
 
 // The auth variables whose ONLY trusted local source is `.dev.vars`. The Wrangler
@@ -134,6 +138,11 @@ export function loadLocalJwtEnv(repoRoot = process.cwd(), processEnv = process.e
   return resolved.env
 }
 
+/**
+ * @param {Record<string, string | undefined>} env
+ * @param {{ requireSecret?: boolean }} [opts]
+ * @returns {{ ok: true } | { ok: false, failures: string[] }}
+ */
 export function validateLocalJwtEnv(env, opts = {}) {
   const requireSecret = opts.requireSecret !== false
   const failures = []
