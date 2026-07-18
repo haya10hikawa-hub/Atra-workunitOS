@@ -69,6 +69,15 @@ npm run cf:build
 # Cloudflare Workers dev (local Worker + local D1)
 npm run cf:dev
 
+# Local-only JWT auth smoke (local Worker + local D1; never touches remote D1).
+# All three commands read the SAME canonical `.dev.vars` (see below); ambient
+# process.env cannot silently override it.
+npm run cf:d1:bootstrap:jwt-local        # seed local CONTROL_DB with a JWT identity
+export JWT="$(npm run --silent auth:jwt:local)"   # prints only the JWT, for capture
+npm run auth:jwt:verify-local            # safe diagnostics only (no subject/email/secret)
+# Then: npx wrangler dev --port 8788  →  GET /api/workunit/inbox
+#   no JWT → 401 ; fresh HS256 JWT → 200 with a `workUnits` key ; RS256/expired → 401
+
 # Deploy preflight + non-uploading dry-run (synthetic config, no credentials)
 npm run cf:deploy:preflight
 npm run cf:deploy:dry-run
@@ -87,6 +96,54 @@ EXTERNAL_ACTIONS_ENABLED=false
 # Source providers (use fake for local dev)
 GITHUB_SOURCE_MODE=fake
 ```
+
+### Local Wrangler JWT auth (`.dev.vars`, local-only)
+
+`.dev.vars` is the canonical source of local JWT auth configuration for
+`wrangler dev` and for the `auth:jwt:*` / `cf:d1:bootstrap:jwt-local` CLI tools.
+It is **git-ignored and must never be committed** — set the values locally only.
+Keep every development/fallback flag `false` (Worker runtime rejects `true`
+fail-closed before auth). Provide these variable names, filling in local-only
+synthetic values (the secret must be at least 32 bytes).
+
+`.dev.vars` is parsed with the standard dotenv grammar (the same grammar Wrangler
+uses), so a comment on a value line is **not** part of the value. Never put a
+comment after an unfilled value — write comments on their own lines and quote
+empty placeholders, so an empty variable stays empty for both the CLI and
+Wrangler:
+
+```bash
+# .dev.vars — LOCAL ONLY, never committed. Do not put real secrets/identities here.
+AUTH_ADAPTER="jwt"
+
+# Local-only secret, at least 32 bytes.
+JWT_AUTH_SECRET=""
+
+JWT_AUTH_ISSUER="workunit-os"
+JWT_AUTH_AUDIENCE="workunit-os-api"
+LOCAL_JWT_TTL_SECONDS="3600"
+
+CF_D1_BOOTSTRAP_IDENTITY_PROVIDER="jwt"
+
+# Local synthetic identity only.
+CF_D1_BOOTSTRAP_IDENTITY_SUBJECT=""
+CF_D1_BOOTSTRAP_IDENTITY_EMAIL=""
+```
+
+Copying this template as-is **fails closed**: every required value
+(`JWT_AUTH_SECRET`, `JWT_AUTH_ISSUER`, `JWT_AUTH_AUDIENCE`,
+`CF_D1_BOOTSTRAP_IDENTITY_SUBJECT`, `CF_D1_BOOTSTRAP_IDENTITY_EMAIL`) is empty, so
+the CLI tools refuse to generate a token or seed an identity until you fill in
+local-only synthetic values (the secret must be at least 32 bytes). Keep every
+development/fallback flag `false`.
+
+`cf:d1:bootstrap:jwt-local` and `auth:jwt:local` resolve the **same** subject and
+email from `.dev.vars`, so the seeded local identity always matches the generated
+token. Tokens are **HS256 only**; RS256 is rejected. The JWT's `tenant`/`role`
+claims (if any) are **not authoritative** — tenant and role are resolved solely
+from the Control DB membership. `npm run --silent auth:jwt:local` prints only the
+compact JWT for shell capture; bootstrap and verify never log a JWT, secret,
+subject, or email.
 
 ## Testing
 
