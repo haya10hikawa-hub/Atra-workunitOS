@@ -35,20 +35,60 @@ import type { TenantId, UserId } from "../tenant/types.ts"
 // ─── Tenant DB Resolver ─────────────────────────────────────────
 
 /**
+ * The single allowlisted tenant-data binding name for the Alpha persistence
+ * contract. The resolver may return ONLY this binding — never a name constructed
+ * from tenant input, and never the control-plane binding.
+ * See docs/architecture/PERSISTENCE_CONTRACT.md.
+ */
+export const TENANT_DATA_BINDING = "TENANT_DB_DEFAULT" as const
+export type TenantDataBinding = typeof TENANT_DATA_BINDING
+
+/**
+ * Schema versions the running code understands for a TENANT_DB_DEFAULT registry
+ * row. `"2"` is the canonical Alpha schema (INCLUDING action_previews
+ * .created_by_user_id, per migrations/manifest.json); `"1"` is the legacy Alpha
+ * bootstrap default retained for validation compatibility. A registry
+ * schema_version outside this set is well-formed but unsupported and fails closed
+ * with `tenant_database_schema_unsupported`.
+ */
+export const SUPPORTED_TENANT_SCHEMA_VERSIONS: readonly string[] = ["1", "2"]
+
+/**
  * Deterministic, client-safe failure reasons. These are enum values only — they
  * never carry the raw tenantId, database id/name, SQL, or binding objects, so a
  * reason can be surfaced (mapped to a safe HTTP error) without disclosure.
+ *
+ * Contract vocabulary (docs/architecture/PERSISTENCE_CONTRACT.md). Several
+ * reasons have wire-stable historical names that predate the contract; the doc
+ * records the equivalence:
+ *   tenant_database_mapping_missing   ≡ database_not_found
+ *   tenant_database_mapping_inactive  ≡ database_inactive
+ *   (malformed mapping)               → database_invalid
  */
 export type TenantDbResolutionReason =
-  | "tenant_not_found"
-  | "tenant_inactive"
+  // Contract categories.
+  | "tenant_context_required"            // no authenticated tenant context supplied
+  | "tenant_not_found"                   // tenant absent from CONTROL_DB
+  | "tenant_inactive"                    // tenant present but not active
+  | "tenant_database_mapping_missing"    // no tenant_databases registry row
+  | "tenant_database_mapping_inactive"   // registry row present but not active
+  | "tenant_database_schema_unsupported" // registry schema_version not supported
+  | "tenant_database_binding_missing"    // expected TENANT_DB_DEFAULT binding absent
+  // Wire-stable historical names (retained; see equivalence above).
   | "database_not_found"
   | "database_inactive"
   | "database_invalid"
   | "resolution_failed"
 
 export type TenantDbResolution =
-  | { ok: true; ctx: TenantDbContext }
+  | {
+      ok: true
+      ctx: TenantDbContext
+      /** Always the allowlisted tenant-data binding — never a control DB. */
+      binding: TenantDataBinding
+      /** The validated, supported registry schema version. */
+      schemaVersion: string
+    }
   | { ok: false; reason: TenantDbResolutionReason }
 
 export interface TenantDbResolver {

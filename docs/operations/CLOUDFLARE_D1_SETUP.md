@@ -990,3 +990,108 @@ malicious machine owner. See
 trust model, workflow, and acceptance policy — the framework itself is **not**
 remote proof, and Issue #155 stays open until an authorized run, second-checkout
 verification, a Cloudflare-side cross-check, and human review.
+
+## 11. Alpha persistence contract & reproducible migrate CLI (P0-FIX-D1-OPERATIONAL-CONTRACT, Issue #155)
+
+The authoritative model is documented in
+[../architecture/PERSISTENCE_CONTRACT.md](../architecture/PERSISTENCE_CONTRACT.md).
+Summary: **two physical databases** — `CONTROL_DB` (control plane) and
+`TENANT_DB_DEFAULT` (shared tenant-data plane) — with tenant isolation enforced by
+mandatory `tenant_id` row predicates. There is **no** per-tenant physical D1 and
+**no** `CONTROL_DB` fallback for tenant data.
+
+### 11.1 Alpha topology
+
+```
+CONTROL_DB          tenants, tenant_databases, users, auth_identities, tenant_memberships
+TENANT_DB_DEFAULT   work_units, action_previews, approval_records, workunit_feedback,
+                    integration_connections, audit_logs, usage_events, usage_daily_summary
+```
+
+### 11.2 Local plan / apply / verify (hermetic, no retained state)
+
+The unified runner (`scripts/cf-d1-migrate.mjs`, over the canonical manifest +
+`__atra_d1_migrations` ledger) exposes three verbs with an explicit
+local/staging separation. The **local** commands run against invocation-owned,
+in-memory/temp SQLite databases and leave **no** local D1 state:
+
+```bash
+npm run cf:d1:migrate:plan-local      # deterministic per-binding plan (no IDs, no SQL)
+npm run cf:d1:migrate:apply-local     # fresh apply + replay no-op + verify, then cleanup
+npm run cf:d1:migrate:verify-local    # fresh apply + read-only schema/ledger verify
+```
+
+`apply-local` emits safe booleans: `fresh_apply`, `replay_noop`, `verify_ok`,
+`cleanup`. It exits non-zero if any is false.
+
+### 11.3 Staging plan / verify
+
+```bash
+npm run cf:d1:migrate:plan-staging    # offline plan (no network)
+npm run cf:d1:migrate:verify-staging  # requires --remote (read-only remote schema)
+```
+
+`plan-staging` is fully offline. `verify-staging` is a remote read and requires
+`--remote` (already wired into the script).
+
+### 11.4 Explicit remote-apply authorization boundary
+
+Remote mutation is a **separate, explicitly authorized** command:
+
+```bash
+npm run cf:d1:migrate:apply-staging   # apply --environment staging --remote --confirm-staging
+```
+
+The environment gate rejects: missing staging confirmation, `production`/unknown
+environments, `--remote` on a local command, a staging command without `--remote`,
+and a caller-asserted `--account`/`--project` that disagrees with deploy config.
+
+**Even with every flag valid, this command performs no remote operation unless the
+operator sets the execution latch `CF_D1_STAGING_EXECUTE=1`.** Without the latch it
+prints that the authorization gate passed and exits **without touching the
+network**. This is deliberate: no PR or CI run mutates a remote D1.
+
+### 11.5 Migration rollback policy
+
+Migrations are forward-only and append-only. `once` migrations are not reversible
+in place (SQLite has no transactional `DROP COLUMN` guard). Rollback is a
+forward-fix migration plus, if needed, a restore from a pre-apply D1 export.
+Never edit a committed migration file — its `sha256` is pinned and a changed
+checksum fails closed (see §11.6).
+
+### 11.6 Checksum-drift response
+
+If verification reports `digest_mismatch`, a committed migration's bytes no longer
+match the manifest `sha256`. Do **not** force-apply. Restore the original bytes
+(git), or, if the change is intentional, add a **new** append-only migration —
+never mutate an applied one.
+
+### 11.7 Failure recovery
+
+- `apply` failing mid-lane: the ledger records a migration only after its DDL
+  commits, so a failed migration is never recorded as applied. Re-run `apply`;
+  the reconciler skips satisfied migrations and resumes at the first pending one.
+- Unknown/inconsistent state (`schema_without_history`, `history_without_schema`,
+  `foreign_binding`): verification fails closed and **no** destructive repair is
+  attempted. Investigate with `verify` output (safe categories only).
+
+### 11.8 Required evidence before deployment
+
+1. `npm run cf:d1:migrate:plan-local` — plan reviewed.
+2. `npm run cf:d1:migrate:apply-local` — `fresh_apply/replay_noop/verify_ok/cleanup` all true.
+3. `node --test tests/d1MigrationRunner.test.mts tests/d1OperationalProof.test.mts
+   tests/tenantDbResolver.test.mts tests/tenantIsolationRoutes.test.mts` — green.
+4. An **authorized** `apply-staging` run (latch set by the operator) with its
+   evidence pack (§10) independently reviewed.
+
+### 11.9 Issue #155 closure criteria
+
+Issue #155 stays **open** until an authorized staging plan → apply → verify has
+been executed against a real staging D1 and its evidence independently reviewed.
+The repository/local implementation criteria (contract documented + enforced, no
+`CONTROL_DB` fallback, mandatory tenant scope, reproducible manifest + ledger,
+fresh/replay/partial/checksum-drift proofs, cross-tenant isolation, hermetic local
+proof) are met by this change; the staging-evidence criterion is the remaining
+blocker. See
+[../architecture/PERSISTENCE_CONTRACT.md](../architecture/PERSISTENCE_CONTRACT.md)
+§9.

@@ -17,7 +17,13 @@
 
 import type { TenantId } from "../tenant/types.ts"
 import type { TenantDbResolver, TenantDbResolution, TenantDbResolutionReason } from "./repositories.ts"
+import { TENANT_DATA_BINDING, SUPPORTED_TENANT_SCHEMA_VERSIONS } from "./repositories.ts"
 import type { D1DatabaseLike } from "./d1/types.ts"
+
+/** Reject a missing/blank tenant id BEFORE any control-plane query (fail closed). */
+function hasTenantContext(tenantId: TenantId | null | undefined): tenantId is TenantId {
+  return typeof tenantId === "string" && tenantId.trim().length > 0
+}
 
 // ─── SQL (registry validation only; reads routing metadata, not secrets) ──
 
@@ -66,7 +72,7 @@ function isNonEmptyBoundedString(value: unknown, max: number): value is string {
 function validateRegistryRecord(
   tenantId: TenantId,
   row: TenantDatabaseRegistryRow,
-): { ok: true } | { ok: false; reason: TenantDbResolutionReason } {
+): { ok: true; schemaVersion: string } | { ok: false; reason: TenantDbResolutionReason } {
   // The stored routing tenant must be exactly the requested tenant (defense in
   // depth even though the query filters on tenant_id).
   if (typeof row.tenant_id !== "string" || row.tenant_id !== tenantId) {
@@ -81,9 +87,16 @@ function validateRegistryRecord(
   if (!isNonEmptyBoundedString(row.schema_version, MAX_SCHEMA_VERSION_LENGTH) || !SCHEMA_VERSION_PATTERN.test(row.schema_version)) {
     return { ok: false, reason: "database_invalid" }
   }
-  // Reject migrating / failed / unknown / any non-active registry state.
+  // Reject migrating / failed / unknown / any non-active registry state BEFORE the
+  // schema-version support check, so an inactive mapping is never disclosed as a
+  // schema problem.
   if (row.status !== "active") return { ok: false, reason: "database_inactive" }
-  return { ok: true }
+  // The stored schema version must be one the running code understands. A
+  // well-formed but unsupported version fails closed (never a data fallback).
+  if (!SUPPORTED_TENANT_SCHEMA_VERSIONS.includes(row.schema_version)) {
+    return { ok: false, reason: "tenant_database_schema_unsupported" }
+  }
+  return { ok: true, schemaVersion: row.schema_version }
 }
 
 // ─── D1 Implementation ──────────────────────────────────────────
@@ -105,6 +118,13 @@ export class D1TenantDbResolver implements TenantDbResolver {
   }
 
   async resolveTenantDb(tenantId: TenantId): Promise<TenantDbResolution> {
+    // 0. An authenticated tenant context is mandatory. A missing/blank tenant id
+    //    fails closed before any control-plane query — the resolver never guesses.
+    if (!hasTenantContext(tenantId)) return { ok: false, reason: "tenant_context_required" }
+    // 0b. The statically bound tenant-data binding must be present. Its absence is
+    //    an infrastructure fault (surfaced as a controlled 503), never a fallback
+    //    to the control DB.
+    if (!this.tenantDb) return { ok: false, reason: "tenant_database_binding_missing" }
     try {
       // 1. Tenant must exist and be exactly "active".
       const tenant = await this.controlDb
@@ -125,8 +145,14 @@ export class D1TenantDbResolver implements TenantDbResolver {
       const validation = validateRegistryRecord(tenantId, dbRef)
       if (!validation.ok) return { ok: false, reason: validation.reason }
 
-      // 3. Return the statically bound shared tenant DB — NEVER the control DB.
-      return { ok: true, ctx: { tenantId, db: this.tenantDb } }
+      // 3. Return the statically bound shared tenant DB — NEVER the control DB —
+      //    tagged with the allowlisted binding name and the validated schema version.
+      return {
+        ok: true,
+        ctx: { tenantId, db: this.tenantDb },
+        binding: TENANT_DATA_BINDING,
+        schemaVersion: validation.schemaVersion,
+      }
     } catch {
       // Any control-DB query error fails closed with a generic reason.
       return { ok: false, reason: "resolution_failed" }
@@ -142,17 +168,22 @@ export class D1TenantDbResolver implements TenantDbResolver {
  * context carries the supplied `tenantDb` handle (never a control DB).
  */
 export function createFakeTenantDbResolver(
-  tenants: Map<string, { tenant: { status?: string }; dbRef: { status?: string } }>,
+  tenants: Map<string, { tenant: { status?: string }; dbRef: { status?: string; schemaVersion?: string } }>,
   tenantDb: D1DatabaseLike | null = null,
 ): TenantDbResolver {
   return {
     async resolveTenantDb(tenantId: TenantId): Promise<TenantDbResolution> {
+      if (!hasTenantContext(tenantId)) return { ok: false, reason: "tenant_context_required" }
       const entry = tenants.get(tenantId)
       if (!entry) return { ok: false, reason: "tenant_not_found" }
       if (entry.tenant?.status !== "active") return { ok: false, reason: "tenant_inactive" }
       if (!entry.dbRef) return { ok: false, reason: "database_not_found" }
       if (entry.dbRef.status !== "active") return { ok: false, reason: "database_inactive" }
-      return { ok: true, ctx: { tenantId, db: tenantDb } }
+      const schemaVersion = entry.dbRef.schemaVersion ?? "2"
+      if (!SUPPORTED_TENANT_SCHEMA_VERSIONS.includes(schemaVersion)) {
+        return { ok: false, reason: "tenant_database_schema_unsupported" }
+      }
+      return { ok: true, ctx: { tenantId, db: tenantDb }, binding: TENANT_DATA_BINDING, schemaVersion }
     },
   }
 }
