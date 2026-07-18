@@ -42,8 +42,9 @@ const common = {
   generateLocalJwt,
   verifyLocalJwt,
   gitStatus: () => "HARNESS-CONST",
+  gitStatusAsync: async () => ({ timedOut: false, value: "HARNESS-CONST" }),
   gitHead: () => "harnesshead",
-  hashOperatorArtifact: () => "HARNESS-OPHASH",
+  operatorArtifactState: () => ({ state: "absent" }),
   onRootReady: (root) => print(`ROOT ${root}`),
   onOwnedChildSpawn: (kind, child) => print(`CHILD ${kind} ${child.pid}`),
   // Fast fakes so no real build/D1 runs in the signal tests.

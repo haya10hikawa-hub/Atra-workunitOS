@@ -306,7 +306,11 @@ export async function runLocalJwtBootstrapAsync({ env, repoRoot = REPO_ROOT, exe
   }
 }
 
-/** Async, cancellable sibling of {@link queryLocalD1Json}. */
+/**
+ * Async, cancellable sibling of {@link queryLocalD1Json}.
+ * @param {{ sql: string, binding?: string, label?: string, exec: (args: string[], opts: { label: string }) => Promise<{ status: number|null, stdout?: string, timedOut?: boolean }> }} params
+ * @returns {Promise<Array<Record<string, unknown>>>}
+ */
 export async function queryLocalD1JsonAsync({ sql, binding = "CONTROL_DB", label = "query", exec } = {}) {
   return queryJsonAsync(exec, binding, sql, label)
 }

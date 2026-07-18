@@ -16,6 +16,9 @@ import {
   MIN_SECRET_BYTES,
 } from "../scripts/lib/localJwtSmokeRunner.mjs"
 import { generateLocalJwt, verifyLocalJwt } from "../scripts/lib/localJwt.mjs"
+import { EventEmitter } from "node:events"
+
+type ArtifactState = { state: "absent" } | { state: "present"; hash: string } | { state: "unreadable" }
 
 const HEAD = "1111111111111111111111111111111111111111"
 const MOCK_WRANGLER_JSON = JSON.stringify({
@@ -94,10 +97,13 @@ interface MockOptions {
   portHangs?: boolean
   rmHangs?: boolean
   gitStatusSequence?: Array<string | null>
-  operatorHashSequence?: Array<string | null>
+  gitStatusAsyncTimedOut?: boolean
+  gitStatusAsyncSlow?: boolean
+  operatorStateSequence?: ArtifactState[]
   fixedSecret?: string
   totalMs?: number
   cleanupMs?: number
+  realClock?: boolean
   configMainOutsideRoot?: boolean
   fsOpts?: Parameters<typeof makeMockFs>[0]
 }
@@ -111,10 +117,14 @@ function makeDeps(opts: MockOptions = {}) {
   const signalHandlers: Array<(sig: string) => void> = []
   let spawnCount = 0
   const alive = new Set<number>()
+  const pidToChild = new Map<number, EventEmitter & { pid: number; stdout: EventEmitter }>()
   const gitSeq = opts.gitStatusSequence ?? ["CONST", "CONST"]
   let gitIdx = 0
-  const opHashSeq = opts.operatorHashSequence ?? ["OPHASH", "OPHASH"]
-  let opHashIdx = 0
+  const opStateSeq: ArtifactState[] = opts.operatorStateSequence ?? [
+    { state: "present", hash: "H" },
+    { state: "present", hash: "H" },
+  ]
+  let opStateIdx = 0
   const logLines: string[] = []
   const exitCodes: number[] = []
   let clock = 1_000_000
@@ -172,7 +182,18 @@ function makeDeps(opts: MockOptions = {}) {
     hashFile: () => "x",
     gitHead: () => opts.expectedHead ?? HEAD,
     gitStatus: () => (gitIdx < gitSeq.length ? gitSeq[gitIdx++] : gitSeq[gitSeq.length - 1]),
-    hashOperatorArtifact: () => (opHashIdx < opHashSeq.length ? opHashSeq[opHashIdx++] : opHashSeq[opHashSeq.length - 1]),
+    gitStatusAsync: async (ms: number) => {
+      if (opts.gitStatusAsyncTimedOut) return { timedOut: true, value: null }
+      // Self-bounding: a git command that would exceed the remaining budget consumes
+      // (at most) that budget and then reports timeout — never a fresh 15 s command.
+      if (opts.gitStatusAsyncSlow) {
+        await new Promise((r) => setTimeout(r, Math.max(1, ms)))
+        return { timedOut: true, value: null }
+      }
+      const v = gitIdx < gitSeq.length ? gitSeq[gitIdx++] : gitSeq[gitSeq.length - 1]
+      return { timedOut: false, value: v }
+    },
+    operatorArtifactState: () => (opStateIdx < opStateSeq.length ? opStateSeq[opStateIdx++] : opStateSeq[opStateSeq.length - 1]),
     buildWorker: async ({ root }: { root: string }) => {
       if (opts.buildThrows) {
         const { SmokeError } = await import("../scripts/lib/localJwtSmokeRunner.mjs")
@@ -195,12 +216,20 @@ function makeDeps(opts: MockOptions = {}) {
       if (opts.spawnThrows) throw new Error("injected_spawn_failure")
       const pid = 5000 + spawnCount
       alive.add(pid)
-      const handlers: Record<string, (...a: unknown[]) => void> = {}
-      return { pid, on: (ev: string, cb: (...a: unknown[]) => void) => { handlers[ev] = cb }, stdout: { on: () => {} } }
+      // A real EventEmitter so the registry's exit/close listeners fire on kill —
+      // exit confirmation comes only from the emitted event, never "signal sent".
+      const child = Object.assign(new EventEmitter(), { pid, stdout: new EventEmitter() })
+      pidToChild.set(pid, child as EventEmitter & { pid: number; stdout: EventEmitter })
+      return child
     },
     killProcess: (pid: number, signal: string) => {
       kills.push({ pid, signal })
-      if (!opts.isAliveForever) alive.delete(Math.abs(pid))
+      const real = Math.abs(pid)
+      if (!opts.isAliveForever && alive.has(real)) {
+        alive.delete(real)
+        const child = pidToChild.get(real)
+        if (child) queueMicrotask(() => { child.emit("exit", null, signal); child.emit("close", null, signal) })
+      }
       return true
     },
     isAlive: (pid: number) => alive.has(pid),
@@ -213,8 +242,8 @@ function makeDeps(opts: MockOptions = {}) {
       const status = classify(auth.replace(/^Bearer /, ""))
       return { status, json: async () => (status === 200 ? { workUnits: [] } : { error: "x" }) }
     },
-    now: () => (clock += 5),
-    sleep: async () => {},
+    now: () => (opts.realClock ? Date.now() : (clock += 5)),
+    sleep: (ms: number) => (opts.realClock ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve()),
     log: (line: string) => logLines.push(line),
     installSignalHandlers: (handler: (sig: string) => void) => {
       signalHandlers.push(handler)
@@ -248,13 +277,24 @@ test("owned-path registry only tracks what it registered", () => {
   assert.equal(r.has("/operator/.dev.vars"), false)
 })
 
-test("child registry tracks pid/pgid and marks settled on exit", () => {
+test("child registry: explicit lifecycle; only a real exit event settles it", async () => {
   const cr = createChildRegistry()
-  const child = { pid: 4242 }
-  cr.register("opennext-build", child)
-  assert.equal(cr.live().length, 1)
+  const child = Object.assign(new EventEmitter(), { pid: 4242 })
+  const entry = cr.register("opennext-build", child)
+  assert.equal(entry.state, "running")
   assert.equal(cr.live()[0].pgid, 4242)
-  cr.markSettled(child)
+  // "kill requested" (terminating) is NOT exit — the entry stays live.
+  cr.markTerminating(child)
+  assert.equal(entry.state, "terminating")
+  assert.equal(cr.live().length, 1, "terminating child remains visible to cleanup")
+  // Only a real exit event confirms exit and resolves the confirmation promise.
+  let confirmed = false
+  entry.exitConfirmation.then(() => { confirmed = true })
+  child.emit("exit", 0, null)
+  await entry.exitConfirmation
+  assert.equal(confirmed, true)
+  assert.equal(entry.state, "exited")
+  assert.equal(entry.exitConfirmedAt !== null, true)
   assert.equal(cr.live().length, 0)
 })
 
@@ -390,10 +430,39 @@ test("bundle outside the runner-owned root is not accepted as owned", async () =
   assert.equal(results.status, "FAIL")
 })
 
-test("operator artifact drift fails closed", async () => {
-  const m = makeDeps({ operatorHashSequence: ["OPHASH", "DIFFERENT"] })
+test("operator artifact drift (hash changed) fails closed", async () => {
+  const m = makeDeps({ operatorStateSequence: [{ state: "present", hash: "A" }, { state: "present", hash: "B" }] })
   const { results } = await runHermeticSmoke(m.deps)
   assert.equal(results.operator_build_artifact_untouched, false)
+  assert.equal(results.status, "FAIL")
+})
+
+test("operator artifact absent→absent is unchanged", async () => {
+  const m = makeDeps({ operatorStateSequence: [{ state: "absent" }, { state: "absent" }] })
+  const { results } = await runHermeticSmoke(m.deps)
+  assert.equal(results.operator_build_artifact_untouched, true)
+})
+
+test("operator artifact unreadable at either point fails closed", async () => {
+  const m = makeDeps({ operatorStateSequence: [{ state: "present", hash: "A" }, { state: "unreadable" }] })
+  const { results } = await runHermeticSmoke(m.deps)
+  assert.equal(results.operator_build_artifact_untouched, false)
+  assert.equal(results.status, "FAIL")
+})
+
+test("operator artifact absent→present transition fails closed", async () => {
+  const m = makeDeps({ operatorStateSequence: [{ state: "absent" }, { state: "present", hash: "A" }] })
+  const { results } = await runHermeticSmoke(m.deps)
+  assert.equal(results.operator_build_artifact_untouched, false)
+  assert.equal(results.status, "FAIL")
+})
+
+test("cleanup git status timeout fails closed with git_status_timeout", async () => {
+  const m = makeDeps({ gitStatusAsyncTimedOut: true })
+  const { results } = await runHermeticSmoke(m.deps)
+  assert.equal(results.repository_status_unchanged, false)
+  assert.equal(results.cleanup_category, "git_status_timeout")
+  assert.equal(results.cleanup, false)
   assert.equal(results.status, "FAIL")
 })
 
@@ -488,6 +557,32 @@ test("cleanup hang @ port probe → port_release_timeout, status FAIL", async ()
   assert.equal(results.cleanup_category, "port_release_timeout")
   assert.equal(results.cleanup, false)
   assert.equal(results.status, "FAIL")
+})
+
+// ─── absolute cleanup budget: wall time <= cleanupMs + tolerance (real clock) ──
+
+test("absolute budget: a child that consumes cleanupMs → child_cleanup_timeout within budget", async () => {
+  const cleanupMs = 250
+  const m = makeDeps({ realClock: true, cleanupMs, isAliveForever: true })
+  const started = Date.now()
+  const { results } = await runHermeticSmoke(m.deps)
+  const elapsed = Date.now() - started
+  assert.equal(results.cleanup_category, "child_cleanup_timeout")
+  assert.equal(results.cleanup, false)
+  assert.equal(results.status, "FAIL")
+  assert.ok(elapsed <= cleanupMs + 3_000, `cleanup wall time ${elapsed}ms must stay within budget`)
+})
+
+test("absolute budget: git status that would exceed remaining → git_status_timeout within budget", async () => {
+  const cleanupMs = 250
+  const m = makeDeps({ realClock: true, cleanupMs, gitStatusAsyncSlow: true })
+  const started = Date.now()
+  const { results } = await runHermeticSmoke(m.deps)
+  const elapsed = Date.now() - started
+  assert.equal(results.cleanup_category, "git_status_timeout")
+  assert.equal(results.cleanup, false)
+  assert.equal(results.status, "FAIL")
+  assert.ok(elapsed <= cleanupMs + 3_000, `cleanup wall time ${elapsed}ms must stay within budget`)
 })
 
 // ─── signal state machine (unit level; real subprocess tests separate) ──

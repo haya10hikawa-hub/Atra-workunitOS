@@ -188,16 +188,28 @@ Expired JWT     -> 401
   observe a half-created, unremovable root. Every long-running operation
   (`git archive`, `tar`, the `node_modules` copy, the OpenNext build, each Wrangler
   D1 call, `wrangler dev`) runs as a **detached child in its own process group**,
-  registered in a central registry the instant it spawns and unregistered only on
-  confirmed exit — so a signal terminates *every* owned group (never by name).
-- **Bounded, fail-closed cleanup.** Cleanup has its own `cleanupMs` budget: if
-  stopping children, removing the root, or probing port release exceeds it, the run
-  reports a stable `*_timeout` category, `cleanup=false`, and `status=FAIL`.
-  `status=PASS` requires **both** the proof gate and cleanup — `status=PASS` with
-  `cleanup=false` is impossible — and an unreadable `git status` fails closed. On
-  `SIGINT`/`SIGTERM` the runner sets an abort flag, terminates all owned groups,
-  runs bounded cleanup, then exits **130**/**143** (a second signal force-kills all
-  groups but deletes no unverified path). It only ever deletes paths it registered.
+  registered in a central registry the instant it spawns with an EXPLICIT lifecycle
+  state (`running` → `terminating` → `exited`). **Kill requested is not exit
+  confirmed:** a timeout or signal moves a child to `terminating` and SIGKILLs its
+  group, but only a real `exit`/`close` event moves it to `exited`. A timed-out
+  child therefore stays visible to cleanup until its exit is confirmed, and the
+  owned root is removed **only after every owned group is exit-confirmed** — so no
+  detached child can still be writing into it. Groups are killed by process group,
+  never by name.
+- **Absolute, fail-closed cleanup.** Cleanup runs under one `cleanupMs` deadline
+  that covers **every** stage — child exit confirmation, root removal, port release,
+  the git-status check (a bounded async command, never a fresh 15 s one), and the
+  operator-artifact check — so total cleanup wall time stays within `cleanupMs` plus
+  a small tolerance. Exceeding it yields a stable category (`child_cleanup_timeout` /
+  `root_removal_timeout` / `port_release_timeout` / `git_status_timeout`),
+  `cleanup=false`, `status=FAIL`. The operator artifact is compared by structured
+  state (`absent` / `present`+hash / `unreadable`): an absent↔present transition, a
+  changed hash, or an unreadable read at either point fails closed (absence is never
+  conflated with a read failure). `status=PASS` requires **both** the proof gate and
+  cleanup — `status=PASS` with `cleanup=false` is impossible. On `SIGINT`/`SIGTERM`
+  the runner sets an abort flag, terminates all owned groups, runs bounded cleanup,
+  then exits **130**/**143** (a second signal force-kills all groups but deletes no
+  unverified path). It only ever deletes paths it registered.
 - **Local-only.** No remote D1, no `wrangler whoami`, no `--remote`, no deploy, no
   production Cloudflare. Stdout is machine-readable and secret-free.
 - **Scope.** A green run proves the **local** flow only. It does **not** prove

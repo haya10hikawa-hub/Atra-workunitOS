@@ -93,25 +93,80 @@ export function createOwnedPathRegistry() {
 // ─── central owned-child registry ───────────────────────────────────
 //
 // Every detached child (process-group leader, so pgid === pid) is registered the
-// instant it spawns and marked settled only on confirmed exit. Signal + cleanup
-// iterate `live()` and kill each group; no process is ever matched by name.
+// instant it spawns. Each entry carries an EXPLICIT lifecycle state:
+//
+//   running       spawned, not yet asked to stop
+//   terminating   a stop signal was REQUESTED (kill requested != exit confirmed)
+//   exited        a real `exit`/`close` event was observed (the ONLY exit proof)
+//   spawn_failed  the spawn produced no live process
+//
+// `live()` includes `running` AND `terminating` — a timed-out child stays visible
+// to cleanup until its exit is CONFIRMED. Only an `exit`/`close` event moves an
+// entry to `exited`; "signal sent" is never treated as exit. Each entry exposes an
+// `exitConfirmation` promise that resolves on that event, so cleanup can await
+// confirmed termination within its own deadline. No process is matched by name.
 
 export function createChildRegistry() {
   const entries = []
   return {
     register(kind, child) {
-      const entry = { kind, pid: child?.pid ?? null, pgid: child?.pid ?? null, started: Date.now(), settled: false, child }
+      let resolveExit
+      const exitConfirmation = new Promise((r) => {
+        resolveExit = r
+      })
+      const entry = {
+        kind,
+        pid: child?.pid ?? null,
+        pgid: child?.pid ?? null,
+        started: Date.now(),
+        state: "running",
+        exitCode: null,
+        exitSignal: null,
+        exitConfirmedAt: null,
+        child,
+        exitConfirmation,
+      }
+      const confirmExit = (code, signal) => {
+        if (entry.state === "exited") return
+        entry.state = "exited"
+        entry.exitCode = code ?? null
+        entry.exitSignal = signal ?? null
+        entry.exitConfirmedAt = Date.now()
+        resolveExit(entry)
+      }
+      entry.confirmExit = confirmExit
+      // The registry OWNS exit confirmation: only a real exit/close event settles it.
+      if (child && typeof child.on === "function") {
+        child.on("exit", (code, signal) => confirmExit(code, signal))
+        child.on("close", (code, signal) => confirmExit(code, signal))
+      }
       entries.push(entry)
       return entry
     },
-    markSettled(child) {
-      for (const e of entries) if (e.child === child) e.settled = true
+    /** Record that termination was REQUESTED (not that the process has exited). */
+    markTerminating(child) {
+      for (const e of entries) if (e.child === child && e.state === "running") e.state = "terminating"
+    },
+    markSpawnFailed(child) {
+      for (const e of entries) if (e.child === child && e.state !== "exited") e.state = "spawn_failed"
     },
     live() {
-      return entries.filter((e) => !e.settled && typeof e.pid === "number")
+      return entries.filter((e) => (e.state === "running" || e.state === "terminating") && typeof e.pid === "number")
+    },
+    entries() {
+      return entries.slice()
     },
     all() {
-      return entries.map((e) => ({ kind: e.kind, pid: e.pid, pgid: e.pgid, started: e.started, settled: e.settled }))
+      return entries.map((e) => ({
+        kind: e.kind,
+        pid: e.pid,
+        pgid: e.pgid,
+        started: e.started,
+        state: e.state,
+        exitCode: e.exitCode,
+        exitSignal: e.exitSignal,
+        exitConfirmedAt: e.exitConfirmedAt,
+      }))
     },
   }
 }
@@ -277,6 +332,46 @@ async function defaultDeps() {
       const r = cp.spawnSync("git", ["rev-parse", "HEAD"], { cwd: undefined, encoding: "utf8", timeout: 10_000 })
       return r.status === 0 ? r.stdout.trim() : null
     },
+    // Cleanup-time git status as a bounded async child (self-killing timer), so it
+    // can be held to the REMAINING cleanup budget rather than a fresh 15 s command.
+    gitStatusAsync: (timeoutMs) =>
+      new Promise((resolve) => {
+        let out = ""
+        let done = false
+        const child = cp.spawn("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd: undefined, detached: true, stdio: ["ignore", "pipe", "ignore"] })
+        const finish = (v) => {
+          if (done) return
+          done = true
+          clearTimeout(t)
+          resolve(v)
+        }
+        const t = setTimeout(() => {
+          try {
+            process.kill(-child.pid, "SIGKILL")
+          } catch {
+            /* gone */
+          }
+          try {
+            process.kill(child.pid, "SIGKILL")
+          } catch {
+            /* gone */
+          }
+          finish({ timedOut: true, value: null })
+        }, Math.max(1, timeoutMs))
+        if (child.stdout) child.stdout.on("data", (c) => { out += c })
+        child.on("exit", (code) => finish({ timedOut: false, value: code === 0 ? out : null }))
+        child.on("error", () => finish({ timedOut: false, value: null }))
+      }),
+    // Structured operator-artifact state: absent vs present(hash) vs unreadable.
+    operatorArtifactState: () => {
+      const p = "./.open-next/worker.js"
+      try {
+        if (!fs.existsSync(p)) return { state: "absent" }
+        return { state: "present", hash: crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex") }
+      } catch {
+        return { state: "unreadable" }
+      }
+    },
     pickPort: () =>
       new Promise((res, rej) => {
         const s = net.createServer()
@@ -424,10 +519,24 @@ function markerMatches(d, root, token) {
 
 /**
  * Spawn a detached child in its own process group, register it centrally, and
- * resolve `{ status, signal, stdout, timedOut, spawnFailed }`. On timeout the
- * process group is SIGKILLed. Never rejects.
+ * resolve the OPERATION OUTCOME — which is DISTINCT from process-exit confirmation.
+ * Result: `{ outcome, status, signal, stdout, timedOut?, spawnFailed?, exitConfirmation }`.
+ *
+ * On timeout the operation outcome is `"timeout"`, the registry entry moves to
+ * `terminating`, and the process group is SIGKILLed — but the child is NOT marked
+ * exited (kill requested != exit confirmed). The returned `exitConfirmation` promise
+ * (owned by the registry) resolves only on the child's real `exit`/`close` event, so
+ * cleanup can await confirmed termination within its own deadline. Never rejects and
+ * never leaks command arguments or captured output through diagnostics.
+ *
+ * @param {Record<string, unknown>} d
+ * @param {string} kind
+ * @param {string} bin
+ * @param {string[]} args
+ * @param {{ cwd?: string, deadline: number, cap: number, childRegistry: { register: Function, markTerminating: Function, markSpawnFailed: Function }, logFd?: number|null, capture?: boolean }} options
+ * @returns {Promise<{ outcome: string, status: number|null, signal: string|null, stdout: string, timedOut?: boolean, spawnFailed?: boolean, exitConfirmation: Promise<unknown> }>}
  */
-function spawnCapture(d, kind, bin, args, { cwd, deadline, cap, childRegistry, logFd = null, capture = false } = {}) {
+export function spawnCapture(d, kind, bin, args, { cwd, deadline, cap, childRegistry, logFd = null, capture = false } = {}) {
   const ms = budget(d, deadline, cap)
   return new Promise((resolve) => {
     let child
@@ -435,32 +544,37 @@ function spawnCapture(d, kind, bin, args, { cwd, deadline, cap, childRegistry, l
       const stdio = capture ? ["ignore", "pipe", "pipe"] : ["ignore", logFd ?? "ignore", logFd ?? "ignore"]
       child = d.spawn(bin, args, { cwd, detached: true, stdio })
     } catch {
-      resolve({ status: null, stdout: "", spawnFailed: true })
+      resolve({ outcome: "spawn_failed", status: null, signal: null, stdout: "", spawnFailed: true, exitConfirmation: Promise.resolve() })
       return
     }
-    childRegistry.register(kind, child)
+    const entry = childRegistry.register(kind, child)
     if (typeof d.onOwnedChildSpawn === "function") d.onOwnedChildSpawn(kind, child)
     let out = ""
     if (capture && child.stdout && typeof child.stdout.on === "function") child.stdout.on("data", (c) => { out += c })
     let settled = false
-    const finish = (res) => {
+    const settle = (res) => {
       if (settled) return
       settled = true
       d.clearTimer(timer)
-      childRegistry.markSettled(child)
-      if (typeof d.onOwnedChildExit === "function") d.onOwnedChildExit(kind, child)
+      if (typeof d.onOwnedChildExit === "function" && res.outcome !== "timeout") d.onOwnedChildExit(kind, child)
       resolve(res)
     }
     const timer = d.setTimer(() => {
+      // TIMEOUT: request termination; do NOT mark the child exited. Cleanup awaits
+      // `entry.exitConfirmation` (resolved by the registry on the real exit event).
+      childRegistry.markTerminating(child)
       if (typeof child.pid === "number") {
         d.killProcess(-child.pid, "SIGKILL")
         d.killProcess(child.pid, "SIGKILL")
       }
-      finish({ status: null, stdout: out, timedOut: true })
+      settle({ outcome: "timeout", status: null, signal: null, stdout: out, timedOut: true, exitConfirmation: entry.exitConfirmation })
     }, ms)
     if (typeof child.on === "function") {
-      child.on("exit", (code, signal) => finish({ status: code, signal, stdout: out }))
-      child.on("error", () => finish({ status: null, stdout: out, spawnFailed: true }))
+      child.on("exit", (code, signal) => settle({ outcome: code === 0 ? "ok" : "error", status: code, signal, stdout: out, exitConfirmation: entry.exitConfirmation }))
+      child.on("error", () => {
+        childRegistry.markSpawnFailed(child)
+        settle({ outcome: "spawn_failed", status: null, signal: null, stdout: out, spawnFailed: true, exitConfirmation: entry.exitConfirmation })
+      })
     }
   })
 }
@@ -525,13 +639,14 @@ async function startWorker(d, { runRoot, configPath, persistTo, logPath, deadlin
       if (typeof d.closeFd === "function" && logFd != null) d.closeFd(logFd)
       throw new SmokeError("worker_start_failed")
     }
+    // The registry attaches its own exit/close listeners and confirms exit; here we
+    // only track early exit for the readiness loop.
     childRegistry.register("wrangler-dev", child)
     if (typeof d.onOwnedChildSpawn === "function") d.onOwnedChildSpawn("wrangler-dev", child)
     let exitedEarly = false
     if (typeof child.on === "function") {
       child.on("exit", () => {
         exitedEarly = true
-        childRegistry.markSettled(child)
         if (typeof d.onOwnedChildExit === "function") d.onOwnedChildExit("wrangler-dev", child)
       })
       child.on("error", () => {
@@ -578,11 +693,17 @@ function abortAfter(d, ms) {
 
 // ─── bounded cleanup ────────────────────────────────────────────────
 
-async function waitChildrenExit(d, childRegistry, cleanupDeadline) {
+/**
+ * Await CONFIRMED exit of every live owned group within the cleanup deadline.
+ * Escalates `running`/`terminating` groups to SIGKILL, then waits for each entry's
+ * registry-owned `exitConfirmation` (a real exit/close event) — never treating a
+ * sent signal as proof. Returns true only when `live()` is empty (all confirmed).
+ */
+async function confirmChildrenExited(d, childRegistry, cleanupDeadline) {
   let escalated = false
-  while (d.now() < cleanupDeadline) {
-    const live = childRegistry.live().filter((e) => d.isAlive(e.pid))
-    if (live.length === 0) return true
+  while (childRegistry.live().length > 0) {
+    if (d.now() >= cleanupDeadline) return false
+    const live = childRegistry.live()
     if (!escalated) {
       for (const e of live) {
         d.killProcess(-e.pgid, "SIGKILL")
@@ -590,29 +711,53 @@ async function waitChildrenExit(d, childRegistry, cleanupDeadline) {
       }
       escalated = true
     }
-    await d.sleep(50)
+    const remaining = Math.max(1, cleanupDeadline - d.now())
+    // Wake on the earliest confirmed exit, a short poll, or the deadline.
+    await Promise.race([
+      Promise.race(live.map((e) => e.exitConfirmation)).catch(() => {}),
+      d.sleep(Math.min(50, remaining)),
+    ])
   }
-  return childRegistry.live().every((e) => !d.isAlive(e.pid))
+  return childRegistry.live().length === 0
 }
 
-async function performCleanup(d, { childRegistry, registry, port, repoStatusBefore, operatorHashBefore, token, timeouts }) {
-  const cleanupDeadline = d.now() + timeouts.cleanupMs
+/** Read the repository status under the REMAINING cleanup budget (fail closed). */
+async function boundedGitStatus(d, cleanupDeadline) {
+  const remaining = cleanupDeadline - d.now()
+  if (remaining <= 0) return { timedOut: true, value: null }
+  if (typeof d.gitStatusAsync === "function") {
+    const r = await d.gitStatusAsync(Math.max(1, remaining))
+    return { timedOut: r && r.timedOut === true, value: r && typeof r.value === "string" ? r.value : null }
+  }
+  // Fallback: the synchronous probe is only safe when ample budget remains.
+  return { timedOut: false, value: safeGitStatus(d) }
+}
+
+async function performCleanup(d, { childRegistry, registry, port, repoStatusBefore, operatorArtifactBefore, token, timeouts }) {
+  const cleanupStart = d.now()
+  const cleanupDeadline = cleanupStart + timeouts.cleanupMs
   const report = {}
   let timeoutCategory = null
+  const expired = () => d.now() >= cleanupDeadline
 
-  // 1. terminate every live owned process group (idempotent).
+  // 1. request termination of every live owned group (idempotent; not exit proof).
   for (const e of childRegistry.live()) {
+    childRegistry.markTerminating(e.child)
     d.killProcess(-e.pgid, "SIGTERM")
     d.killProcess(e.pgid, "SIGTERM")
   }
-  // 2. wait for confirmed exits (bounded; escalates to SIGKILL).
-  report.children_stopped = await waitChildrenExit(d, childRegistry, cleanupDeadline)
+  // 2. await CONFIRMED exit of every owned group within the deadline.
+  report.children_stopped = await confirmChildrenExited(d, childRegistry, cleanupDeadline)
   if (!report.children_stopped) timeoutCategory = timeoutCategory ?? "child_cleanup_timeout"
 
-  // 4. remove the marker-verified owned root (bounded).
+  // 3. close descriptors — the runner closes each log fd inline via try/finally at
+  //    its open site; nothing tracked remains open here.
+
+  // 4. remove the marker-verified owned root — ONLY after every group is exit
+  //    confirmed, so no detached child can still be writing into it.
   const rootEntry = registry.list().find((e) => e.kind === "root")
   if (rootEntry) {
-    if (markerMatches(d, rootEntry.path, token)) {
+    if (report.children_stopped && markerMatches(d, rootEntry.path, token)) {
       const r = await raceDeadline(d, cleanupDeadline, () => d.fs.rm(rootEntry.path, { recursive: true, force: true }), "root_removal_timeout")
       if (r.timedOut) timeoutCategory = timeoutCategory ?? "root_removal_timeout"
     }
@@ -631,9 +776,12 @@ async function performCleanup(d, { childRegistry, registry, port, repoStatusBefo
   report.temporary_logs_removed = !byKind("log") || gone(byKind("log").path)
   report.temporary_build_removed = !byKind("root") || gone(join(byKind("root").path, "src"))
 
-  // 6. port release (bounded).
+  // 6. port release (bounded by the remaining cleanup budget).
   if (port == null) {
     report.port_released = true
+  } else if (expired()) {
+    report.port_released = false
+    timeoutCategory = timeoutCategory ?? "port_release_timeout"
   } else {
     const r = await raceDeadline(d, cleanupDeadline, () => d.isPortFree(port), "port_release_timeout")
     if (r.timedOut) {
@@ -644,12 +792,28 @@ async function performCleanup(d, { childRegistry, registry, port, repoStatusBefo
     }
   }
 
-  // 7. git status must be readable before AND after, and unchanged.
-  const after = safeGitStatus(d)
-  report.repository_status_unchanged = repoStatusBefore != null && after != null && after === repoStatusBefore
-  // 8. operator artifact byte-identical (or stays absent).
-  const opAfter = typeof d.hashOperatorArtifact === "function" ? d.hashOperatorArtifact() : null
-  report.operator_build_artifact_untouched = operatorHashBefore === opAfter
+  // 7. git status — bounded by the REMAINING budget, not a fresh 15 s command.
+  if (expired()) {
+    report.repository_status_unchanged = false
+    timeoutCategory = timeoutCategory ?? "git_status_timeout"
+  } else {
+    const after = await boundedGitStatus(d, cleanupDeadline)
+    if (after.timedOut) {
+      report.repository_status_unchanged = false
+      timeoutCategory = timeoutCategory ?? "git_status_timeout"
+    } else {
+      report.repository_status_unchanged = repoStatusBefore != null && after.value != null && after.value === repoStatusBefore
+    }
+  }
+
+  // 8. operator artifact — structured state; absence != read failure.
+  if (expired()) {
+    report.operator_build_artifact_untouched = false
+    timeoutCategory = timeoutCategory ?? "operator_artifact_timeout"
+  } else {
+    const opAfter = typeof d.operatorArtifactState === "function" ? d.operatorArtifactState() : null
+    report.operator_build_artifact_untouched = operatorArtifactUnchanged(operatorArtifactBefore, opAfter)
+  }
 
   if (timeoutCategory) {
     report.cleanup_category = timeoutCategory
@@ -669,6 +833,20 @@ async function performCleanup(d, { childRegistry, registry, port, repoStatusBefo
     report.repository_status_unchanged &&
     report.operator_build_artifact_untouched
   return report
+}
+
+/**
+ * Compare structured operator-artifact states. `null`/`unreadable` at either point,
+ * an absent↔present transition, or a changed hash all fail closed.
+ * @param {{state:string,hash?:string}|null} before
+ * @param {{state:string,hash?:string}|null} after
+ */
+function operatorArtifactUnchanged(before, after) {
+  if (!before || !after) return false
+  if (before.state === "unreadable" || after.state === "unreadable") return false
+  if (before.state !== after.state) return false
+  if (before.state === "absent") return true
+  return before.hash === after.hash
 }
 
 function safeGitStatus(d) {
@@ -704,7 +882,7 @@ export async function runHermeticSmoke(overrides = {}) {
   const childRegistry = createChildRegistry()
   const results = {}
   const repoStatusBefore = safeGitStatus(d)
-  const operatorHashBefore = typeof d.hashOperatorArtifact === "function" ? d.hashOperatorArtifact() : null
+  const operatorArtifactBefore = typeof d.operatorArtifactState === "function" ? d.operatorArtifactState() : null
   const expectedHead = typeof d.gitHead === "function" ? d.gitHead() : null
   let port = null
   let ownerToken = null
@@ -719,7 +897,7 @@ export async function runHermeticSmoke(overrides = {}) {
     if (finalized) return finalizePromise
     finalized = true
     finalizePromise = (async () => {
-      const cleanupReport = await performCleanup(d, { childRegistry, registry, port, repoStatusBefore, operatorHashBefore, token: ownerToken, timeouts })
+      const cleanupReport = await performCleanup(d, { childRegistry, registry, port, repoStatusBefore, operatorArtifactBefore, token: ownerToken, timeouts })
       Object.assign(results, cleanupReport)
       const proofPassed = evaluateProof(results)
       results.status = proofPassed && cleanupReport.cleanup === true && !signal ? "PASS" : "FAIL"
