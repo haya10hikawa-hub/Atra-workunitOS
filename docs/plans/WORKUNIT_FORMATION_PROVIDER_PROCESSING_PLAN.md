@@ -36,28 +36,29 @@ Goal Identity, State Prediction, and Ranking remain separate concerns. ROI must 
 Introduce a new candidate-only application layer, `app/lib/application/formation/`, between the existing normalized-signal layer and the existing safe-candidate boundary:
 
 1. **`FormationSourceCandidate`** — one provider-independent, sanitized, candidate-only model for every provider source (Section 4). It is produced from existing normalized inputs; raw provider payloads never enter it.
-2. **A deterministic-first formation engine** — object-identity extraction, explicit-link resolution, Goal-hypothesis assembly, and pairwise Done-Condition compatibility comparison with **hard gates that override any weighted similarity** (Sections 6–7). The LLM (mock-boundary only, per the existing `runDecompositionOrchestrator` seam) proposes field values; deterministic code validates and decides.
-3. **`WorkUnitFormationCandidate`** — a multi-source grouping proposal carrying member sources, Source Roles, grouping evidence, State Prediction, missing/conflict findings, and ranking evidence — all candidate-only, all human-correctable (Sections 8–12).
-4. **An extended safe projection** — new allowlisted, display-safe fields added to the existing `projectSafeWorkUnitCandidate` chokepoint (`app/lib/application/candidate/safeWorkUnitCandidate.ts`) so the Launcher and Context Preview can show Goal, Done When, Why Now, formation state, missing/conflict counts, Source Roles, and grouping explanations without any forbidden field leaking (Section 11).
+2. **A Goal / Done Condition adapter** — formation-specific Goal fields, plural evidence references, and independent-closure information wrap the existing `DoneConditionDraft`; only `evaluateDoneConditionDraft` may assign `complete`, `partial`, `invalid`, or `validForFormalCandidate` (Section 4.3).
+3. **`WorkUnitFormationCandidate`** — a minimal multi-source, candidate-only aggregate that binds validated source members to the adapted Goal / Done Condition result and requires human review. Grouping evidence, findings, State Prediction, ranking, and public projection are added only by their later owning slices.
+4. **A deterministic-first formation engine** — after the three contracts above exist, provider extraction, object-identity retrieval, and pairwise compatibility comparison use **hard gates that override any weighted similarity** (Sections 5–7). The LLM stays behind the existing mock-only `runDecompositionOrchestrator` seam and may propose fields; deterministic code validates proposals.
+5. **An extended safe projection** — only in the later UX-projection slice, add allowlisted display-safe fields through the existing `projectSafeWorkUnitCandidate` chokepoint (`app/lib/application/candidate/safeWorkUnitCandidate.ts`) (Section 11).
 
 The existing one-signal pipeline is **not removed**. The formation layer consumes the same normalized inputs and emits an additional, richer candidate shape; the current `candidateWorkUnitBridge` path stays intact until the formation path is proven by fixtures and golden datasets.
 
 Existing contracts are **reused, not duplicated**:
 
-- `DoneConditionDraft` + `evaluateDoneConditionDraft` (`app/lib/application/decomposition/doneConditionGate.ts`) remain the completion contract and its deterministic gate. Formation composes them (adds `evidenceRefs` plurality and `independentClosure`; Section 4.3) instead of inventing a parallel completion model.
+- `DoneConditionDraft` + `evaluateDoneConditionDraft` (`app/lib/application/decomposition/doneConditionGate.ts`) remain the sole completion contract and deterministic status authority. Formation keeps `evidenceRefs` plurality and `independentClosure` as adapter-side aggregation inputs; it does not introduce `FormationDoneConditionDraft`, `evaluateFormationDoneCondition`, or a second completion status (Section 4.3).
 - `detectForbiddenPromotion`, `runRuleGate`, `requiresHumanReview` (`promotionRules.ts`, `ruleGate.ts`) remain the promotion safety spine; merge/split finalization stays forbidden.
 - `projectSafeWorkUnitCandidate` remains the single frontend chokepoint; new fields extend its allowlist rather than bypassing it.
 - The mock-only LLM boundary (`NO_GO_RUNTIME_CONTROLS` in `decompositionOrchestrator.ts`) remains closed; no phase of this plan enables a real provider.
 
-### 1.2 First implementation slice **[PROPOSAL]**
+### 1.2 First implementation sequence **[PROPOSAL]**
 
-**PR F1 — "formation source contract (deterministic, contract-first)"** (details in Section 14):
+The former broad F1 is replaced by three dependency-ordered PRs (details in Section 14):
 
-- Add `app/lib/application/formation/types.ts` (`FormationSourceCandidate`, `SourceRole`, `GoalHypothesis`, `FormationDoneConditionDraft`, `WorkUnitFormationCandidate`, evidence/finding types) with deterministic validators and the P0 forbidden-field boundary applied at construction.
-- Add fixture-driven contract tests, allowlist tests, and forbidden-field tests.
-- No provider API, no LLM call, no UI rendering, no persistence change.
+1. **F1A — Formation Source Contract**: `FormationSourceCandidate` plus source-local validators and forbidden-field tests only. No Goal, Done Condition, aggregate, cross-source evidence/finding, public projection, provider extraction, LLM, or UI types.
+2. **F1B — Goal / Done Condition Adapter**: `GoalHypothesis` plus an adapter around the existing `DoneConditionDraft` and `evaluateDoneConditionDraft`. It may report formation-specific aggregation blockers, but it cannot assign or override Done Condition status.
+3. **F1C — WorkUnit Formation Aggregate**: the minimal plural-member `WorkUnitFormationCandidate` and `SourceRole` association, with literal candidate-only and human-review requirements. No provider extraction, grouping algorithm, State Prediction, ranking, findings, or public projection.
 
-Rationale for contract-first: every later stage (extraction matrices, grouping, state prediction, UX projection) is expressed against this contract; fixing the contract first makes each later PR small, testable, and reviewable, and lets gold-label fixtures be authored immediately.
+The first implementation PR is **F1A only**. This keeps the provider-independent input boundary reviewable before completion adaptation or downstream aggregation semantics are introduced.
 
 ---
 
@@ -218,14 +219,12 @@ Trust vocabulary used below:
 | `authoritySignals` | Claim-specific authority evidence (accepted/approved status, document ownership, signed-off review, official-communication markers) | Structured metadata first; explicit textual claims flagged `inferred` | deterministic when structured | Yes (textual, `inferred: true`) | Yes (Source Role rationale) | No | ≤ 10; `{kind ∈ (accepted_status, owner_of_record, signed_off_review, decision_maker_named, official_external_communication, superseded_marker), inferred: boolean}`; **provider identity itself is never an authority signal** [CONTRACT] |
 | `navigationTarget` | Where "Open source" takes the user | `sourceRef.url` or adapter deep link | deterministic | No | Yes (button) | Yes | Must be a URL already present in normalized input; never synthesized from text; scheme allowlist (`https`) |
 | `extractionConfidence` | How reliable this record's *extracted* (non-structured) fields are | Extractor | deterministic aggregation of per-field flags | No (aggregated from flags, not a raw LLM score) | No (internal; bands may drive "inferred" chips) | Yes | `high \| medium \| low` band, derived by counting `inferred` fields — never a free numeric similarity |
-| `missingFields` | Required-for-Goal fields this source cannot establish | Deterministic gap check against the Goal contract | deterministic | No | Yes (Missing) | Yes (may be empty) | Subset of a closed field-name enum; mirrors **[FACT]** `DoneConditionDraft.missingFields` semantics |
-| `contradictionMarkers` | Claims that conflict with another already-processed source | Deterministic comparison in the conflict stage (Section 10); stored on the source pair | deterministic (comparison) over possibly LLM-extracted claims | Claim extraction: yes; contradiction verdict: no | Yes (Conflict) | Yes (may be empty) | Each `{againstSource: sourceObjectId ref, kind ∈ conflict enum (Section 10), summary ≤ 200 chars}` |
-
 Boundary rules **[PROPOSAL]**:
 
 - The model contains **no raw payload field at all** — there is nothing to forbid because the type cannot express it; tests assert the absence of `rawPayload`/`providerPayload`/`body` keys structurally (same style as `FORBIDDEN_CANDIDATE_FIELDS` **[FACT]**).
 - `tenantId` exists only on the server-side envelope (as with **[FACT]** `NormalizedToolSignal.tenantId`) and is stripped by the safe projection exactly as `projectSafeWorkUnitCandidate` does today; it is never part of the frontend contract.
 - Every free-text field passes the existing sanitizer class before storage in the candidate model (`llm/sanitize.ts` patterns reused, not reimplemented).
+- F1A contains source-local facts and sanitized assertions only. Goal `missingFields` belong to F1B; cross-source contradiction findings belong to F6; grouping evidence belongs to F3; public allowlist fields belong to F8.
 
 ### 4.2 `SourceRole` **[PROPOSAL, mirrors CONTRACT §11]**
 
@@ -238,22 +237,33 @@ SourceRole =
 
 Role is assigned per (source, WorkUnitFormationCandidate) pair — the same source may hold different roles in different WorkUnits, and role never comes from `provider` alone [CONTRACT].
 
-### 4.3 Done Condition reuse — why no parallel model **[PROPOSAL]**
+### 4.3 Goal / Done Condition adapter — one canonical authority **[PROPOSAL]**
 
 The UX contract (§5.1) requires `outcome`, `verifier`, `acceptanceCriteria`, `evidenceRefs` (plural), `independentClosure`, plus derived `missingFields`/`conflicts`/`status`. The existing **[FACT]** `DoneConditionDraft` already carries `outcome`, `verifier`, `acceptanceCriteria`, `missingFields`, `status ∈ complete|partial|invalid`, `invalidReasons`, `riskFlags`, `candidateOnly: true` — and its deterministic gate `evaluateDoneConditionDraft` already enforces the AI-verifier ban and forbidden-context invalidation. Rebuilding this would duplicate a security-reviewed gate.
 
-Therefore formation **composes**:
+F1B therefore introduces an adapter candidate, not a second Done Condition model:
 
 ```text
-FormationDoneConditionDraft = {
-  base: DoneConditionDraft            // reused as-is, gate reused as-is
-  evidenceRefs: readonly SourceRef[]  // plural (base.sourceRef stays the primary)
+FormationGoalDoneConditionCandidate = {
+  goal: GoalHypothesis
+  doneCondition: DoneConditionDraft   // canonical status-bearing draft
+  evidenceRefs: readonly SourceRef[]  // aggregation sidecar; includes the primary sourceRef when present
   independentClosure: "independent" | "parent_bounded" | "unknown"
-  goal: GoalHypothesis                // workObject, decisionNeeded, scope, timeHorizon (Section 6, stage 5)
+  adapterIssues: readonly FormationAdapterIssue[]
+  humanReviewRequired: true
+  candidateOnly: true
 }
 ```
 
-Justification for the two additions: `DoneConditionDraft.sourceRef` is optional and singular — multi-source WorkUnits need every supporting ref; `independentClosure` is a contract-required grouping factor with no current home. `evaluateDoneConditionDraft(base)` remains the inner gate; a thin `evaluateFormationDoneCondition` adds only the two new checks (at least one evidence ref across the union; `independentClosure !== "unknown"` for `formal_candidate`).
+`FormationAdapterIssue` is a small closed set for missing Goal fields, evidence-membership mismatch, or unknown independent closure. These issues may block F1C aggregation or request clarification, but they never mutate Done Condition status.
+
+Canonical-authority rules:
+
+- `evaluateDoneConditionDraft(doneCondition)` is the only function that assigns `complete`, `partial`, `invalid`, `validForFormalCandidate`, `missingFields`, or `invalidReasons`.
+- The adapter copies the canonical verdict; it cannot upgrade a `partial`/`invalid` draft or downgrade a `complete` draft into a second Done Condition status.
+- `DoneConditionDraft.sourceRef` or `humanInputRef` remains the canonical evidence-anchor requirement. Extra `evidenceRefs` do not make a canonically partial draft complete.
+- `evidenceRefs` and `independentClosure` affect formation aggregation eligibility only. No `FormationDoneConditionDraft`, `evaluateFormationDoneCondition`, or formation-local completion enum is allowed.
+- Every adapter output remains candidate-only and requires human review before F1C aggregation can be formalized, merged, or split.
 
 ---
 
@@ -381,8 +391,8 @@ flowchart TD
     C["3 source-level extraction (D+L)"]
     D2["4 object identity extraction (D)"]
     E["5 Goal hypothesis generation (L over D skeleton)"]
-    F["6 Done Condition proposal (L)"]
-    G["7 deterministic Done Condition validation (D — reuses evaluateDoneConditionDraft)"]
+    F["6 Goal / Done Condition adaptation (L proposal → canonical draft)"]
+    G["7 canonical Done Condition validation (D — evaluateDoneConditionDraft only)"]
     H["8 candidate retrieval (D)"]
     I["9 compatibility comparison (D gates + weighted evidence)"]
     J["10 grouping proposal (D assembly)"]
@@ -404,8 +414,8 @@ flowchart TD
 | 3 | Source-level extraction | Deterministic first, LLM-assisted for text | Fill `FormationSourceCandidate` fields; every LLM-derived value carries `inferred: true` and passes bounds validation (`assertStringField` / `assertStringArrayField` class **[FACT]** `llm/validateLlmOutput.ts`). |
 | 4 | Object identity extraction | Deterministic | Canonical `{provider, sourceObjectId}` keys; `referencedObjects` verified against known providers; unverifiable mentions dropped. |
 | 5 | Goal hypothesis generation | LLM-assisted | Propose `GoalHypothesis` (`outcome`, `workObject`, `decisionNeeded`, `scope`, `verifier`, `timeHorizon`) per source; missing values stay missing [CONTRACT — no invention]. |
-| 6 | Done Condition proposal | LLM-assisted | Propose `FormationDoneConditionDraft` content (criteria phrasing, outcome sentence). |
-| 7 | Done Condition validation | Deterministic | `evaluateDoneConditionDraft` **[FACT]** + formation additions (Section 4.3). `invalid` blocks formal candidacy; AI verifier remains forbidden. |
+| 6 | Goal / Done Condition adaptation | LLM-assisted proposal, deterministic adapter | Propose fields for the existing `DoneConditionDraft`, then build `FormationGoalDoneConditionCandidate`; plural evidence and independent closure remain adapter-side aggregation inputs. |
+| 7 | Done Condition validation | Deterministic | Call `evaluateDoneConditionDraft` **[FACT]** as the sole status authority. Adapter issues may block aggregation, but no formation evaluator may alter the canonical verdict; `invalid` blocks formal candidacy and AI verifier remains forbidden. |
 | 8 | Candidate retrieval | Deterministic | Fetch comparable existing formation candidates by object keys, verified cross-links, then (only as *recall* aid) bounded lexical similarity. Retrieval widens the comparison set; it never merges. |
 | 9 | Compatibility comparison | Deterministic gates + weighted evidence | Section 7. Hard split gates run first and are final; hard positive evidence next; weak evidence only banded. |
 | 10 | Grouping proposal | Deterministic assembly | Emit `merge_candidate` / `split_candidate` / new-WorkUnit / `context_only` attachments with the full evidence ledger. Mirrors the existing `MergeCandidate`/`SplitCandidate` types **[FACT]** `decomposition/types.ts` and keeps their `humanReviewRequired: true`. |
@@ -638,7 +648,9 @@ This extends the existing PM-correction taxonomy direction (**[FACT]** `pmCorrec
 
 | Class | Content |
 | --- | --- |
-| Deterministic contract tests | `FormationSourceCandidate` / `FormationDoneConditionDraft` / `WorkUnitFormationCandidate` construction, bounds, enum closure; `evaluateFormationDoneCondition` composition preserves every `evaluateDoneConditionDraft` verdict |
+| F1A source-contract tests | `FormationSourceCandidate` construction, source-local bounds, enum closure, sanitizer boundary, and forbidden-field rejection; no Goal, Done Condition, aggregate, finding, or public-projection fields |
+| F1B adapter tests | `FormationGoalDoneConditionCandidate` delegates every completion verdict to `evaluateDoneConditionDraft`; extra evidence refs cannot upgrade `partial`/`invalid`; adapter issues affect aggregation eligibility only |
+| F1C aggregate tests | Plural validated members, Source Role association, literal `candidateOnly: true`, literal `humanReviewRequired: true`, and rejection of formalization/merge/split authorization fields |
 | Schema validation tests | Malformed/oversized/unknown-enum inputs rejected, never repaired |
 | Allowlist tests | Extended safe projection emits only allowlisted fields; snapshot of the allowlist itself so additions are explicit diffs (style of **[FACT]** `SAFE_WORK_UNIT_CANDIDATE_FIELDS`) |
 | P0 forbidden-field tests | Every forbidden key (`FORBIDDEN_CANDIDATE_FIELDS` + `P0_FORBIDDEN_CONTEXT_KEYS`) injected at every nesting level is dropped/blocked; homoglyph variants included (reusing `normalizeForSecurityScan` coverage style) |
@@ -672,7 +684,7 @@ Grouping precision; grouping recall; **false-merge rate** (sources wrongly joine
 
 ### 13.4 Priority rule **[CONTRACT-aligned]**
 
-In the first phase **false-merge rate dominates recall**: a missed grouping costs one extra hop; a wrong merge corrupts the Goal boundary, the Done Condition, and user trust. Thresholds are tuned to keep false merges near zero even at low recall; recall improvements come later from better hard evidence extraction, not looser gates.
+In the first grouping phase **false-merge rate dominates recall**: a missed grouping costs one extra hop; a wrong merge corrupts the Goal boundary, the Done Condition, and user trust. Thresholds are tuned to keep false merges near zero even at low recall; recall improvements come later from better hard evidence extraction, not looser gates.
 
 ---
 
@@ -682,36 +694,35 @@ Dependency-ordered, each PR small and reviewable. Every PR preserves: candidate-
 
 ```mermaid
 flowchart LR
-    F1["F1 contract types + validators"]
-    F2["F2 provider extraction (fixtures)"]
-    F3["F3 goal identity + grouping engine"]
-    F4["F4 done-condition composition + formation states"]
-    F5["F5 state prediction"]
-    F6["F6 missing/conflict/supersession"]
-    F7["F7 ranking evidence"]
-    F8["F8 safe projection + view models"]
-    F9["F9 UI rendering (launcher + context preview)"]
-    F10["F10 corrections + records"]
+    A["F1A Formation Source Contract"]
+    B["F1B Goal / Done Condition Adapter"]
+    C["F1C WorkUnit Formation Aggregate"]
+    D["Provider Extraction"]
+    E["Grouping"]
+    F["State Prediction"]
+    G["UX Projection"]
 
-    F1 --> F2 --> F3 --> F4 --> F5 --> F6 --> F7 --> F8 --> F9
-    F8 --> F10
-    F4 --> F6
+    A --> B --> C --> D --> E --> F --> G
 ```
+
+This is the non-negotiable dependency spine. In the detailed sequence below, F3–F4 are both within Grouping, F5 is State Prediction, and F8–F9 are UX Projection; F6 findings and F7 ranking refine the formed result without changing that order.
 
 | PR | Objective | Likely files/modules | Types added/changed | Tests | Safety boundary | Acceptance criteria | Depends on | Exclusions |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| F1 | Formation contract, deterministic validators | `app/lib/application/formation/types.ts`, `validate.ts`; `tests/formationContract.test.mts` | `FormationSourceCandidate`, `SourceRole`, `GoalHypothesis`, `FormationDoneConditionDraft`, `WorkUnitFormationCandidate`, evidence/finding enums | contract, schema, forbidden-field | No raw payload expressible; bounds everywhere | All fixtures validate; forbidden keys unrepresentable | — | No extraction logic, no LLM, no UI |
-| F2 | Deterministic provider extraction over normalized fixtures (github/slack/calendar first; notion/gmail fixture-shaped behind the same interface) | `formation/extract/*.ts`; fixtures under `tests/fixtures/formation/` | Extractor interfaces; per-provider mappers | provider extraction fixtures | Sanitizer class reuse; inferred flags | Matrix rows in Section 5 with **D** implemented; **L** rows stubbed as `missing` | F1 | No live provider, no LLM proposals |
+| F1A | Formation Source Contract only | `formation/sourceContract.ts`; `tests/formationSourceContract.test.mts` | `FormationSourceCandidate` and source-local nested enums/records only | shape, bounds, sanitizer-boundary, forbidden-field | Raw/provider payload, tenant/identity, Goal, Done Condition, aggregate, cross-source findings, and public projection are absent | Source-local fixtures validate; forbidden keys are unrepresentable; no downstream semantic type is exported | — | No Goal/Done adapter, Source Role, aggregate, evidence ledger, findings, provider extraction, LLM, safe projection, or UI |
+| F1B | Goal / Done Condition Adapter | `formation/goalDoneConditionAdapter.ts`; `tests/formationGoalDoneConditionAdapter.test.mts` | `GoalHypothesis`, `FormationGoalDoneConditionCandidate`, `FormationAdapterIssue`; reuse `DoneConditionDraft`/`DoneConditionStatus` unchanged | canonical-verdict delegation; evidence-sidecar and closure blocker cases; counterexample 10 | `evaluateDoneConditionDraft` is the only completion status authority; literal candidate-only/human-review | Every canonical verdict is preserved exactly; extra evidence cannot upgrade partial/invalid; adapter issues never become a second status | F1A | No `FormationDoneConditionDraft`, no `evaluateFormationDoneCondition`, no aggregate, grouping, provider extraction, LLM call, projection, or UI |
+| F1C | WorkUnit Formation Aggregate | `formation/workUnitFormationAggregate.ts`; `tests/workUnitFormationAggregate.test.mts` | `WorkUnitFormationCandidate`, `FormationMember`, `SourceRole` | plural membership, role association, duplicate/member-ref rejection, candidate/human-review literals | Aggregate authorizes no formalization, merge, split, approval, or execution | Aggregate accepts only validated F1A members + one F1B adapter result; human review is mandatory | F1B | No extraction, grouping algorithm, grouping-evidence/finding enums, State Prediction, ranking, public projection, or UI |
+| F2 | Deterministic provider extraction over normalized fixtures (github/slack/calendar first; notion/gmail fixture-shaped behind the same interface) | `formation/extract/*.ts`; fixtures under `tests/fixtures/formation/` | Extractor interfaces; per-provider mappers | provider extraction fixtures | Sanitizer class reuse; inferred flags | Matrix rows in Section 5 with **D** implemented; **L** rows stubbed as source-local unknowns | F1C | No live provider, no LLM proposals |
 | F3 | Object identity, retrieval, hard gates, evidence ledger, verdicts | `formation/goalIdentity.ts`, `grouping.ts` | `GroupingComparison`, evidence types | gold-label sets, counterexamples 1–4, 9, 12 | Hard gates final; weak-only never merges | Counterexample suite green; false-merge = 0 on gold set | F2 | No auto-finalization; no vector store |
-| F4 | Done-condition composition, formation states, split/merge candidates | `formation/doneCondition.ts`, `states.ts` | `evaluateFormationDoneCondition`; state enum | contract tests; counterexamples 8, 10 | `evaluateDoneConditionDraft` + `detectForbiddenPromotion` reused, not forked | UX-contract §7 states reproduced | F3 | No formalization path |
+| F4 | Grouping outcomes: formation states and split/merge candidates | `formation/states.ts` | formation-state enum and candidate mappings only | state mapping; counterexample 8; canonical Done Condition status consumed read-only | `detectForbiddenPromotion` reused; F1B canonical verdict cannot be overridden | UX-contract §7 states reproduced without a parallel completion evaluator | F3 | No Done Condition composition/status fork; no formalization path |
 | F5 | State prediction factors + outputs | `formation/statePrediction.ts` | factor/result types (8.1) | state fixtures; distinctions (8.2) as tests | Narrative from validated fields only | Fixture outputs match; conflicts never regroup | F4 | No LLM narrative yet (deterministic assembly only) |
-| F6 | Missing/conflict/supersession rules | `formation/findings.ts` | finding types; Section 10 mapping | missing/conflict fixtures; counterexamples 5–7 | Conflicts surfaced, never resolved | Case table fully covered | F4 | No auto-resolution |
+| F6 | Missing/conflict/supersession rules | `formation/findings.ts` | finding types; Section 10 mapping | missing/conflict fixtures; counterexamples 5–7 | Conflicts surfaced, never resolved | Case table fully covered | F4, F5 | No auto-resolution |
 | F7 | Ranking evidence + whyNow assembly | `formation/rankingEvidence.ts` | evidence types (9.1) | ranking tests; counterexample 9 | Ranking reads formation output only | whyNow deterministic and explainable | F5, F6 | No universal formula claim; legacy ROI untouched |
 | F8 | Extended safe projection + launcher/context-preview view models | `candidate/safeWorkUnitCandidate.ts` (allowlist extension), `formation/projection.ts`, `launcher/…` model additions | new allowlisted fields (11.1/11.2) | allowlist + P0 tests re-run over new fields; UX view-model tests | `projectSafeWorkUnitCandidate` remains sole chokepoint | Old fields byte-compatible; new fields allowlisted | F7 | No component changes yet |
 | F9 | UI rendering: launcher row additions + Context Preview panel | `components/workunit-os/launcher/*` | props only | component render tests | display-only; no new data access | Contract §10 order rendered; corrections visible | F8 | No Graph/Action-Field/Atra-canvas changes |
 | F10 | Correction flow + correction records | `formation/corrections.ts`; UI hooks | `FormationCorrectionRecord` | correction-flow tests | corrections are proposals; audit/product channels separated | Ten correction kinds recorded; none finalizes | F8 | No model training, no automation |
 
-LLM-assisted proposal stages (the **L** cells of Section 5, narrative generation of Section 8) enter *after* F5 as a separate PR series behind the existing mock boundary, each stage individually validated — they are intentionally not in the first ten PRs' critical path.
+LLM-assisted proposal stages (the **L** cells of Section 5, narrative generation of Section 8) enter *after* F5 as a separate PR series behind the existing mock boundary, each stage individually validated — they are intentionally outside this deterministic dependency spine.
 
 ---
 
@@ -730,7 +741,7 @@ Unresolved product decisions (deliberately not decided here):
 
 Technical risks:
 
-- **Contract creep** — the formation layer could grow into a parallel domain model; mitigated by composing `DoneConditionDraft` and reusing gates (Section 4.3), enforced in review.
+- **Contract creep** — the formation layer could grow into a parallel completion model; mitigated by the F1B adapter preserving `DoneConditionDraft` and `evaluateDoneConditionDraft` as the sole completion-status authority (Section 4.3), enforced in review.
 - **Weak-evidence drift** — future tuning pressure to let semantic similarity merge; mitigated by the categorical hard-gate architecture and the false-merge-first metric rule.
 - **Allowlist erosion** — each new UX field widens the public surface; mitigated by allowlist snapshot tests and P0 re-runs per field (F8).
 - **Fixture realism** — gold sets authored in-house may miss real provider messiness; mitigated by counterexample-first curation and by treating metrics as hypotheses.
@@ -745,4 +756,4 @@ OAuth; token storage; provider polling; provider writes; real external execution
 
 ## 17. Recommended first implementation PR
 
-**F1 — "formation source contract (deterministic, contract-first)"** as specified in Sections 1.2 and 14: `app/lib/application/formation/types.ts` + `validate.ts` + contract/schema/forbidden-field tests, with zero provider, LLM, UI, or persistence surface. It is the smallest change that makes every subsequent slice reviewable against a fixed, safety-checked contract, and it allows gold-label fixture authoring to start immediately — before any extraction or grouping code exists.
+**F1A — "Formation Source Contract"** as specified in Sections 1.2 and 14: `formation/sourceContract.ts` + source-contract bounds/sanitizer/forbidden-field tests only, with zero Goal, Done Condition, aggregate, cross-source finding, provider extraction, LLM, public projection, UI, or persistence surface. F1B and F1C must follow as separate dependent PRs; neither may be folded back into F1A.
