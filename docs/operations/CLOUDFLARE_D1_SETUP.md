@@ -1034,51 +1034,60 @@ database is missing `action_previews.created_by_user_id`, which every
 forward is a **migration requirement**, not a supported runtime state (run
 `cf:d1:migrate:apply-*` to reach the canonical schema).
 
-### 11.3 Staging plan / verify
+### 11.3 Staging plan / preflight
 
 ```bash
-npm run cf:d1:migrate:plan-staging    # offline plan (no network)
-npm run cf:d1:migrate:verify-staging  # requires --remote (read-only remote schema)
+npm run cf:d1:migrate:plan-staging       # offline plan (no network)
+npm run cf:d1:migrate:preflight-staging  # OFFLINE staging authority preflight (no network)
 ```
 
-`plan-staging` is fully offline. `verify-staging` is a remote read and requires
-`--remote` (already wired into the script).
+Both are **fully offline**. There is **no** remote staging verify or apply command
+in this PR — remote execution is not implemented (see §11.4). `plan-staging`
+prints the safe plan; `preflight-staging` validates the staging authority contract
+without contacting a provider.
 
-### 11.4 Explicit remote-apply authorization boundary
-
-Remote mutation is a **separate, explicitly authorized** command:
+`preflight-staging` requires the operator's trusted staging context and reports
+safe booleans only:
 
 ```bash
-npm run cf:d1:migrate:apply-staging   # apply --environment staging --remote --confirm-staging
+# Operator sets the trusted staging context (BOTH required; values are examples):
+export CF_STAGING_ACCOUNT_ID=<32-hex Cloudflare account id>
+export CF_STAGING_PROJECT=<staging Worker/project name>
+npm run cf:d1:migrate:preflight-staging
+#   trusted_context_complete=true caller_assertions_valid=true
+#   production_prohibited=true execution_latch_absent=true
+#   local_manifest_valid=true remote=false
 ```
 
-The environment gate rejects: missing staging confirmation, `production`/unknown
-environments, `--remote` on a local command, a staging command without `--remote`,
-`--account`/`--project` supplied to an offline `plan`
-(`context_assertion_not_allowed_for_plan`), an unconfigured trusted context
-(`staging_context_unconfigured`), and a caller-asserted `--account`/`--project`
-that disagrees with the trusted context (`unexpected_cloudflare_context`).
+### 11.4 Staging authority preflight and the remote boundary
 
-**Trusted staging context.** `--account` and `--project` are caller *assertions*,
-not authority. The authoritative staging context is read from operator-provided,
+**Remote staging verify/apply is NOT implemented in this PR.** `apply`/`verify
+--environment staging` fail closed with `staging_remote_execution_not_available`.
+A later, **independently audited** PR will add the authorized remote executor. Do
+**not** set `CF_D1_STAGING_EXECUTE=1` in this PR — `preflight` requires the latch
+to be **absent** and refuses (`staging_remote_executor_not_implemented`) if it is
+set.
+
+**Trusted staging context.** `--account` / `--project` are caller *assertions*,
+not authority. The authoritative context is read from operator-provided,
 staging-only environment variables **`CF_STAGING_ACCOUNT_ID`** and
-**`CF_STAGING_PROJECT`** (never committed, never printed). A staging `apply` or
-`verify` fails closed with `staging_context_unconfigured` when they are unset, and
-with `unexpected_cloudflare_context` when a caller assertion disagrees. These
-checks run in the **real** CLI path and are covered by CLI subprocess tests
-(`tests/d1MigrationCli.test.mts`).
+**`CF_STAGING_PROJECT`** — **BOTH required**, never committed, never printed.
+`preflight --environment staging` classifies them (all fail-closed, values never
+echoed):
 
-```bash
-# Operator sets the trusted context for a staging run (values are examples):
-export CF_STAGING_ACCOUNT_ID=...     # your staging Cloudflare account id
-export CF_STAGING_PROJECT=...        # your staging Worker/project name
-```
+| Condition                                              | Result                                 |
+| ------------------------------------------------------ | -------------------------------------- |
+| neither configured                                     | `staging_context_unconfigured`         |
+| exactly one configured                                 | `staging_context_incomplete`           |
+| both configured but malformed (format/bounds)          | `staging_context_invalid`              |
+| caller asserts only one of account/project             | `staging_context_assertion_incomplete` |
+| caller asserts a value disagreeing with trusted context| `unexpected_cloudflare_context`        |
+| both valid; caller assertions match (or absent)        | preflight passes (offline)             |
 
-**Even with every flag valid and the trusted context matching, this command
-performs no remote operation unless the operator ALSO sets the execution latch
-`CF_D1_STAGING_EXECUTE=1`.** Without the latch it prints that the authorization
-gate passed and exits **without touching the network**. This is deliberate: no PR
-or CI run mutates a remote D1.
+Validation is bounded: trimmed, non-empty, length-capped, no control characters;
+account id = 32-hex, project name = conservative allowlist. `plan` and local
+commands never accept `--account`/`--project`. These checks run in the **real**
+CLI path and are covered by CLI subprocess tests (`tests/d1MigrationCli.test.mts`).
 
 ### 11.5 Migration rollback policy
 
@@ -1109,18 +1118,24 @@ never mutate an applied one.
 1. `npm run cf:d1:migrate:plan-local` — plan reviewed.
 2. `npm run cf:d1:migrate:apply-local` — `fresh_apply/replay_noop/verify_ok/cleanup` all true.
 3. `node --test tests/d1MigrationRunner.test.mts tests/d1OperationalProof.test.mts
-   tests/tenantDbResolver.test.mts tests/tenantIsolationRoutes.test.mts` — green.
-4. An **authorized** `apply-staging` run (latch set by the operator) with its
-   evidence pack (§10) independently reviewed.
+   tests/tenantSchemaCompatibility.test.mts tests/tenantDbResolver.test.mts
+   tests/tenantIsolationRoutes.test.mts tests/d1MigrationCli.test.mts` — green.
+4. With the operator's trusted context set,
+   `npm run cf:d1:migrate:preflight-staging` passes (offline).
+5. A later, **independently audited** PR implements the remote executor; an
+   **authorized** remote staging plan → apply → verify is then run against a real
+   staging D1 and its evidence pack (§10) independently reviewed. That remote step
+   is **not** part of this PR.
 
 ### 11.9 Issue #155 closure criteria
 
-Issue #155 stays **open** until an authorized staging plan → apply → verify has
-been executed against a real staging D1 and its evidence independently reviewed.
-The repository/local implementation criteria (contract documented + enforced, no
-`CONTROL_DB` fallback, mandatory tenant scope, reproducible manifest + ledger,
-fresh/replay/partial/checksum-drift proofs, cross-tenant isolation, hermetic local
-proof) are met by this change; the staging-evidence criterion is the remaining
-blocker. See
+Issue #155 stays **open** until an authorized remote staging plan → apply → verify
+has been executed against a real staging D1 (by the future, independently audited
+remote-executor PR) and its evidence independently reviewed. The repository/local
+implementation criteria (contract documented + enforced, no `CONTROL_DB` fallback,
+mandatory tenant scope, reproducible manifest + ledger,
+fresh/replay/partial/checksum-drift proofs, registry-row coupling, cross-tenant
+isolation, hermetic local proof, and an offline staging **preflight**) are met by
+this change; the remote staging-evidence criterion is the remaining blocker. See
 [../architecture/PERSISTENCE_CONTRACT.md](../architecture/PERSISTENCE_CONTRACT.md)
 §9.

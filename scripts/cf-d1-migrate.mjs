@@ -1,47 +1,39 @@
 #!/usr/bin/env node
 /**
- * cf:d1:migrate — unified reproducible migration CLI (plan / apply / verify)
- * with an explicit local vs staging separation. (P0-FIX-D1-OPERATIONAL-CONTRACT)
+ * cf:d1:migrate — reproducible migration CLI (plan / apply / verify / preflight)
+ * with an explicit local vs staging separation. (P0-FIX-D1-*)
  *
  * Verbs:
- *   plan     Deterministic per-binding plan (safe fields only; no network).
- *   apply    LOCAL: hermetic, invocation-owned temp SQLite databases — fresh
- *            apply, replay no-op, and read-only verify, then cleanup. Leaves NO
- *            local D1 state. STAGING: a remote operation (see the gate below).
- *   verify   LOCAL: hermetic fresh apply + read-only schema/ledger verify.
- *            STAGING: a remote read (see the gate below).
+ *   plan       Deterministic per-binding plan (safe fields only; no network).
+ *   apply      LOCAL only: hermetic, invocation-owned temp SQLite databases —
+ *              fresh apply, replay no-op, read-only verify, then verified cleanup.
+ *   verify     LOCAL only: hermetic fresh apply + read-only schema/ledger verify.
+ *   preflight  STAGING only: OFFLINE validation of the staging authority contract
+ *              (complete trusted context, complete-or-absent caller assertions,
+ *              production prohibition, execution-latch absence, local manifest
+ *              validity). It does NOT use --remote and performs NO network access.
  *
- * Environment gate (scripts/lib/d1MigrationRunner.mjs#validateInvocation):
- *   --environment local        local only; --remote / --confirm-staging rejected.
- *   --environment staging       apply requires --remote AND --confirm-staging;
- *                               verify requires --remote; production/unknown env
- *                               rejected; a caller-asserted --account/--project
- *                               that disagrees with deploy config is rejected.
+ * REMOTE EXECUTOR: NOT implemented in this PR. `apply`/`verify` against staging
+ * fail closed with `staging_remote_execution_not_available`. A later,
+ * independently audited PR will add the authorized remote executor. This command
+ * NEVER performs a remote D1 operation and NEVER contacts a provider.
  *
- * REMOTE SAFETY: this command NEVER performs a remote D1 operation unless the
- * operator sets the execution latch CF_D1_STAGING_EXECUTE=1 (a deliberate,
- * separate authorization). Without it, a fully-validated staging invocation
- * prints that the gate passed and exits WITHOUT touching the network. This PR
- * never sets the latch.
- *
- * Output is disclosure-free: no database IDs, secrets, identities, or stored rows.
+ * Output is disclosure-free: no account/project values, database IDs, secrets,
+ * identities, tenant IDs, or stored rows.
  */
 
 import { DatabaseSync } from "node:sqlite"
-import { mkdtempSync, rmSync, realpathSync } from "node:fs"
+import { mkdtempSync, rmSync, realpathSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { resolve, dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
   planAll,
-  applyAll,
-  verifyAll,
   parseMigrateArgs,
   validateInvocation,
   loadTrustedStagingContext,
-  KNOWN_BINDINGS,
+  runHermeticLocal,
 } from "./lib/d1MigrationRunner.mjs"
-import { schemaSignature } from "./lib/d1SchemaContract.mjs"
 
 // The repository root that supplies the canonical migration files. Defaults to
 // this script's committed location. `CF_D1_MIGRATE_REPO_ROOT` is a test/diagnostic
@@ -68,77 +60,52 @@ function runPlan() {
   process.exit(0)
 }
 
-// ─── local hermetic apply/verify ─────────────────────────────────
-
-/** Open one invocation-owned temp SQLite database per binding. */
-function openHermeticDatabases(dir) {
-  const handles = {}
-  for (const binding of KNOWN_BINDINGS) {
-    handles[binding] = new DatabaseSync(join(dir, `${binding}.sqlite`))
-  }
-  return handles
-}
+// ─── local hermetic apply/verify (single cleanup authority) ──────
 
 function runLocal(verb) {
-  const dir = mkdtempSync(join(tmpdir(), "atra-d1-migrate-"))
-  const handles = openHermeticDatabases(dir)
-  const dbFor = (binding) => handles[binding]
-  const flags = { fresh_apply: false, replay_noop: false, verify_ok: false, cleanup: false }
-  try {
-    // Fresh apply (both lanes, in order).
-    const fresh = applyAll(dbFor, REPO_ROOT, { now: () => "2026-01-01T00:00:00.000Z" })
-    if (!fresh.ok) throw new Error(`apply_failed:${fresh.error}`)
-    flags.fresh_apply = KNOWN_BINDINGS.every((b) => fresh.perBinding[b].applied.length > 0)
-
-    if (verb === "apply") {
-      // Replay must perform NO destructive work. Replay-safe DDL is `IF NOT
-      // EXISTS`-guarded (re-executed harmlessly), and `once` migrations are
-      // ledger-skipped — so the honest proof is that the resulting schema is
-      // byte-identical after a second apply.
-      const before = KNOWN_BINDINGS.map((b) => schemaSignature(handles[b]))
-      const replay = applyAll(dbFor, REPO_ROOT, { now: () => "2026-01-01T00:00:00.000Z" })
-      if (!replay.ok) throw new Error(`replay_failed:${replay.error}`)
-      const after = KNOWN_BINDINGS.map((b) => schemaSignature(handles[b]))
-      flags.replay_noop = before.every((sig, i) => sig === after[i])
-    }
-
-    const verify = verifyAll(dbFor, REPO_ROOT)
-    flags.verify_ok = verify.ok === true
-  } finally {
-    for (const binding of KNOWN_BINDINGS) {
-      try { handles[binding].close() } catch { /* already closed */ }
-    }
-    rmSync(dir, { recursive: true, force: true })
-    flags.cleanup = true
-  }
-
-  // Only the flags relevant to this verb are reported (replay is an apply concern).
-  const reported = verb === "apply"
-    ? { fresh_apply: flags.fresh_apply, replay_noop: flags.replay_noop, verify_ok: flags.verify_ok, cleanup: flags.cleanup }
-    : { fresh_apply: flags.fresh_apply, verify_ok: flags.verify_ok, cleanup: flags.cleanup }
-  const pass = Object.values(reported).every(Boolean)
+  const result = runHermeticLocal({
+    verb,
+    repoRoot: REPO_ROOT,
+    makeTempRoot: () => mkdtempSync(join(tmpdir(), "atra-d1-migrate-")),
+    openDatabase: (root, binding) => new DatabaseSync(join(root, `${binding}.sqlite`)),
+    closeHandle: (handle) => handle.close(),
+    removeRoot: (root) => rmSync(root, { recursive: true, force: true }),
+    rootExists: (root) => existsSync(root),
+  })
 
   console.log(`cf:d1:migrate ${verb} --environment local (hermetic, no retained state):`)
-  for (const [k, v] of Object.entries(reported)) console.log(`  ${k}=${v}`)
-  process.exit(pass ? 0 : 1)
+  for (const [k, v] of Object.entries(result.reported)) console.log(`  ${k}=${v}`)
+  if (result.runError) console.error(`cf:d1:migrate: ${result.runError}`)
+  if (result.cleanupError) console.error(`cf:d1:migrate: ${result.cleanupError}`)
+  process.exit(result.ok ? 0 : 1)
 }
 
-// ─── staging remote gate (never executes remote in this build) ───
+// ─── staging preflight (offline; NO network, NO remote executor) ─
 
-function runStagingGate(plan) {
-  const executeLatch = process.env[STAGING_EXECUTE_LATCH] === "1"
-  console.log(`cf:d1:migrate ${plan.verb} --environment staging: authorization gate PASSED.`)
-  if (!executeLatch) {
-    console.error(
-      `cf:d1:migrate: remote execution latch ${STAGING_EXECUTE_LATCH}=1 is not set — ` +
-      "no remote D1 operation performed. Remote staging execution is a separate, " +
-      "explicitly authorized step (see docs/operations/CLOUDFLARE_D1_SETUP.md).",
-    )
-    process.exit(3)
+function runPreflight() {
+  // The gate (validateInvocation) already validated the complete trusted context
+  // and complete-or-absent caller assertions. Preflight additionally confirms the
+  // local manifest is valid and that the remote execution latch is NOT set (there
+  // is no executor in this PR). It performs NO network access.
+  const manifest = planAll(REPO_ROOT)
+  if (!manifest.ok) fail(manifest.error, manifest.failures?.join(", "))
+  const executionLatchAbsent = process.env[STAGING_EXECUTE_LATCH] !== "1"
+  if (!executionLatchAbsent) {
+    // The latch implies intent to execute remotely, but no remote executor exists.
+    fail("staging_remote_executor_not_implemented")
   }
-  // Deliberately not implemented in this command build: remote execution requires
-  // the authorized remote path and is out of scope for this change. Fail closed.
-  fail("remote_execution_not_available_in_this_build")
+  console.log("cf:d1:migrate preflight --environment staging (offline; NO network, NO remote executor):")
+  const report = {
+    environment: "staging",
+    trusted_context_complete: true,
+    caller_assertions_valid: true,
+    production_prohibited: true,
+    execution_latch_absent: executionLatchAbsent,
+    local_manifest_valid: true,
+    remote: false,
+  }
+  for (const [k, v] of Object.entries(report)) console.log(`  ${k}=${v}`)
+  process.exit(0)
 }
 
 // ─── main ────────────────────────────────────────────────────────
@@ -148,15 +115,17 @@ function main() {
   const { flags, unknown } = parseMigrateArgs(process.argv.slice(3))
   // The TRUSTED staging context comes from operator-provided, staging-only env
   // (CF_STAGING_ACCOUNT_ID / CF_STAGING_PROJECT) — never from --account/--project.
-  // Local and plan invocations ignore it; a staging remote op requires it.
+  // Local and plan invocations ignore it; preflight validates it.
   const expectedContext = loadTrustedStagingContext()
   const decision = validateInvocation(verb, flags, unknown, expectedContext)
   if (!decision.ok) fail(decision.error)
 
   if (verb === "plan") return runPlan()
+  if (verb === "preflight") return runPreflight()
   if (decision.plan.environment === "local") return runLocal(verb)
-  // Validated staging apply/verify — remote. Gated; never executes here.
-  return runStagingGate(decision.plan)
+  // No other invocation can succeed: staging apply/verify is rejected by the gate
+  // (staging_remote_execution_not_available). Defensive fail-closed.
+  fail("unsupported_invocation")
 }
 
 main()

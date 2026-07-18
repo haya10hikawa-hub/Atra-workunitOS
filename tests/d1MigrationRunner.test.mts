@@ -21,6 +21,9 @@ import {
   parseMigrateArgs,
   validateInvocation,
   loadTrustedStagingContext,
+  evaluateTrustedStagingContext,
+  evaluateCallerAssertions,
+  runHermeticLocal,
   KNOWN_BINDINGS,
 } from "../scripts/lib/d1MigrationRunner.mjs"
 import { loadManifest } from "../scripts/lib/d1MigrationManifest.mjs"
@@ -175,86 +178,180 @@ function parse(argv: string[]) {
   return { flags, unknown }
 }
 
-test("gate: valid local plan/apply/verify", () => {
+// Valid synthetic staging context (32-hex account id; allowlisted project name).
+const ACCT = "0123456789abcdef0123456789abcdef"
+const PROJ = "workunit-os-staging"
+const CTX = { account: ACCT, project: PROJ }
+
+test("gate: valid local plan/apply/verify (offline, remote=false)", () => {
   for (const verb of ["plan", "apply", "verify"]) {
-    const { flags, unknown } = parse(["--environment", "local"])
-    const d = validateInvocation(verb, flags, unknown)
+    const d = validateInvocation(verb, parse(["--environment", "local"]).flags, [])
     assert.equal(d.ok, true, verb)
     assert.ok(d.plan)
     assert.equal(d.plan.remote, false)
   }
 })
 
-test("gate: local rejects --remote and --confirm-staging", () => {
+test("gate: local rejects --remote, --confirm-staging, and context assertions", () => {
   let d = validateInvocation("apply", parse(["--environment", "local", "--remote"]).flags, [])
-  assert.equal(d.ok, false); assert.equal(d.error, "remote_flag_forbidden_for_local")
+  assert.equal(d.error, "remote_flag_forbidden_for_local")
   d = validateInvocation("apply", parse(["--environment", "local", "--confirm-staging"]).flags, [])
-  assert.equal(d.ok, false); assert.equal(d.error, "staging_confirmation_forbidden_for_local")
+  assert.equal(d.error, "staging_confirmation_forbidden_for_local")
+  d = validateInvocation("apply", parse(["--environment", "local", "--account", ACCT, "--project", PROJ]).flags, [])
+  assert.equal(d.error, "context_assertion_not_allowed_for_local")
 })
 
 test("gate: production and unknown environments fail closed", () => {
   for (const env of ["production", "prod"]) {
     const d = validateInvocation("apply", parse(["--environment", env]).flags, [])
-    assert.equal(d.ok, false); assert.equal(d.error, "production_environment_forbidden")
+    assert.equal(d.error, "production_environment_forbidden")
   }
-  const d = validateInvocation("apply", parse(["--environment", "qa"]).flags, [])
-  assert.equal(d.ok, false); assert.equal(d.error, "unknown_environment")
+  assert.equal(validateInvocation("apply", parse(["--environment", "qa"]).flags, []).error, "unknown_environment")
 })
 
-const CTX = { account: "acct-x", project: "proj-y" }
-
-test("gate: staging apply requires --remote AND --confirm-staging AND trusted context", () => {
-  let d = validateInvocation("apply", parse(["--environment", "staging"]).flags, [], CTX)
-  assert.equal(d.error, "remote_flag_required_for_staging")
-  d = validateInvocation("apply", parse(["--environment", "staging", "--remote"]).flags, [], CTX)
-  assert.equal(d.error, "staging_confirmation_required")
-  d = validateInvocation("apply", parse(["--environment", "staging", "--remote", "--confirm-staging"]).flags, [], CTX)
-  assert.equal(d.ok, true); assert.ok(d.plan); assert.equal(d.plan.remote, true)
-})
-
-test("gate: staging remote op without trusted context fails staging_context_unconfigured", () => {
-  // No expected context (unconfigured) — even with all flags valid.
-  let d = validateInvocation("apply", parse(["--environment", "staging", "--remote", "--confirm-staging"]).flags, [], {})
-  assert.equal(d.ok, false); assert.equal(d.error, "staging_context_unconfigured")
-  d = validateInvocation("verify", parse(["--environment", "staging", "--remote"]).flags, [], {})
-  assert.equal(d.ok, false); assert.equal(d.error, "staging_context_unconfigured")
-})
-
-test("gate: staging verify requires --remote + trusted context; staging plan is offline", () => {
-  let d = validateInvocation("verify", parse(["--environment", "staging"]).flags, [], CTX)
-  assert.equal(d.error, "remote_flag_required_for_staging")
-  d = validateInvocation("verify", parse(["--environment", "staging", "--remote"]).flags, [], CTX)
-  assert.equal(d.ok, true); assert.ok(d.plan); assert.equal(d.plan.remote, true)
-  d = validateInvocation("plan", parse(["--environment", "staging"]).flags, [], {})
+test("gate: plan rejects --remote and account/project assertions", () => {
+  assert.equal(validateInvocation("plan", parse(["--environment", "staging", "--remote"]).flags, []).error, "remote_flag_forbidden_for_plan")
+  assert.equal(validateInvocation("plan", parse(["--environment", "staging", "--account", ACCT]).flags, [], CTX).error, "context_assertion_not_allowed_for_plan")
+  const d = validateInvocation("plan", parse(["--environment", "staging"]).flags, [], {})
   assert.equal(d.ok, true); assert.ok(d.plan); assert.equal(d.plan.remote, false)
 })
 
-test("gate: plan rejects account/project assertions (offline, context-free)", () => {
-  let d = validateInvocation("plan", parse(["--environment", "staging", "--account", "acct-x"]).flags, [], CTX)
-  assert.equal(d.ok, false); assert.equal(d.error, "context_assertion_not_allowed_for_plan")
-  d = validateInvocation("plan", parse(["--environment", "local", "--project", "proj-y"]).flags, [], {})
-  assert.equal(d.ok, false); assert.equal(d.error, "context_assertion_not_allowed_for_plan")
+test("gate: deprecated staging apply/verify fail closed (no remote executor)", () => {
+  assert.equal(validateInvocation("apply", parse(["--environment", "staging", "--remote", "--confirm-staging"]).flags, [], CTX).error, "staging_remote_execution_not_available")
+  assert.equal(validateInvocation("verify", parse(["--environment", "staging", "--remote"]).flags, [], CTX).error, "staging_remote_execution_not_available")
+})
+
+test("gate: preflight requires staging environment and rejects remote/confirm flags", () => {
+  assert.equal(validateInvocation("preflight", parse(["--environment", "local"]).flags, [], CTX).error, "preflight_requires_staging_environment")
+  assert.equal(validateInvocation("preflight", parse(["--environment", "staging", "--remote"]).flags, [], CTX).error, "remote_flag_forbidden_for_preflight")
+  assert.equal(validateInvocation("preflight", parse(["--environment", "staging", "--confirm-staging"]).flags, [], CTX).error, "confirm_staging_not_allowed_for_preflight")
+})
+
+test("gate: preflight trusted-context categories (unconfigured/incomplete/invalid/valid)", () => {
+  const pf = (expected: Record<string, string>) => validateInvocation("preflight", parse(["--environment", "staging"]).flags, [], expected)
+  assert.equal(pf({}).error, "staging_context_unconfigured")
+  assert.equal(pf({ account: ACCT }).error, "staging_context_incomplete")
+  assert.equal(pf({ project: PROJ }).error, "staging_context_incomplete")
+  assert.equal(pf({ account: "NOTHEX", project: PROJ }).error, "staging_context_invalid")
+  assert.equal(pf({ account: ACCT, project: "Bad Project!" }).error, "staging_context_invalid")
+  const ok = pf(CTX)
+  assert.equal(ok.ok, true); assert.ok(ok.plan); assert.equal(ok.plan.remote, false)
+})
+
+test("gate: preflight caller assertions (both/neither; matching required)", () => {
+  const pf = (args: string[]) => validateInvocation("preflight", parse(["--environment", "staging", ...args]).flags, [], CTX)
+  assert.equal(pf([]).ok, true) // neither → trusted governs
+  assert.equal(pf(["--account", ACCT]).error, "staging_context_assertion_incomplete")
+  assert.equal(pf(["--account", "deadbeefdeadbeefdeadbeefdeadbeef", "--project", PROJ]).error, "unexpected_cloudflare_context")
+  assert.equal(pf(["--account", ACCT, "--project", PROJ]).ok, true)
 })
 
 test("gate: unknown verb and unknown flag fail closed", () => {
-  let d = validateInvocation("destroy", parse(["--environment", "local"]).flags, [])
-  assert.equal(d.error, "unknown_verb")
-  d = validateInvocation("apply", parse(["--environment", "local", "--force"]).flags, ["--force"])
-  assert.equal(d.error, "unknown_flag")
+  assert.equal(validateInvocation("destroy", parse(["--environment", "local"]).flags, []).error, "unknown_verb")
+  assert.equal(validateInvocation("apply", parse(["--environment", "local", "--force"]).flags, ["--force"]).error, "unknown_flag")
 })
 
-test("gate: caller assertion disagreeing with trusted context fails closed", () => {
-  const flags = parse(["--environment", "staging", "--remote", "--confirm-staging", "--account", "acct-x", "--project", "proj-y"]).flags
-  let d = validateInvocation("apply", flags, [], { account: "acct-real", project: "proj-y" })
-  assert.equal(d.error, "unexpected_cloudflare_context")
-  d = validateInvocation("apply", flags, [], { account: "acct-x", project: "proj-real" })
-  assert.equal(d.error, "unexpected_cloudflare_context")
-  d = validateInvocation("apply", flags, [], { account: "acct-x", project: "proj-y" })
-  assert.equal(d.ok, true)
+// ─── trusted-context / caller-assertion unit contracts ───────────
+
+test("evaluateTrustedStagingContext validates both fields and bounds", () => {
+  assert.equal(evaluateTrustedStagingContext({}).error, "staging_context_unconfigured")
+  assert.equal(evaluateTrustedStagingContext({ account: "  ", project: "  " }).error, "staging_context_unconfigured")
+  assert.equal(evaluateTrustedStagingContext({ account: ACCT }).error, "staging_context_incomplete")
+  assert.equal(evaluateTrustedStagingContext({ account: ACCT, project: "x".repeat(200) }).error, "staging_context_invalid")
+  assert.equal(evaluateTrustedStagingContext({ account: ACCT, project: "bad name" }).error, "staging_context_invalid")
+  assert.equal(evaluateTrustedStagingContext({ account: "ABCDEF0123456789ABCDEF0123456789", project: PROJ }).error, "staging_context_invalid") // uppercase hex rejected
+  const ok = evaluateTrustedStagingContext({ account: `  ${ACCT}  `, project: `  ${PROJ}  ` }) // trimmed
+  assert.equal(ok.ok, true)
+  if (ok.ok) assert.deepEqual(ok.value, { account: ACCT, project: PROJ })
 })
 
-test("loadTrustedStagingContext reads only staging-only env vars", () => {
+test("evaluateCallerAssertions requires both-or-neither and exact match", () => {
+  const t = { account: ACCT, project: PROJ }
+  assert.equal(evaluateCallerAssertions({ account: null, project: null } as never, t).ok, true)
+  assert.equal(evaluateCallerAssertions({ account: ACCT, project: null } as never, t).error, "staging_context_assertion_incomplete")
+  assert.equal(evaluateCallerAssertions({ account: "deadbeefdeadbeefdeadbeefdeadbeef", project: PROJ } as never, t).error, "unexpected_cloudflare_context")
+  assert.equal(evaluateCallerAssertions({ account: ACCT, project: PROJ } as never, t).ok, true)
+})
+
+test("loadTrustedStagingContext returns RAW staging-only env values", () => {
   assert.deepEqual(loadTrustedStagingContext({}), {})
-  assert.deepEqual(loadTrustedStagingContext({ CF_STAGING_ACCOUNT_ID: "a", CF_STAGING_PROJECT: "p" }), { account: "a", project: "p" })
-  assert.deepEqual(loadTrustedStagingContext({ CF_STAGING_ACCOUNT_ID: "  ", CF_STAGING_PROJECT: "p" }), { project: "p" })
+  assert.deepEqual(loadTrustedStagingContext({ CF_STAGING_ACCOUNT_ID: ACCT, CF_STAGING_PROJECT: PROJ }), { account: ACCT, project: PROJ })
+  // Raw (untrimmed / empty) values are preserved so the evaluator can classify them.
+  assert.deepEqual(loadTrustedStagingContext({ CF_STAGING_ACCOUNT_ID: "  " }), { account: "  " })
+})
+
+// ─── runHermeticLocal: single cleanup authority + failure injection ─
+
+function hermeticDeps(overrides: Record<string, unknown> = {}) {
+  const state = { root: null as string | null, removed: false, opened: 0, closed: 0 }
+  const base = {
+    verb: "apply", repoRoot: REPO_ROOT,
+    makeTempRoot: () => { state.root = "/fake/root"; return state.root },
+    openDatabase: () => { state.opened++; return new DatabaseSync(":memory:") },
+    closeHandle: (h: DatabaseSync) => { state.closed++; h.close() },
+    removeRoot: () => { state.removed = true },
+    rootExists: () => !state.removed,
+  }
+  return { deps: { ...base, ...overrides }, state }
+}
+
+test("runHermeticLocal: success reports fresh_apply/replay_noop/verify_ok/cleanup and removes root", () => {
+  const { deps, state } = hermeticDeps()
+  const r = runHermeticLocal(deps as never)
+  assert.equal(r.ok, true)
+  assert.deepEqual(r.reported, { fresh_apply: true, replay_noop: true, verify_ok: true, cleanup: true })
+  assert.equal(state.removed, true)
+})
+
+test("runHermeticLocal: first open failure → cleanup still removes the root", () => {
+  const { deps, state } = hermeticDeps({ openDatabase: () => { throw new Error("open_failed") } })
+  const r = runHermeticLocal(deps as never)
+  assert.equal(r.ok, false)
+  assert.equal(r.runError, "open_failed")
+  assert.equal(r.flags.cleanup, true)
+  assert.equal(state.removed, true)
+})
+
+test("runHermeticLocal: second open failure → the first handle is closed and root removed", () => {
+  let calls = 0
+  const closed: DatabaseSync[] = []
+  const { deps, state } = hermeticDeps({
+    openDatabase: () => { calls++; if (calls === 2) throw new Error("open_failed"); return new DatabaseSync(":memory:") },
+    closeHandle: (h: DatabaseSync) => { closed.push(h); h.close() },
+  })
+  const r = runHermeticLocal(deps as never)
+  assert.equal(r.ok, false)
+  assert.equal(closed.length, 1) // the one successfully-opened handle was closed
+  assert.equal(state.removed, true)
+  assert.equal(r.flags.cleanup, true)
+})
+
+test("runHermeticLocal: fresh apply / replay / verify failures still clean up", () => {
+  for (const fn of ["applyAllFn", "verifyAllFn"]) {
+    const { deps, state } = hermeticDeps({ [fn]: () => { throw new Error("injected_failure") } })
+    const r = runHermeticLocal(deps as never)
+    assert.equal(r.ok, false)
+    assert.equal(r.flags.cleanup, true)
+    assert.equal(state.removed, true)
+  }
+  // Replay failure specifically (second applyAll call throws).
+  let applyCalls = 0
+  const { deps, state } = hermeticDeps({
+    applyAllFn: (dbFor: (b: string) => DatabaseSync, repoRoot: string, opts: { now?: () => string }) => {
+      applyCalls++
+      if (applyCalls === 2) throw new Error("replay_failed")
+      return applyAll(dbFor, repoRoot, opts)
+    },
+  })
+  const r = runHermeticLocal(deps as never)
+  assert.equal(r.runError, "replay_failed")
+  assert.equal(state.removed, true)
+})
+
+test("runHermeticLocal: root removal failure is reported, cleanup=false", () => {
+  const { deps } = hermeticDeps({ removeRoot: () => { throw new Error("boom") }, rootExists: () => true })
+  const r = runHermeticLocal(deps as never)
+  assert.equal(r.ok, false)
+  assert.equal(r.cleanupError, "cleanup_root_removal_failed")
+  assert.equal(r.flags.cleanup, false)
 })

@@ -20,7 +20,7 @@ import { tmpdir } from "node:os"
 import { resolve, dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { applyAll, verifyRegistryCoupling, canonicalTenantSchemaVersion, KNOWN_BINDINGS } from "../scripts/lib/d1MigrationRunner.mjs"
+import { applyAll, verifyTenantDatabaseCoupling, canonicalTenantSchemaVersion } from "../scripts/lib/d1MigrationRunner.mjs"
 import { loadManifest, tenantRegistrySchemaVersion } from "../scripts/lib/d1MigrationManifest.mjs"
 import { SqliteD1Database, TENANT_DB_MIGRATIONS } from "./helpers/sqliteD1.ts"
 import { seedTenantDatabaseRow } from "./helpers/registrySeed.ts"
@@ -109,24 +109,114 @@ test("canonical schema (registry v2) resolves and supports the ActionPreview ins
   controlD1.close(); tenantD1.close()
 })
 
-// ─── Phase 5: registry version coupled to migration evidence ─────
+// ─── Phase 5/6: registry-row coupling reads the ACTUAL CONTROL_DB row ─────
 
-test("registry coupling: canonical version + ledger + schema contract must all agree", () => {
-  const handles: Record<string, DatabaseSync> = {}
-  for (const b of KNOWN_BINDINGS) handles[b] = new DatabaseSync(":memory:")
-  const dbFor = (b: string) => handles[b]
-  applyAll(dbFor, REPO_ROOT, { now: () => "2026-01-01T00:00:00.000Z" })
+const FIXED_NOW = () => "2026-01-01T00:00:00.000Z"
+const SYN_DB_ID = "11111111-1111-4111-8111-111111111111"
 
-  const good = verifyRegistryCoupling(dbFor, REPO_ROOT, CANONICAL_TENANT_SCHEMA_VERSION)
-  assert.equal(good.ok, true)
-  assert.equal(good.registry_version_matches_manifest, true)
-  assert.equal(good.ledger_matches_manifest, true)
-  assert.equal(good.physical_schema_matches_contract, true)
+/** Fresh CONTROL + TENANT pair with the canonical lanes applied via the ledger. */
+function freshPair(): { control: DatabaseSync; tenant: DatabaseSync } {
+  const control = new DatabaseSync(":memory:")
+  const tenant = new DatabaseSync(":memory:")
+  applyAll((b: string) => (b === "CONTROL_DB" ? control : tenant), REPO_ROOT, { now: FIXED_NOW })
+  return { control, tenant }
+}
 
-  // A registry claiming v1 does NOT match the manifest → coupling fails closed.
-  const bad = verifyRegistryCoupling(dbFor, REPO_ROOT, "1")
-  assert.equal(bad.ok, false)
-  assert.equal(bad.registry_version_matches_manifest, false)
+function seedRegistry(control: DatabaseSync, opts: { status?: string; schemaVersion?: string } = {}): void {
+  const { status = "active", schemaVersion = CANONICAL_TENANT_SCHEMA_VERSION } = opts
+  control.prepare("INSERT INTO tenants (id, name, slug, status) VALUES (?, ?, ?, ?)").run("tenant-A", "T", "tenant-a", "active")
+  control.prepare("INSERT INTO tenant_databases (tenant_id, database_name, database_id, schema_version, status) VALUES (?, ?, ?, ?, ?)")
+    .run("tenant-A", "tenant-db", SYN_DB_ID, schemaVersion, status)
+}
 
-  for (const b of KNOWN_BINDINGS) handles[b].close()
+function couple(control: DatabaseSync, tenant: DatabaseSync) {
+  return verifyTenantDatabaseCoupling({ controlDb: control, tenantDb: tenant, tenantId: "tenant-A", repoRoot: REPO_ROOT })
+}
+
+test("coupling 8. canonical registry + ledger + schema all aligned → ok", () => {
+  const { control, tenant } = freshPair()
+  seedRegistry(control)
+  const r = couple(control, tenant)
+  assert.deepEqual(r, {
+    ok: true, registry_row_present: true, registry_mapping_active: true, registry_version_matches_manifest: true,
+    ledger_matches_manifest: true, physical_schema_matches_contract: true, binding_matches_contract: true,
+  })
+  control.close(); tenant.close()
+})
+
+test("coupling 1. registry row absent → fails closed", () => {
+  const { control, tenant } = freshPair() // no registry seeded
+  const r = couple(control, tenant)
+  assert.equal(r.ok, false)
+  assert.equal(r.registry_row_present, false)
+  control.close(); tenant.close()
+})
+
+test("coupling 2. registry row inactive → fails closed", () => {
+  const { control, tenant } = freshPair()
+  seedRegistry(control, { status: "migrating" })
+  const r = couple(control, tenant)
+  assert.equal(r.ok, false)
+  assert.equal(r.registry_row_present, true)
+  assert.equal(r.registry_mapping_active, false)
+  control.close(); tenant.close()
+})
+
+test("coupling 3. registry version 1 with canonical physical DB → fails closed", () => {
+  const { control, tenant } = freshPair()
+  seedRegistry(control, { schemaVersion: "1" })
+  const r = couple(control, tenant)
+  assert.equal(r.ok, false)
+  assert.equal(r.registry_version_matches_manifest, false)
+  control.close(); tenant.close()
+})
+
+test("coupling 4. registry version 2 with pre-0006 physical DB → fails closed", () => {
+  const { control, tenant } = freshPair()
+  seedRegistry(control) // canonical version
+  // Roll the tenant DB back to pre-0006: drop the column + its ledger row.
+  tenant.exec("ALTER TABLE action_previews DROP COLUMN created_by_user_id")
+  tenant.prepare("DELETE FROM __atra_d1_migrations WHERE binding = ? AND sequence = ?").run("TENANT_DB_DEFAULT", 4)
+  const r = couple(control, tenant)
+  assert.equal(r.ok, false)
+  assert.equal(r.registry_version_matches_manifest, true) // registry claims v2…
+  assert.equal(r.physical_schema_matches_contract, false) // …but the physical schema disagrees
+  control.close(); tenant.close()
+})
+
+test("coupling 5. canonical registry with missing ledger history → fails closed", () => {
+  const { control, tenant } = freshPair()
+  seedRegistry(control)
+  tenant.prepare("DELETE FROM __atra_d1_migrations WHERE binding = ?").run("TENANT_DB_DEFAULT")
+  const r = couple(control, tenant)
+  assert.equal(r.ok, false)
+  assert.equal(r.ledger_matches_manifest, false)
+  control.close(); tenant.close()
+})
+
+test("coupling 6. canonical registry with checksum drift → fails closed", () => {
+  const { control, tenant } = freshPair()
+  seedRegistry(control)
+  tenant.prepare("UPDATE __atra_d1_migrations SET sha256 = ? WHERE binding = ? AND sequence = ?")
+    .run("0".repeat(64), "TENANT_DB_DEFAULT", 1)
+  const r = couple(control, tenant)
+  assert.equal(r.ok, false)
+  assert.equal(r.ledger_matches_manifest, false)
+  control.close(); tenant.close()
+})
+
+test("coupling 7. canonical registry with wrong-lane schema → fails closed", () => {
+  // A tenant handle that was given the CONTROL lane instead of the TENANT lane.
+  const control = new DatabaseSync(":memory:")
+  const wrongLaneTenant = new DatabaseSync(":memory:")
+  applyAll((b: string) => (b === "CONTROL_DB" ? control : wrongLaneTenant), REPO_ROOT, { now: FIXED_NOW })
+  // Re-open the "tenant" as the control lane so it holds control tables.
+  const controlSchemaTenant = new DatabaseSync(":memory:")
+  applyAll((b: string) => (b === "CONTROL_DB" ? controlSchemaTenant : new DatabaseSync(":memory:")), REPO_ROOT, { now: FIXED_NOW })
+  seedRegistry(control)
+  const r = couple(control, controlSchemaTenant)
+  assert.equal(r.ok, false)
+  assert.equal(r.physical_schema_matches_contract, false)
+  assert.equal(r.binding_matches_contract, false)
+  control.close(); wrongLaneTenant.close(); controlSchemaTenant.close()
 })

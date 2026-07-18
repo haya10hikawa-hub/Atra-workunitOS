@@ -217,22 +217,33 @@ ledger reconciling the manifest against the recorded history and the real schema
 
 ### Trusted staging context (migration CLI)
 
+Repository/local migration implementation is complete. Staging is exposed as a
+`preflight` command only; **remote staging verify/apply is NOT implemented in this
+PR** (`apply`/`verify --environment staging` fail closed with
+`staging_remote_execution_not_available`). A later, independently audited PR adds
+the authorized remote executor.
+
 The `cf:d1:migrate` CLI treats `--account` / `--project` as **caller assertions,
 not authority**. The trusted Cloudflare staging context comes from
 operator-provided, staging-only environment variables **`CF_STAGING_ACCOUNT_ID`**
-and **`CF_STAGING_PROJECT`** (never committed, never printed). Fail-closed
-contract for a staging remote operation (`apply` / `verify`):
+and **`CF_STAGING_PROJECT`** — BOTH are authoritative and required, never
+committed, never printed. `preflight --environment staging` classifies them:
 
-| Condition                                        | Result                              |
-| ------------------------------------------------ | ----------------------------------- |
-| trusted context not configured                   | `staging_context_unconfigured`      |
-| caller assertion disagrees with trusted context  | `unexpected_cloudflare_context`     |
-| caller assertion matches (or is omitted)         | gate may continue (still latched)   |
+| Condition                                          | Result                                 |
+| -------------------------------------------------- | -------------------------------------- |
+| neither configured                                 | `staging_context_unconfigured`         |
+| exactly one configured                             | `staging_context_incomplete`           |
+| both configured but malformed (format/bounds)      | `staging_context_invalid`              |
+| both valid; caller asserts a disagreeing value     | `unexpected_cloudflare_context`        |
+| both valid; caller asserts only one of account/project | `staging_context_assertion_incomplete` |
+| both valid; caller assertions match (or absent)    | preflight passes (offline, no network) |
 
-`plan` is offline and context-free: supplying `--account`/`--project` to a plan
-is a misuse and fails closed with `context_assertion_not_allowed_for_plan`. Local
-commands never require staging context. This mismatch protection is proven by real
-CLI **subprocess** tests (`tests/d1MigrationCli.test.mts`), not only by unit tests.
+Validation is bounded and disclosure-free: trimmed, non-empty, length-capped, no
+control characters; the account id matches Cloudflare's 32-hex form and the
+project name a conservative allowlist. `plan` is offline and context-free
+(supplying `--account`/`--project`/`--remote` fails closed). Local commands never
+require staging context. This is proven by real CLI **subprocess** tests
+(`tests/d1MigrationCli.test.mts`), not only by unit tests.
 
 ## 8. Future boundary (out of scope here)
 
@@ -252,11 +263,16 @@ reproducible from docs") may be closed only when **all** of the following hold:
 4. The migration manifest + ledger are reproducible: fresh / replay /
    partial-upgrade / checksum-drift proofs pass locally.
 5. Cross-tenant read/write/update/delete isolation passes.
-6. The local operational proof passes hermetically with no retained state.
-7. An **authorized staging** plan → apply → verify has been executed against a
-   real staging D1 and its evidence independently reviewed.
+6. The registry row is coupled to migration evidence: the operational proof reads
+   the ACTUAL `tenant_databases.schema_version` and requires it to agree with the
+   manifest, the routed tenant DB's ledger, and its physical schema contract.
+7. The local operational proof passes hermetically with no retained state, and an
+   offline staging **preflight** validates the staging authority contract.
+8. A later, **independently audited** PR implements the remote executor, and an
+   **authorized remote staging** plan → apply → verify is executed against a real
+   staging D1 with its evidence independently reviewed.
 
-Items 1–6 are satisfied by this change and its tests. **Item 7 requires a
-separate, explicitly authorized staging execution** (see
-`docs/operations/CLOUDFLARE_D1_SETUP.md`) and is the remaining blocker; Issue
-#155 stays **open** until that evidence exists.
+Items 1–7 are satisfied by this change and its tests. **Item 8 requires a
+separate, explicitly authorized remote executor + staging execution** (NOT
+implemented in this PR; `apply`/`verify --environment staging` fail closed) and is
+the remaining blocker; Issue #155 stays **open** until that evidence exists.
