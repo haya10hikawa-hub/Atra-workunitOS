@@ -80,31 +80,37 @@ export function buildIdempotentBootstrapSql(values, now = new Date().toISOString
   ].join("\n")
 }
 
-function runWrangler(args, opts = {}) {
-  const result = spawnSync(WRANGLER_BIN, args, { cwd: REPO_ROOT, encoding: "utf8", ...opts })
-  if (result.status !== 0) {
-    throw new Error(opts.safeLabel ?? "wrangler_failed")
+// A wrangler invocation is fully described by { bin, cwd, extraArgs }. Threading
+// these through every d1 call is what lets the hermetic smoke runner point BOTH
+// the migrations and the seed at an isolated `--config` + `--persist-to` without
+// the CLI default path (operator `.dev.vars` / default `.wrangler`) changing.
+function createWranglerRunner({ wranglerBin = WRANGLER_BIN, cwd = REPO_ROOT, extraArgs = [] } = {}) {
+  return function run(args, opts = {}) {
+    const result = spawnSync(wranglerBin, [...args, ...extraArgs], { cwd, encoding: "utf8", ...opts })
+    if (result.status !== 0) {
+      throw new Error(opts.safeLabel ?? "wrangler_failed")
+    }
+    return result.stdout
   }
-  return result.stdout
 }
 
-function executeFile(binding, file, label) {
-  runWrangler(["d1", "execute", binding, "--local", "--file", file], { safeLabel: label })
+function executeFile(run, binding, file, label) {
+  run(["d1", "execute", binding, "--local", "--file", file], { safeLabel: label })
 }
 
-function executeSqlText(binding, sql, label) {
+function executeSqlText(run, binding, sql, label) {
   const dir = mkdtempSync(resolve(tmpdir(), "d1-local-jwt-"))
   const file = resolve(dir, `${label}.sql`)
   try {
     writeFileSync(file, sql, { mode: 0o600 })
-    executeFile(binding, file, label)
+    executeFile(run, binding, file, label)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
 }
 
-function queryJson(binding, sql, label) {
-  const out = runWrangler(["d1", "execute", binding, "--local", "--command", sql, "--json"], { safeLabel: label })
+function queryJson(run, binding, sql, label) {
+  const out = run(["d1", "execute", binding, "--local", "--command", sql, "--json"], { safeLabel: label })
   try {
     const parsed = JSON.parse(out)
     const first = Array.isArray(parsed) ? parsed[0] : parsed
@@ -114,49 +120,85 @@ function queryJson(binding, sql, label) {
   }
 }
 
-function applyLocalMigrations() {
-  const loaded = loadManifest(REPO_ROOT)
+function applyLocalMigrations(run, repoRoot) {
+  const loaded = loadManifest(repoRoot)
   if (!loaded.ok) throw new Error("manifest_unreadable")
-  const checked = validateManifest(loaded.manifest, REPO_ROOT)
+  const checked = validateManifest(loaded.manifest, repoRoot)
   if (!checked.ok) throw new Error("manifest_invalid")
   for (const binding of KNOWN_BINDINGS) {
     for (const entry of loaded.manifest.lanes[binding]) {
-      if (entry.apply === "once" && onceMigrationAlreadyApplied(binding, entry)) continue
-      const resolved = resolveMigrationPath(REPO_ROOT, entry.path)
+      if (entry.apply === "once" && onceMigrationAlreadyApplied(run, binding, entry)) continue
+      const resolved = resolveMigrationPath(repoRoot, entry.path)
       if (!resolved.ok) throw new Error(`migration_path_invalid:${binding}:${resolved.name}`)
-      executeFile(binding, resolved.absPath, `migration_failed:${binding}:${resolved.name}`)
+      executeFile(run, binding, resolved.absPath, `migration_failed:${binding}:${resolved.name}`)
     }
   }
 }
 
-function onceMigrationAlreadyApplied(binding, entry) {
+function onceMigrationAlreadyApplied(run, binding, entry) {
   if (entry.apply !== "once") return false
   if (!entry.effect || entry.effect.type !== "column_exists") return false
-  const cols = queryJson(binding, `PRAGMA table_info(${entry.effect.table});`, `schema_probe:${binding}:${entry.effect.table}`)
+  const cols = queryJson(run, binding, `PRAGMA table_info(${entry.effect.table});`, `schema_probe:${binding}:${entry.effect.table}`)
   return cols.some((row) => row.name === entry.effect.column)
 }
 
-function verifyCounts() {
-  const rows = queryJson("CONTROL_DB", "SELECT (SELECT COUNT(*) FROM tenants) AS tenants, (SELECT COUNT(*) FROM tenant_databases) AS tenant_databases, (SELECT COUNT(*) FROM users) AS users, (SELECT COUNT(*) FROM tenant_memberships) AS tenant_memberships, (SELECT COUNT(*) FROM auth_identities) AS auth_identities;", "control_verify_counts")
+function verifyCounts(run) {
+  const rows = queryJson(run, "CONTROL_DB", "SELECT (SELECT COUNT(*) FROM tenants) AS tenants, (SELECT COUNT(*) FROM tenant_databases) AS tenant_databases, (SELECT COUNT(*) FROM users) AS users, (SELECT COUNT(*) FROM tenant_memberships) AS tenant_memberships, (SELECT COUNT(*) FROM auth_identities) AS auth_identities;", "control_verify_counts")
   return rows[0] ?? {}
+}
+
+/** Extra wrangler args expressing an isolated config + persistence directory. */
+function isolationArgs(wrangler = {}) {
+  const extraArgs = []
+  if (wrangler.configPath) extraArgs.push("--config", wrangler.configPath)
+  if (wrangler.persistTo) extraArgs.push("--persist-to", wrangler.persistTo)
+  return extraArgs
+}
+
+/**
+ * Apply local migrations and seed the idempotent JWT identity into a caller-chosen
+ * (possibly isolated) local D1. Returns safe row-count CATEGORIES only — never a
+ * seeded value. `wrangler` selects the binary, working directory, and the
+ * `--config`/`--persist-to` isolation used by the hermetic smoke runner.
+ *
+ * @param {{ env: Record<string,string|undefined>, repoRoot?: string, wrangler?: { bin?: string, cwd?: string, configPath?: string, persistTo?: string } }} params
+ * @returns {{ ok: true, counts: Record<string, number> } | { ok: false, reason: string }}
+ */
+export function runLocalJwtBootstrap({ env, repoRoot = REPO_ROOT, wrangler = {} } = {}) {
+  const plan = buildLocalJwtBootstrapPlan(env, repoRoot)
+  if (!plan.ok) return { ok: false, reason: plan.reason }
+  const run = createWranglerRunner({ wranglerBin: wrangler.bin, cwd: wrangler.cwd, extraArgs: isolationArgs(wrangler) })
+  try {
+    applyLocalMigrations(run, repoRoot)
+    executeSqlText(run, "CONTROL_DB", buildIdempotentBootstrapSql(plan.values), "bootstrap")
+    return { ok: true, counts: verifyCounts(run) }
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : "bootstrap_failed" }
+  }
+}
+
+/**
+ * Run a COUNT-only (or metadata-only) query against a caller-chosen isolated local
+ * D1. Callers must pass predicate-shaped SQL that returns numbers, never values.
+ *
+ * @param {{ sql: string, binding?: string, label?: string, wrangler?: { bin?: string, cwd?: string, configPath?: string, persistTo?: string } }} params
+ * @returns {Array<Record<string, unknown>>}
+ */
+export function queryLocalD1Json({ sql, binding = "CONTROL_DB", label = "query", wrangler = {} }) {
+  const run = createWranglerRunner({ wranglerBin: wrangler.bin, cwd: wrangler.cwd, extraArgs: isolationArgs(wrangler) })
+  return queryJson(run, binding, sql, label)
 }
 
 function main() {
   const allowEnvOverride = process.argv.includes("--allow-env-override")
   const authority = resolveLocalJwtAuthority(REPO_ROOT, process.env, { allowEnvOverride })
   if (!authority.ok) fail(`${authority.reason}:${authority.conflicts.join(",")}`)
-  const plan = buildLocalJwtBootstrapPlan(authority.env)
-  if (!plan.ok) fail(plan.reason)
-  try {
-    applyLocalMigrations()
-    executeSqlText("CONTROL_DB", buildIdempotentBootstrapSql(plan.values), "bootstrap")
-    const counts = verifyCounts()
-    console.log("cf:d1:bootstrap:jwt-local: OK (local migrations + idempotent JWT identity bootstrap).")
-    console.log(`cf:d1:bootstrap:jwt-local: verified row categories: tenants=${counts.tenants}, tenant_databases=${counts.tenant_databases}, users=${counts.users}, memberships=${counts.tenant_memberships}, identities=${counts.auth_identities}`)
-    console.log("cf:d1:bootstrap:jwt-local: seeded provider=jwt, tenant status=active, membership status=active, role=owner.")
-  } catch (err) {
-    fail(err.message || "bootstrap_failed")
-  }
+  const result = runLocalJwtBootstrap({ env: authority.env, repoRoot: REPO_ROOT })
+  if (!result.ok) fail(result.reason)
+  const counts = result.counts
+  console.log("cf:d1:bootstrap:jwt-local: OK (local migrations + idempotent JWT identity bootstrap).")
+  console.log(`cf:d1:bootstrap:jwt-local: verified row categories: tenants=${counts.tenants}, tenant_databases=${counts.tenant_databases}, users=${counts.users}, memberships=${counts.tenant_memberships}, identities=${counts.auth_identities}`)
+  console.log("cf:d1:bootstrap:jwt-local: seeded provider=jwt, tenant status=active, membership status=active, role=owner.")
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main()

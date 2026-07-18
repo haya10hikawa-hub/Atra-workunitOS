@@ -130,12 +130,13 @@ CF_D1_BOOTSTRAP_IDENTITY_SUBJECT=""
 CF_D1_BOOTSTRAP_IDENTITY_EMAIL=""
 ```
 
-Copying this template as-is **fails closed**: every required value
-(`JWT_AUTH_SECRET`, `JWT_AUTH_ISSUER`, `JWT_AUTH_AUDIENCE`,
-`CF_D1_BOOTSTRAP_IDENTITY_SUBJECT`, `CF_D1_BOOTSTRAP_IDENTITY_EMAIL`) is empty, so
-the CLI tools refuse to generate a token or seed an identity until you fill in
-local-only synthetic values (the secret must be at least 32 bytes). Keep every
-development/fallback flag `false`.
+Copying this template as-is **fails closed** because the secret and the synthetic
+identity placeholders (`JWT_AUTH_SECRET`, `CF_D1_BOOTSTRAP_IDENTITY_SUBJECT`,
+`CF_D1_BOOTSTRAP_IDENTITY_EMAIL`) are empty — the CLI tools refuse to generate a
+token or seed an identity until you fill in local-only synthetic values (the
+secret must be at least 32 bytes). The local issuer and audience examples
+(`JWT_AUTH_ISSUER`, `JWT_AUTH_AUDIENCE`) are prefilled non-secret values. Keep
+every development/fallback flag `false`.
 
 `cf:d1:bootstrap:jwt-local` and `auth:jwt:local` resolve the **same** subject and
 email from `.dev.vars`, so the seeded local identity always matches the generated
@@ -144,6 +145,39 @@ claims (if any) are **not authoritative** — tenant and role are resolved solel
 from the Control DB membership. `npm run --silent auth:jwt:local` prints only the
 compact JWT for shell capture; bootstrap and verify never log a JWT, secret,
 subject, or email.
+
+### One-command hermetic local smoke (`auth:jwt:smoke-local`)
+
+```bash
+npm run auth:jwt:smoke-local
+```
+
+This runs the entire local JWT/D1 HTTP flow as **one deterministic, self-cleaning
+command** — no manual bootstrap/generate/`wrangler dev`/curl sequence, and no
+dependency on any operator state:
+
+```text
+No JWT          -> 401
+Fresh HS256 JWT -> 200 (response contains `workUnits`)
+RS256 JWT       -> 401
+Expired JWT     -> 401
+```
+
+- **Owned, isolated state.** Every artifact lives in one private temporary root
+  (mode `0700`): a `0600` `.dev.vars`, a temporary `wrangler --config`, an isolated
+  `--persist-to` local D1, and a captured log. A cryptographically random,
+  local-only HS256 secret (≥ 32 bytes) is generated per run and written only to the
+  `0600` file — never passed as a command-line argument. It does **not** read or
+  modify your `.dev.vars`, default `.wrangler/`, `JWT_*` environment variables, or
+  local D1 state, and it selects an **ephemeral** port (never a fixed `8788`).
+- **Self-cleaning.** The runner tracks the exact child process group and every path
+  it created, and removes them in `finally` on success, failure, `SIGINT`/`SIGTERM`,
+  timeout, or assertion error. It only ever deletes paths it registered as its own.
+- **Local-only.** No remote D1, no `wrangler whoami`, no `--remote`, no deploy, no
+  production Cloudflare. Stdout is machine-readable and secret-free.
+- **Scope.** A green run proves the **local** flow only. It does **not** prove
+  staging or production readiness. Remote/staging migration proof (Issue #155)
+  remains **open** until authorized staging evidence succeeds.
 
 ## Testing
 
