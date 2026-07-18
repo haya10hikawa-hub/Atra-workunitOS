@@ -20,6 +20,7 @@ import {
   verifyAll,
   parseMigrateArgs,
   validateInvocation,
+  loadTrustedStagingContext,
   KNOWN_BINDINGS,
 } from "../scripts/lib/d1MigrationRunner.mjs"
 import { loadManifest } from "../scripts/lib/d1MigrationManifest.mjs"
@@ -200,22 +201,39 @@ test("gate: production and unknown environments fail closed", () => {
   assert.equal(d.ok, false); assert.equal(d.error, "unknown_environment")
 })
 
-test("gate: staging apply requires --remote AND --confirm-staging", () => {
-  let d = validateInvocation("apply", parse(["--environment", "staging"]).flags, [])
+const CTX = { account: "acct-x", project: "proj-y" }
+
+test("gate: staging apply requires --remote AND --confirm-staging AND trusted context", () => {
+  let d = validateInvocation("apply", parse(["--environment", "staging"]).flags, [], CTX)
   assert.equal(d.error, "remote_flag_required_for_staging")
-  d = validateInvocation("apply", parse(["--environment", "staging", "--remote"]).flags, [])
+  d = validateInvocation("apply", parse(["--environment", "staging", "--remote"]).flags, [], CTX)
   assert.equal(d.error, "staging_confirmation_required")
-  d = validateInvocation("apply", parse(["--environment", "staging", "--remote", "--confirm-staging"]).flags, [])
+  d = validateInvocation("apply", parse(["--environment", "staging", "--remote", "--confirm-staging"]).flags, [], CTX)
   assert.equal(d.ok, true); assert.ok(d.plan); assert.equal(d.plan.remote, true)
 })
 
-test("gate: staging verify requires --remote; staging plan is offline", () => {
-  let d = validateInvocation("verify", parse(["--environment", "staging"]).flags, [])
+test("gate: staging remote op without trusted context fails staging_context_unconfigured", () => {
+  // No expected context (unconfigured) — even with all flags valid.
+  let d = validateInvocation("apply", parse(["--environment", "staging", "--remote", "--confirm-staging"]).flags, [], {})
+  assert.equal(d.ok, false); assert.equal(d.error, "staging_context_unconfigured")
+  d = validateInvocation("verify", parse(["--environment", "staging", "--remote"]).flags, [], {})
+  assert.equal(d.ok, false); assert.equal(d.error, "staging_context_unconfigured")
+})
+
+test("gate: staging verify requires --remote + trusted context; staging plan is offline", () => {
+  let d = validateInvocation("verify", parse(["--environment", "staging"]).flags, [], CTX)
   assert.equal(d.error, "remote_flag_required_for_staging")
-  d = validateInvocation("verify", parse(["--environment", "staging", "--remote"]).flags, [])
+  d = validateInvocation("verify", parse(["--environment", "staging", "--remote"]).flags, [], CTX)
   assert.equal(d.ok, true); assert.ok(d.plan); assert.equal(d.plan.remote, true)
-  d = validateInvocation("plan", parse(["--environment", "staging"]).flags, [])
+  d = validateInvocation("plan", parse(["--environment", "staging"]).flags, [], {})
   assert.equal(d.ok, true); assert.ok(d.plan); assert.equal(d.plan.remote, false)
+})
+
+test("gate: plan rejects account/project assertions (offline, context-free)", () => {
+  let d = validateInvocation("plan", parse(["--environment", "staging", "--account", "acct-x"]).flags, [], CTX)
+  assert.equal(d.ok, false); assert.equal(d.error, "context_assertion_not_allowed_for_plan")
+  d = validateInvocation("plan", parse(["--environment", "local", "--project", "proj-y"]).flags, [], {})
+  assert.equal(d.ok, false); assert.equal(d.error, "context_assertion_not_allowed_for_plan")
 })
 
 test("gate: unknown verb and unknown flag fail closed", () => {
@@ -225,7 +243,7 @@ test("gate: unknown verb and unknown flag fail closed", () => {
   assert.equal(d.error, "unknown_flag")
 })
 
-test("gate: mismatched Cloudflare account/project fails closed", () => {
+test("gate: caller assertion disagreeing with trusted context fails closed", () => {
   const flags = parse(["--environment", "staging", "--remote", "--confirm-staging", "--account", "acct-x", "--project", "proj-y"]).flags
   let d = validateInvocation("apply", flags, [], { account: "acct-real", project: "proj-y" })
   assert.equal(d.error, "unexpected_cloudflare_context")
@@ -233,4 +251,10 @@ test("gate: mismatched Cloudflare account/project fails closed", () => {
   assert.equal(d.error, "unexpected_cloudflare_context")
   d = validateInvocation("apply", flags, [], { account: "acct-x", project: "proj-y" })
   assert.equal(d.ok, true)
+})
+
+test("loadTrustedStagingContext reads only staging-only env vars", () => {
+  assert.deepEqual(loadTrustedStagingContext({}), {})
+  assert.deepEqual(loadTrustedStagingContext({ CF_STAGING_ACCOUNT_ID: "a", CF_STAGING_PROJECT: "p" }), { account: "a", project: "p" })
+  assert.deepEqual(loadTrustedStagingContext({ CF_STAGING_ACCOUNT_ID: "  ", CF_STAGING_PROJECT: "p" }), { project: "p" })
 })

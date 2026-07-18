@@ -6,6 +6,8 @@ import { FakeD1Database } from "./helpers/fakeD1.ts"
 import { seedTenantDatabaseRow, seedTenantRow } from "./helpers/registrySeed.ts"
 import type { TenantId } from "../app/lib/tenant/types.ts"
 import type { TenantDbResolver, TenantDbResolution } from "../app/lib/persistence/repositories.ts"
+import { SUPPORTED_TENANT_SCHEMA_VERSIONS } from "../app/lib/persistence/repositories.ts"
+import { CANONICAL_TENANT_SCHEMA_VERSION } from "../app/lib/persistence/tenantSchemaVersion.ts"
 import type { D1DatabaseLike } from "../app/lib/persistence/d1/types.ts"
 
 const tA = "tenant-a" as TenantId
@@ -212,18 +214,20 @@ test("production path with NO resolver + valid registry: fake resolver active te
 
 // ─── Alpha persistence contract categories (P0-FIX-D1-OPERATIONAL-CONTRACT) ──
 
-test("contract: success carries the allowlisted binding + validated schema version", async () => {
+test("contract: success carries the allowlisted binding + the canonical schema version", async () => {
   const { resolver, controlDb } = makeResolver()
-  await seedRegistry(controlDb, tA) // registry schema_version defaults to "1" (supported)
+  await seedRegistry(controlDb, tA) // registry schema_version defaults to the canonical version
   const res = await resolver.resolveTenantDb(tA)
   assert.equal(res.ok, true)
   if (res.ok) {
     assert.equal(res.binding, "TENANT_DB_DEFAULT")
-    assert.equal(res.schemaVersion, "1")
+    assert.equal(res.schemaVersion, CANONICAL_TENANT_SCHEMA_VERSION)
   }
 })
 
-test("contract: canonical schema version 2 is supported", async () => {
+test("contract: canonical schema version 2 is the only supported version", async () => {
+  assert.deepEqual([...SUPPORTED_TENANT_SCHEMA_VERSIONS], [CANONICAL_TENANT_SCHEMA_VERSION])
+  assert.equal(CANONICAL_TENANT_SCHEMA_VERSION, "2")
   const controlDb = new FakeD1Database()
   const tenantDb = new FakeD1Database()
   await seedTenantRow(controlDb, tA, "active")
@@ -231,6 +235,16 @@ test("contract: canonical schema version 2 is supported", async () => {
   const res = await new D1TenantDbResolver({ controlDb, tenantDb }).resolveTenantDb(tA)
   assert.equal(res.ok, true)
   if (res.ok) assert.equal(res.schemaVersion, "2")
+})
+
+test("contract: pre-0006 schema version 1 fails closed (migration-required, not routable)", async () => {
+  const controlDb = new FakeD1Database()
+  const tenantDb = new FakeD1Database()
+  await seedTenantRow(controlDb, tA, "active")
+  await seedTenantDatabaseRow(controlDb, tA, { schemaVersion: "1" })
+  const res = await new D1TenantDbResolver({ controlDb, tenantDb }).resolveTenantDb(tA)
+  assert.equal(res.ok, false)
+  if (!res.ok) assert.equal(res.reason, "tenant_database_schema_unsupported")
 })
 
 test("contract: a well-formed but unsupported schema version fails closed", async () => {

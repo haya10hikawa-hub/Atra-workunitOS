@@ -1024,6 +1024,16 @@ npm run cf:d1:migrate:verify-local    # fresh apply + read-only schema/ledger ve
 `apply-local` emits safe booleans: `fresh_apply`, `replay_noop`, `verify_ok`,
 `cleanup`. It exits non-zero if any is false.
 
+**Schema-version authority.** The runtime accepts exactly one
+`tenant_databases.schema_version`: the **canonical** version declared by
+`migrations/manifest.json` (`registry.TENANT_DB_DEFAULT.schemaVersion`, currently
+`2`). Version `1` is the **pre-0006 schema and is routing-incompatible** — a v1
+database is missing `action_previews.created_by_user_id`, which every
+`ActionPreview` insert requires. The resolver rejects a v1 registry row with
+`tenant_database_schema_unsupported` *before* any write; moving a v1 database
+forward is a **migration requirement**, not a supported runtime state (run
+`cf:d1:migrate:apply-*` to reach the canonical schema).
+
 ### 11.3 Staging plan / verify
 
 ```bash
@@ -1044,12 +1054,31 @@ npm run cf:d1:migrate:apply-staging   # apply --environment staging --remote --c
 
 The environment gate rejects: missing staging confirmation, `production`/unknown
 environments, `--remote` on a local command, a staging command without `--remote`,
-and a caller-asserted `--account`/`--project` that disagrees with deploy config.
+`--account`/`--project` supplied to an offline `plan`
+(`context_assertion_not_allowed_for_plan`), an unconfigured trusted context
+(`staging_context_unconfigured`), and a caller-asserted `--account`/`--project`
+that disagrees with the trusted context (`unexpected_cloudflare_context`).
 
-**Even with every flag valid, this command performs no remote operation unless the
-operator sets the execution latch `CF_D1_STAGING_EXECUTE=1`.** Without the latch it
-prints that the authorization gate passed and exits **without touching the
-network**. This is deliberate: no PR or CI run mutates a remote D1.
+**Trusted staging context.** `--account` and `--project` are caller *assertions*,
+not authority. The authoritative staging context is read from operator-provided,
+staging-only environment variables **`CF_STAGING_ACCOUNT_ID`** and
+**`CF_STAGING_PROJECT`** (never committed, never printed). A staging `apply` or
+`verify` fails closed with `staging_context_unconfigured` when they are unset, and
+with `unexpected_cloudflare_context` when a caller assertion disagrees. These
+checks run in the **real** CLI path and are covered by CLI subprocess tests
+(`tests/d1MigrationCli.test.mts`).
+
+```bash
+# Operator sets the trusted context for a staging run (values are examples):
+export CF_STAGING_ACCOUNT_ID=...     # your staging Cloudflare account id
+export CF_STAGING_PROJECT=...        # your staging Worker/project name
+```
+
+**Even with every flag valid and the trusted context matching, this command
+performs no remote operation unless the operator ALSO sets the execution latch
+`CF_D1_STAGING_EXECUTE=1`.** Without the latch it prints that the authorization
+gate passed and exits **without touching the network**. This is deliberate: no PR
+or CI run mutates a remote D1.
 
 ### 11.5 Migration rollback policy
 

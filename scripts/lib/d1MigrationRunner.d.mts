@@ -48,6 +48,18 @@ export interface VerifyResult {
   failures?: string[]
 }
 
+export interface RegistryCouplingResult {
+  ok: boolean
+  registry_version_matches_manifest: boolean
+  ledger_matches_manifest: boolean
+  physical_schema_matches_contract: boolean
+}
+
+export interface TrustedStagingContext {
+  account?: string
+  project?: string
+}
+
 export interface MigrateFlags {
   environment: string | null
   remote: boolean
@@ -78,10 +90,17 @@ export declare function applyAll(
   options?: { now?: () => string },
 ): ApplyResult
 export declare function verifyAll(dbFor: (binding: string) => unknown, repoRoot: string): VerifyResult
+export declare function canonicalTenantSchemaVersion(repoRoot: string): string | null
+export declare function verifyRegistryCoupling(
+  dbFor: (binding: string) => unknown,
+  repoRoot: string,
+  registrySchemaVersion: string,
+): RegistryCouplingResult
 export declare function parseMigrateArgs(argv: string[]): { flags: MigrateFlags; unknown: string[] }
 export declare function validateInvocation(
   verb: string,
   flags: MigrateFlags,
   unknown?: string[],
-  expected?: { account?: string; project?: string },
+  expected?: TrustedStagingContext,
 ): InvocationDecision
+export declare function loadTrustedStagingContext(env?: Record<string, string | undefined>): TrustedStagingContext

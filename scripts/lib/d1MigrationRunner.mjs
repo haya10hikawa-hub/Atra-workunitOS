@@ -26,6 +26,7 @@ import {
   loadManifest,
   validateManifest,
   buildAllPlans,
+  tenantRegistrySchemaVersion,
   KNOWN_BINDINGS,
 } from "./d1MigrationManifest.mjs"
 
@@ -134,6 +135,41 @@ export function verifyAll(dbFor, repoRoot) {
   return { ok, perBinding }
 }
 
+// ─── Registry ↔ migration-evidence coupling ──────────────────────
+
+/**
+ * The canonical tenant schema version from the manifest registry, or null if the
+ * manifest does not validate or declares no valid version. Never reads or exposes
+ * a stored registry value.
+ */
+export function canonicalTenantSchemaVersion(repoRoot) {
+  const resolved = resolveValidatedManifest(repoRoot)
+  if (!resolved.ok) return null
+  return tenantRegistrySchemaVersion(resolved.manifest)
+}
+
+/**
+ * Couple the CONTROL_DB registry version to migration evidence. Routing may
+ * succeed only when the registry `schema_version` equals the canonical runtime
+ * version AND the ledger reconciles AND the physical schema matches the contract.
+ *
+ * `registrySchemaVersion` is the value read from `tenant_databases.schema_version`
+ * by the caller — it is COMPARED, never returned or logged. Returns safe booleans
+ * / categories only: no registry value, migration SQL, table contents, or IDs.
+ */
+export function verifyRegistryCoupling(dbFor, repoRoot, registrySchemaVersion) {
+  const canonical = canonicalTenantSchemaVersion(repoRoot)
+  const registry_version_matches_manifest =
+    typeof canonical === "string" && registrySchemaVersion === canonical
+  const verified = verifyAll(dbFor, repoRoot)
+  const ledger_matches_manifest =
+    verified.ok === true && KNOWN_BINDINGS.every((b) => verified.perBinding?.[b]?.ledger?.ok === true)
+  const physical_schema_matches_contract =
+    verified.ok === true && KNOWN_BINDINGS.every((b) => verified.perBinding?.[b]?.schema?.ok === true)
+  const ok = registry_version_matches_manifest && ledger_matches_manifest && physical_schema_matches_contract
+  return { ok, registry_version_matches_manifest, ledger_matches_manifest, physical_schema_matches_contract }
+}
+
 // ─── Environment / flag gate (local vs staging separation) ───────
 
 export const KNOWN_ENVIRONMENTS = ["local", "staging"]
@@ -169,9 +205,16 @@ export function parseMigrateArgs(argv) {
  * is a remote operation (true only for authorized staging apply/verify), or
  * `{ ok: false, error }` with a stable, disclosure-free category.
  *
- * `expected` may carry `{ account, project }` — the deploy-config's Cloudflare
- * context — so a mismatch with the caller-asserted `--account`/`--project` fails
- * closed as `unexpected_cloudflare_context`.
+ * `expected` is the TRUSTED staging Cloudflare context `{ account?, project? }`,
+ * loaded from an authoritative source by the caller — NOT from `--account` /
+ * `--project`, which are mere assertions. A staging remote operation requires
+ * trusted context to be configured (`staging_context_unconfigured` otherwise) and
+ * any caller assertion that disagrees fails closed (`unexpected_cloudflare_context`).
+ * Neither the trusted values nor the asserted values are ever returned or logged.
+ *
+ * Deterministic context contract for `plan` (offline): it takes NO Cloudflare
+ * context — supplying `--account`/`--project` to a plan is a misuse and fails
+ * closed with `context_assertion_not_allowed_for_plan`.
  */
 export function validateInvocation(verb, flags, unknown = [], expected = {}) {
   if (!KNOWN_VERBS.includes(verb)) return { ok: false, error: "unknown_verb" }
@@ -181,6 +224,13 @@ export function validateInvocation(verb, flags, unknown = [], expected = {}) {
   if (env === "production" || env === "prod") return { ok: false, error: "production_environment_forbidden" }
   if (!KNOWN_ENVIRONMENTS.includes(env)) return { ok: false, error: "unknown_environment" }
 
+  // Planning is offline and context-free for ANY environment. Account/project
+  // assertions are meaningless here and are rejected rather than silently ignored.
+  if (verb === "plan") {
+    if (flags.account || flags.project) return { ok: false, error: "context_assertion_not_allowed_for_plan" }
+    return { ok: true, plan: { verb, environment: env, remote: false } }
+  }
+
   if (env === "local") {
     // A local command may never carry remote intent or staging confirmation.
     if (flags.remote) return { ok: false, error: "remote_flag_forbidden_for_local" }
@@ -188,25 +238,38 @@ export function validateInvocation(verb, flags, unknown = [], expected = {}) {
     return { ok: true, plan: { verb, environment: "local", remote: false } }
   }
 
-  // env === "staging"
-  // Cloudflare context assertion: when the deploy config declares an account /
-  // project, a caller-supplied value that disagrees fails closed.
+  // env === "staging", verb apply | verify → remote operations.
+  if (!flags.remote) return { ok: false, error: "remote_flag_required_for_staging" }
+  if (verb === "apply" && !flags.confirmStaging) return { ok: false, error: "staging_confirmation_required" }
+
+  // Trusted staging context MUST be configured before any remote staging op.
+  const hasTrustedContext = Boolean(expected && (expected.account || expected.project))
+  if (!hasTrustedContext) return { ok: false, error: "staging_context_unconfigured" }
+  // A caller-asserted account/project that disagrees with the trusted context
+  // fails closed. (A caller may omit assertions; the trusted context still governs
+  // the eventual wrangler invocation, which this build never performs.)
   if (expected.account && flags.account && flags.account !== expected.account) {
     return { ok: false, error: "unexpected_cloudflare_context" }
   }
   if (expected.project && flags.project && flags.project !== expected.project) {
     return { ok: false, error: "unexpected_cloudflare_context" }
   }
-
-  if (verb === "plan") {
-    // Planning is offline for any environment (prints the safe plan, no network).
-    return { ok: true, plan: { verb, environment: "staging", remote: false } }
-  }
-
-  // apply / verify against staging are remote operations and require --remote.
-  if (!flags.remote) return { ok: false, error: "remote_flag_required_for_staging" }
-  if (verb === "apply" && !flags.confirmStaging) {
-    return { ok: false, error: "staging_confirmation_required" }
-  }
   return { ok: true, plan: { verb, environment: "staging", remote: true } }
+}
+
+/**
+ * Load the TRUSTED staging Cloudflare context from operator-provided, staging-only
+ * environment variables. These are NEVER committed and NEVER printed. Returns
+ * `{ account?, project? }` with only the values that are set; `{}` when none are —
+ * which the gate treats as `staging_context_unconfigured`.
+ *
+ * `env` is injectable for tests; defaults to `process.env`.
+ */
+export function loadTrustedStagingContext(env = process.env) {
+  const context = {}
+  const account = typeof env.CF_STAGING_ACCOUNT_ID === "string" ? env.CF_STAGING_ACCOUNT_ID.trim() : ""
+  const project = typeof env.CF_STAGING_PROJECT === "string" ? env.CF_STAGING_PROJECT.trim() : ""
+  if (account) context.account = account
+  if (project) context.project = project
+  return context
 }

@@ -28,7 +28,7 @@
  */
 
 import { DatabaseSync } from "node:sqlite"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { resolve, dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -38,11 +38,19 @@ import {
   verifyAll,
   parseMigrateArgs,
   validateInvocation,
+  loadTrustedStagingContext,
   KNOWN_BINDINGS,
 } from "./lib/d1MigrationRunner.mjs"
 import { schemaSignature } from "./lib/d1SchemaContract.mjs"
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+// The repository root that supplies the canonical migration files. Defaults to
+// this script's committed location. `CF_D1_MIGRATE_REPO_ROOT` is a test/diagnostic
+// override that ONLY relocates where committed migration files are read from for
+// the OFFLINE local operations (plan / hermetic apply / verify); it never enables
+// or affects a remote operation (which this build never performs).
+const REPO_ROOT = process.env.CF_D1_MIGRATE_REPO_ROOT
+  ? realpathSync(process.env.CF_D1_MIGRATE_REPO_ROOT)
+  : resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const STAGING_EXECUTE_LATCH = "CF_D1_STAGING_EXECUTE"
 
 function fail(error, extra) {
@@ -138,7 +146,11 @@ function runStagingGate(plan) {
 function main() {
   const verb = process.argv[2]
   const { flags, unknown } = parseMigrateArgs(process.argv.slice(3))
-  const decision = validateInvocation(verb, flags, unknown)
+  // The TRUSTED staging context comes from operator-provided, staging-only env
+  // (CF_STAGING_ACCOUNT_ID / CF_STAGING_PROJECT) — never from --account/--project.
+  // Local and plan invocations ignore it; a staging remote op requires it.
+  const expectedContext = loadTrustedStagingContext()
+  const decision = validateInvocation(verb, flags, unknown, expectedContext)
   if (!decision.ok) fail(decision.error)
 
   if (verb === "plan") return runPlan()

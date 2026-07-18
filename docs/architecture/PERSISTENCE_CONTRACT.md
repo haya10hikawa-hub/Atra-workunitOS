@@ -128,13 +128,36 @@ New categories (`tenant_context_required`, `tenant_database_schema_unsupported`,
 5. A missing binding produces a controlled 503-style application error.
 6. No raw database/configuration value appears in any error.
 
-### Supported schema versions
+### Supported schema versions (manifest is the authority)
 
-`SUPPORTED_TENANT_SCHEMA_VERSIONS = ["1", "2"]`. `"2"` is the canonical Alpha
-schema (includes `action_previews.created_by_user_id`, per
-`migrations/manifest.json`); `"1"` is the legacy Alpha bootstrap default retained
-for validation compatibility. A well-formed `schema_version` outside this set
-fails closed with `tenant_database_schema_unsupported`.
+There is **exactly one** supported version: the canonical version declared by the
+migration manifest at `migrations/manifest.json`
+(`registry.TENANT_DB_DEFAULT.schemaVersion`, currently **`"2"`**). It is not a
+hand-maintained list — `SUPPORTED_TENANT_SCHEMA_VERSIONS` is derived from
+`getCanonicalTenantSchemaVersion()` (a bundle-safe committed constant in
+`app/lib/persistence/tenantSchemaVersion.ts`), and a test mechanically asserts the
+constant cannot drift from the manifest.
+
+- `"2"` is the **current canonical Alpha version** (includes
+  `action_previews.created_by_user_id`, added by migration 0006).
+- `"1"` is **migration-required and routing-incompatible**: it is the pre-0006
+  schema, and `D1ActionPreviewRepository.create()` always inserts
+  `created_by_user_id`, so routing a request to a v1 database would fail at
+  runtime on the missing column. Version `"1"` is therefore **rejected**, not
+  accepted for compatibility.
+
+Any `schema_version` outside the supported set — including `"1"` — fails closed
+with `tenant_database_schema_unsupported`, before any repository write is
+attempted. A test builds a real pre-0006 SQLite database and proves both the
+rejection and that the write genuinely could not have succeeded.
+
+### Registry ↔ migration-evidence coupling
+
+Routing may succeed only when the registry `schema_version` equals the canonical
+runtime version. `verifyRegistryCoupling()` additionally checks the ledger
+reconciles and the physical schema matches the contract, returning safe booleans
+`registry_version_matches_manifest`, `ledger_matches_manifest`,
+`physical_schema_matches_contract` (no registry value, SQL, or IDs).
 
 ## 5. Repository tenant-scope enforcement
 
@@ -191,6 +214,25 @@ ledger reconciling the manifest against the recorded history and the real schema
   bundle — registry validation via the resolver is mandatory.
 - Local/test direct binding lives only behind the explicitly named
   `resolveLocalRepositories` API and is never reachable in production.
+
+### Trusted staging context (migration CLI)
+
+The `cf:d1:migrate` CLI treats `--account` / `--project` as **caller assertions,
+not authority**. The trusted Cloudflare staging context comes from
+operator-provided, staging-only environment variables **`CF_STAGING_ACCOUNT_ID`**
+and **`CF_STAGING_PROJECT`** (never committed, never printed). Fail-closed
+contract for a staging remote operation (`apply` / `verify`):
+
+| Condition                                        | Result                              |
+| ------------------------------------------------ | ----------------------------------- |
+| trusted context not configured                   | `staging_context_unconfigured`      |
+| caller assertion disagrees with trusted context  | `unexpected_cloudflare_context`     |
+| caller assertion matches (or is omitted)         | gate may continue (still latched)   |
+
+`plan` is offline and context-free: supplying `--account`/`--project` to a plan
+is a misuse and fails closed with `context_assertion_not_allowed_for_plan`. Local
+commands never require staging context. This mismatch protection is proven by real
+CLI **subprocess** tests (`tests/d1MigrationCli.test.mts`), not only by unit tests.
 
 ## 8. Future boundary (out of scope here)
 

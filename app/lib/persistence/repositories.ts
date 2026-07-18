@@ -31,6 +31,7 @@ import type {
   MembershipRow,
 } from "./types.ts"
 import type { TenantId, UserId } from "../tenant/types.ts"
+import { getCanonicalTenantSchemaVersion } from "./tenantSchemaVersion.ts"
 
 // ─── Tenant DB Resolver ─────────────────────────────────────────
 
@@ -44,14 +45,23 @@ export const TENANT_DATA_BINDING = "TENANT_DB_DEFAULT" as const
 export type TenantDataBinding = typeof TENANT_DATA_BINDING
 
 /**
- * Schema versions the running code understands for a TENANT_DB_DEFAULT registry
- * row. `"2"` is the canonical Alpha schema (INCLUDING action_previews
- * .created_by_user_id, per migrations/manifest.json); `"1"` is the legacy Alpha
- * bootstrap default retained for validation compatibility. A registry
- * schema_version outside this set is well-formed but unsupported and fails closed
- * with `tenant_database_schema_unsupported`.
+ * Schema versions the running code accepts for a TENANT_DB_DEFAULT registry row.
+ *
+ * There is EXACTLY ONE: the canonical version declared by the migration manifest
+ * (`getCanonicalTenantSchemaVersion()` → `migrations/manifest.json`
+ * `registry.TENANT_DB_DEFAULT.schemaVersion`, currently `"2"`). This is not a
+ * hand-maintained list — it is derived from the manifest authority, and a test
+ * proves the constant cannot drift from the manifest.
+ *
+ * Version `"1"` (the pre-0006 schema, missing `action_previews
+ * .created_by_user_id`) is deliberately EXCLUDED: routing a request to a v1
+ * database would let `D1ActionPreviewRepository.create()` fail at runtime on the
+ * missing column. A registry `schema_version` outside this set — including `"1"` —
+ * fails closed with `tenant_database_schema_unsupported`.
  */
-export const SUPPORTED_TENANT_SCHEMA_VERSIONS: readonly string[] = ["1", "2"]
+export const SUPPORTED_TENANT_SCHEMA_VERSIONS: readonly string[] = [
+  getCanonicalTenantSchemaVersion(),
+]
 
 /**
  * Deterministic, client-safe failure reasons. These are enum values only — they

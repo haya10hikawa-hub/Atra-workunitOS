@@ -23,9 +23,10 @@ import { tmpdir } from "node:os"
 import { resolve, dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { applyAll, verifyAll, KNOWN_BINDINGS } from "../scripts/lib/d1MigrationRunner.mjs"
+import { applyAll, verifyAll, verifyRegistryCoupling, KNOWN_BINDINGS } from "../scripts/lib/d1MigrationRunner.mjs"
 import { loadManifest } from "../scripts/lib/d1MigrationManifest.mjs"
 import { reconcileLane, applyLaneWithLedger } from "../scripts/lib/d1MigrationLedger.mjs"
+import { CANONICAL_TENANT_SCHEMA_VERSION } from "../app/lib/persistence/tenantSchemaVersion.ts"
 
 import { SqliteD1Database, TENANT_DB_MIGRATIONS } from "./helpers/sqliteD1.ts"
 import { seedTenantDatabaseRow } from "./helpers/registrySeed.ts"
@@ -69,6 +70,9 @@ test("hermetic operational proof: Alpha persistence contract holds end-to-end", 
     checksum_drift_rejected: false,
     control_schema_valid: false,
     tenant_schema_valid: false,
+    registry_version_matches_manifest: false,
+    ledger_matches_manifest: false,
+    physical_schema_matches_contract: false,
     tenant_routing_valid: false,
     control_db_fallback_absent: false,
     cross_tenant_read_blocked: false,
@@ -92,6 +96,13 @@ test("hermetic operational proof: Alpha persistence contract holds end-to-end", 
   const verified = verifyAll(dbFor, REPO_ROOT)
   proof.control_schema_valid = verified.ok && verified.perBinding["CONTROL_DB"].schema.ok
   proof.tenant_schema_valid = verified.ok && verified.perBinding["TENANT_DB_DEFAULT"].schema.ok
+
+  // Registry ↔ migration-evidence coupling: the canonical registry version must
+  // agree with the manifest, the ledger, and the physical schema contract.
+  const coupling = verifyRegistryCoupling(dbFor, REPO_ROOT, CANONICAL_TENANT_SCHEMA_VERSION)
+  proof.registry_version_matches_manifest = coupling.registry_version_matches_manifest
+  proof.ledger_matches_manifest = coupling.ledger_matches_manifest
+  proof.physical_schema_matches_contract = coupling.physical_schema_matches_contract
 
   // Partial upgrade: roll the tenant DB to pre-0006, reconcile → pending, re-apply.
   const tenantMig = migHandles["TENANT_DB_DEFAULT"]
