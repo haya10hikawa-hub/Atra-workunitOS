@@ -2,81 +2,50 @@
  * Architecture dependency-direction guards (Refactor Program, ADR-0002).
  *
  * Locks the layering rules from docs/refactor/TARGET_ARCHITECTURE.md as
- * executable tests over the real import graph (no regex source-guards):
+ * executable tests over the REAL TypeScript AST dependency graph
+ * (tests/helpers/refactorSourceGraph.mts). Because the graph classifies every
+ * dependency form — static/type-only/side-effect import, export-from,
+ * export-star, literal dynamic import, import-equals, literal require, and
+ * non-literal dynamic — a bare provider package or Node builtin can no longer
+ * slip past the gate by not matching a relative-path regex.
  *
- *   1. Domain (`app/lib/domain/**`) imports ONLY domain + tenant types and
+ *   1. Domain (`app/lib/domain/**`) imports ONLY domain + tenant modules and
  *      never reads `process.env`.
- *   2. Application (`app/lib/application/**`) does not import infrastructure,
- *      D1 implementations, or provider adapters — except the exact, ratcheted
- *      allowlist of pre-existing edges below. The allowlist may only SHRINK.
+ *   2. Application (`app/lib/application/**`) takes no third-party/Node-builtin
+ *      dependency and no VALUE dependency on infrastructure / persistence /
+ *      provider sources / the runtime env authority — except an EXACT,
+ *      shrink-only edge-exception allowlist.
  *
- * These are ratchets: they characterize the boundary as it exists on the
- * program base (origin/main @ 0b20218d) and fail when a NEW violation appears.
+ * These are ratchets: they characterize the boundary on the program base
+ * (origin/main @ 2669f2ea) and fail when a NEW violation appears.
  */
 
 import test from "node:test"
 import assert from "node:assert/strict"
 import fs from "node:fs"
 import path from "node:path"
-import { fileURLToPath } from "node:url"
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
-const appRoot = path.join(repoRoot, "app")
-const EXTS = [".ts", ".tsx", ".mts"]
-
-function listSourceFiles(dir: string): string[] {
-  const out: string[] = []
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, entry.name)
-    if (entry.isDirectory()) out.push(...listSourceFiles(p))
-    else if (EXTS.some((e) => entry.name.endsWith(e))) out.push(p)
-  }
-  return out
-}
-
-function importSpecifiers(file: string): string[] {
-  const src = fs.readFileSync(file, "utf8")
-  const specs: string[] = []
-  for (const m of src.matchAll(/from\s+["']([^"']+)["']/g)) specs.push(m[1])
-  for (const m of src.matchAll(/import\s*\(\s*["']([^"']+)["']\s*\)/g)) specs.push(m[1])
-  return specs
-}
-
-function resolveRelative(fromFile: string, spec: string): string | null {
-  let base: string
-  if (spec.startsWith("@/")) base = path.join(appRoot, spec.slice(2))
-  else if (spec.startsWith(".")) base = path.resolve(path.dirname(fromFile), spec)
-  else return null // bare package import — out of scope here
-  const candidates = [base, ...EXTS.map((e) => base + e), ...EXTS.map((e) => path.join(base, "index" + e))]
-  for (const c of candidates) {
-    try { if (fs.statSync(c).isFile()) return c } catch { /* keep looking */ }
-  }
-  return null
-}
-
-const rel = (p: string) => path.relative(repoRoot, p).split(path.sep).join("/")
+import {
+  appRoot,
+  listSourceFiles,
+  parseModuleEdges,
+  classifyDomainEdge,
+  classifyApplicationEdge,
+  APPLICATION_EDGE_EXCEPTIONS,
+  rel,
+} from "./helpers/refactorSourceGraph.mts"
 
 // ─── 1. Domain purity ───────────────────────────────────────────
 
-test("domain modules import only domain + tenant types", () => {
+test("domain modules depend only on domain + tenant (all dependency forms)", () => {
   const domainDir = path.join(appRoot, "lib", "domain")
   const violations: string[] = []
   for (const file of listSourceFiles(domainDir)) {
-    for (const spec of importSpecifiers(file)) {
-      const resolved = resolveRelative(file, spec)
-      if (resolved === null) {
-        // A bare import in domain would itself be a violation (provider SDKs,
-        // node builtins carrying ambient authority). Only type-free "node:"
-        // imports are tolerated if they ever appear; today there are none.
-        violations.push(`${rel(file)} → bare import "${spec}"`)
-        continue
-      }
-      const target = rel(resolved)
-      const allowed = target.startsWith("app/lib/domain/") || target.startsWith("app/lib/tenant/")
-      if (!allowed) violations.push(`${rel(file)} → ${target}`)
+    for (const edge of parseModuleEdges(file)) {
+      const verdict = classifyDomainEdge(edge)
+      if (!verdict.ok) violations.push(`${rel(file)} [${edge.edgeKind}] → ${edge.specifier ?? "<non-literal>"} : ${verdict.reason}`)
     }
   }
-  assert.deepEqual(violations, [], `domain layer gained forbidden imports:\n${violations.join("\n")}`)
+  assert.deepEqual(violations, [], `domain layer gained forbidden dependencies:\n${violations.join("\n")}`)
 })
 
 test("domain modules never read process.env", () => {
@@ -87,46 +56,33 @@ test("domain modules never read process.env", () => {
   assert.deepEqual(offenders, [])
 })
 
-// ─── 2. Application → infrastructure ratchet ────────────────────
+// ─── 2. Application → infrastructure / env ratchet ──────────────
 
-// Pre-existing edges on the program base. Fixing one means REMOVING it here.
-// Adding a new edge fails the test — route new capability through ports
-// composed at the runtime composition root instead (ADR-0002/0003).
-const APPLICATION_INFRA_ALLOWLIST: ReadonlySet<string> = new Set([
-  // sessionResolver constructs control repositories directly (to be inverted
-  // behind a port in workstream refactor/tenant-security).
-  "app/lib/application/auth/sessionResolver.ts",
-])
+// EXACT edge-level exceptions live in the helper (APPLICATION_EDGE_EXCEPTIONS):
+// each is a pre-existing VALUE edge tracked for removal, authorizing ONLY its
+// one source→target pair — it does NOT license any other import from that file.
 
-const FORBIDDEN_APPLICATION_TARGETS = [
-  "app/lib/infrastructure/",
-  "app/lib/persistence/d1/", // implementation classes; the `types.ts` type-only module is tolerated below
-  "app/lib/workunitInbox/sources/",
-]
-
-test("application modules do not gain infrastructure/provider imports", () => {
+test("application modules take no forbidden dependency beyond the exact allowlist", () => {
   const applicationDir = path.join(appRoot, "lib", "application")
   const violations: string[] = []
   for (const file of listSourceFiles(applicationDir)) {
-    const from = rel(file)
-    for (const spec of importSpecifiers(file)) {
-      const resolved = resolveRelative(file, spec)
-      if (resolved === null) continue
-      const target = rel(resolved)
-      if (target === "app/lib/persistence/d1/types.ts") continue // shared type shapes only
-      if (!FORBIDDEN_APPLICATION_TARGETS.some((prefix) => target.startsWith(prefix))) continue
-      if (APPLICATION_INFRA_ALLOWLIST.has(from)) continue
-      violations.push(`${from} → ${target}`)
+    for (const edge of parseModuleEdges(file)) {
+      const verdict = classifyApplicationEdge(edge, APPLICATION_EDGE_EXCEPTIONS)
+      if (!verdict.ok) {
+        violations.push(`${rel(file)} [${edge.edgeKind}${edge.isTypeOnly ? "/type" : ""}] → ${edge.specifier ?? "<non-literal>"} : ${verdict.reason}`)
+      }
     }
   }
-  assert.deepEqual(violations, [], `application layer gained infrastructure imports:\n${violations.join("\n")}`)
+  assert.deepEqual(violations, [], `application layer gained forbidden dependencies:\n${violations.join("\n")}`)
 })
 
-test("application→infrastructure allowlist entries still exist (ratchet hygiene)", () => {
-  for (const entry of APPLICATION_INFRA_ALLOWLIST) {
-    assert.ok(
-      fs.existsSync(path.join(repoRoot, entry)),
-      `${entry} no longer exists — remove it from the allowlist`,
-    )
+test("every application edge-exception still exists and is still exercised (ratchet hygiene)", () => {
+  for (const exc of APPLICATION_EDGE_EXCEPTIONS) {
+    assert.ok(fs.existsSync(path.join(appRoot, "..", exc.source)), `exception source ${exc.source} no longer exists — remove it`)
+    assert.ok(fs.existsSync(path.join(appRoot, "..", exc.target)), `exception target ${exc.target} no longer exists — remove it`)
+    // The tolerated edge must actually be present; a stale exception must be deleted.
+    const edges = parseModuleEdges(path.join(appRoot, "..", exc.source))
+    const present = edges.some((e) => e.resolvedTarget && rel(e.resolvedTarget) === exc.target && !e.isTypeOnly)
+    assert.ok(present, `exception ${exc.source} → ${exc.target} is stale (edge gone) — remove it`)
   }
 })
