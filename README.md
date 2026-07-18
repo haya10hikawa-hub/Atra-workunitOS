@@ -130,12 +130,13 @@ CF_D1_BOOTSTRAP_IDENTITY_SUBJECT=""
 CF_D1_BOOTSTRAP_IDENTITY_EMAIL=""
 ```
 
-Copying this template as-is **fails closed**: every required value
-(`JWT_AUTH_SECRET`, `JWT_AUTH_ISSUER`, `JWT_AUTH_AUDIENCE`,
-`CF_D1_BOOTSTRAP_IDENTITY_SUBJECT`, `CF_D1_BOOTSTRAP_IDENTITY_EMAIL`) is empty, so
-the CLI tools refuse to generate a token or seed an identity until you fill in
-local-only synthetic values (the secret must be at least 32 bytes). Keep every
-development/fallback flag `false`.
+Copying this template as-is **fails closed** because the secret and the synthetic
+identity placeholders (`JWT_AUTH_SECRET`, `CF_D1_BOOTSTRAP_IDENTITY_SUBJECT`,
+`CF_D1_BOOTSTRAP_IDENTITY_EMAIL`) are empty — the CLI tools refuse to generate a
+token or seed an identity until you fill in local-only synthetic values (the
+secret must be at least 32 bytes). The local issuer and audience examples
+(`JWT_AUTH_ISSUER`, `JWT_AUTH_AUDIENCE`) are prefilled non-secret values. Keep
+every development/fallback flag `false`.
 
 `cf:d1:bootstrap:jwt-local` and `auth:jwt:local` resolve the **same** subject and
 email from `.dev.vars`, so the seeded local identity always matches the generated
@@ -144,6 +145,76 @@ claims (if any) are **not authoritative** — tenant and role are resolved solel
 from the Control DB membership. `npm run --silent auth:jwt:local` prints only the
 compact JWT for shell capture; bootstrap and verify never log a JWT, secret,
 subject, or email.
+
+### One-command hermetic local smoke (`auth:jwt:smoke-local`)
+
+```bash
+npm run auth:jwt:smoke-local
+```
+
+This runs the entire local JWT/D1 HTTP flow as **one deterministic, self-cleaning
+command** — no manual bootstrap/generate/`wrangler dev`/curl sequence, and no
+dependency on any operator state:
+
+```text
+No JWT          -> 401
+Fresh HS256 JWT -> 200 (response contains `workUnits`)
+RS256 JWT       -> 401
+Expired JWT     -> 401
+```
+
+- **Current-source, runner-owned build.** The Worker bundle is built from the
+  **exact current `HEAD`** (`git archive HEAD` → a runner-owned snapshot with a
+  copy-on-write clone of `node_modules`) and OpenNext builds *inside* that snapshot.
+  The temp `wrangler --config` points only at the snapshot's `.open-next`. The run
+  never reads, modifies, or creates the operator's repository-root `.open-next`, and
+  the safe output includes `worker_source_match=true` / `worker_bundle_owned=true`.
+  A stale or non-`HEAD` bundle can never produce a passing run.
+- **Owned, isolated state.** Every artifact lives in one private temporary root
+  (mode `0700`, registered before any fallible step): the source snapshot + build, a
+  `0600` `.dev.vars`, a temporary `wrangler --config`, an isolated `--persist-to`
+  local D1 shared by both the bootstrap and the Worker, and captured logs. A
+  cryptographically random, local-only HS256 secret (≥ 32 bytes) is generated per
+  run and written only to the `0600` file — never passed as a command-line argument.
+  It does **not** read or modify your `.dev.vars`, default `.wrangler/`, `JWT_*`
+  environment variables, `.open-next`, or local D1 state, and selects an **ephemeral**
+  port (never a fixed `8788`).
+- **One global deadline.** A single monotonic budget bounds every blocking step
+  (build, bootstrap, D1 query, Wrangler startup, readiness, each HTTP request,
+  graceful stop); a timeout fails closed with a stable category and triggers
+  exact-child termination and cleanup.
+- **Signal-safe ownership.** The temp root is published atomically (synchronous
+  create → `0700` → `0600` ownership marker → verify → register) so no signal can
+  observe a half-created, unremovable root. Every long-running operation
+  (`git archive`, `tar`, the `node_modules` copy, the OpenNext build, each Wrangler
+  D1 call, `wrangler dev`) runs as a **detached child in its own process group**,
+  registered in a central registry the instant it spawns with an EXPLICIT lifecycle
+  state (`running` → `terminating` → `exited`). **Kill requested is not exit
+  confirmed:** a timeout or signal moves a child to `terminating` and SIGKILLs its
+  group, but only a real `exit`/`close` event moves it to `exited`. A timed-out
+  child therefore stays visible to cleanup until its exit is confirmed, and the
+  owned root is removed **only after every owned group is exit-confirmed** — so no
+  detached child can still be writing into it. Groups are killed by process group,
+  never by name.
+- **Absolute, fail-closed cleanup.** Cleanup runs under one `cleanupMs` deadline
+  that covers **every** stage — child exit confirmation, root removal, port release,
+  the git-status check (a bounded async command, never a fresh 15 s one), and the
+  operator-artifact check — so total cleanup wall time stays within `cleanupMs` plus
+  a small tolerance. Exceeding it yields a stable category (`child_cleanup_timeout` /
+  `root_removal_timeout` / `port_release_timeout` / `git_status_timeout`),
+  `cleanup=false`, `status=FAIL`. The operator artifact is compared by structured
+  state (`absent` / `present`+hash / `unreadable`): an absent↔present transition, a
+  changed hash, or an unreadable read at either point fails closed (absence is never
+  conflated with a read failure). `status=PASS` requires **both** the proof gate and
+  cleanup — `status=PASS` with `cleanup=false` is impossible. On `SIGINT`/`SIGTERM`
+  the runner sets an abort flag, terminates all owned groups, runs bounded cleanup,
+  then exits **130**/**143** (a second signal force-kills all groups but deletes no
+  unverified path). It only ever deletes paths it registered.
+- **Local-only.** No remote D1, no `wrangler whoami`, no `--remote`, no deploy, no
+  production Cloudflare. Stdout is machine-readable and secret-free.
+- **Scope.** A green run proves the **local** flow only. It does **not** prove
+  staging or production readiness. Remote/staging migration proof (Issue #155)
+  remains **open** until authorized staging evidence succeeds.
 
 ## Testing
 
