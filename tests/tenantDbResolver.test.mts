@@ -6,6 +6,8 @@ import { FakeD1Database } from "./helpers/fakeD1.ts"
 import { seedTenantDatabaseRow, seedTenantRow } from "./helpers/registrySeed.ts"
 import type { TenantId } from "../app/lib/tenant/types.ts"
 import type { TenantDbResolver, TenantDbResolution } from "../app/lib/persistence/repositories.ts"
+import { SUPPORTED_TENANT_SCHEMA_VERSIONS } from "../app/lib/persistence/repositories.ts"
+import { CANONICAL_TENANT_SCHEMA_VERSION } from "../app/lib/persistence/tenantSchemaVersion.ts"
 import type { D1DatabaseLike } from "../app/lib/persistence/d1/types.ts"
 
 const tA = "tenant-a" as TenantId
@@ -138,7 +140,7 @@ function fixedResolver(resolution: TenantDbResolution): TenantDbResolver {
 test("13. a malformed resolver context (null db) is rejected by the repository resolver", async () => {
   resetInMemoryReposForTests()
   const control = new FakeD1Database(), tenant = new FakeD1Database()
-  const resolver = fixedResolver({ ok: true, ctx: { tenantId: tA, db: null } })
+  const resolver = fixedResolver({ ok: true, ctx: { tenantId: tA, db: null } , binding: "TENANT_DB_DEFAULT", schemaVersion: "2" })
   const result = await resolveRepositories(tA, { persistence: productionPersistence(control, tenant), resolver })
   assert.equal(result.ok, false)
   if (!result.ok) assert.equal(result.error, "tenant_resolution_failed")
@@ -146,14 +148,14 @@ test("13. a malformed resolver context (null db) is rejected by the repository r
 
 test("resolver returning the CONTROL DB as tenant storage fails closed", async () => {
   const control = new FakeD1Database(), tenant = new FakeD1Database()
-  const resolver = fixedResolver({ ok: true, ctx: { tenantId: tA, db: control } })
+  const resolver = fixedResolver({ ok: true, ctx: { tenantId: tA, db: control } , binding: "TENANT_DB_DEFAULT", schemaVersion: "2" })
   const result = await resolveRepositories(tA, { persistence: productionPersistence(control, tenant), resolver })
   assert.equal(result.ok === false && result.error, "tenant_resolution_failed")
 })
 
 test("resolver returning a mismatched tenant context fails closed", async () => {
   const control = new FakeD1Database(), tenant = new FakeD1Database()
-  const resolver = fixedResolver({ ok: true, ctx: { tenantId: "other-tenant" as TenantId, db: tenant } })
+  const resolver = fixedResolver({ ok: true, ctx: { tenantId: "other-tenant" as TenantId, db: tenant } , binding: "TENANT_DB_DEFAULT", schemaVersion: "2" })
   const result = await resolveRepositories(tA, { persistence: productionPersistence(control, tenant), resolver })
   assert.equal(result.ok === false && result.error, "tenant_resolution_failed")
 })
@@ -177,7 +179,7 @@ test("options.d1Binding does NOT override the resolved ctx.db in the production 
   const control = new FakeD1Database()
   const resolvedDb = new FakeD1Database()   // ctx.db from the resolver
   const overrideDb = new FakeD1Database()   // hostile d1Binding — must be ignored
-  const resolver = fixedResolver({ ok: true, ctx: { tenantId: tA, db: resolvedDb } })
+  const resolver = fixedResolver({ ok: true, ctx: { tenantId: tA, db: resolvedDb } , binding: "TENANT_DB_DEFAULT", schemaVersion: "2" })
   const result = await resolveRepositories(tA, {
     persistence: productionPersistence(control, resolvedDb),
     resolver,
@@ -208,4 +210,84 @@ test("production path with NO resolver + valid registry: fake resolver active te
   const result = await resolveRepositories(tA, { persistence: productionPersistence(control, tenantDb), resolver })
   assert.equal(result.ok, true)
   if (result.ok) assert.equal(result.bundle.ctx.db, tenantDb)
+})
+
+// ─── Alpha persistence contract categories (P0-FIX-D1-OPERATIONAL-CONTRACT) ──
+
+test("contract: success carries the allowlisted binding + the canonical schema version", async () => {
+  const { resolver, controlDb } = makeResolver()
+  await seedRegistry(controlDb, tA) // registry schema_version defaults to the canonical version
+  const res = await resolver.resolveTenantDb(tA)
+  assert.equal(res.ok, true)
+  if (res.ok) {
+    assert.equal(res.binding, "TENANT_DB_DEFAULT")
+    assert.equal(res.schemaVersion, CANONICAL_TENANT_SCHEMA_VERSION)
+  }
+})
+
+test("contract: canonical schema version 2 is the only supported version", async () => {
+  assert.deepEqual([...SUPPORTED_TENANT_SCHEMA_VERSIONS], [CANONICAL_TENANT_SCHEMA_VERSION])
+  assert.equal(CANONICAL_TENANT_SCHEMA_VERSION, "2")
+  const controlDb = new FakeD1Database()
+  const tenantDb = new FakeD1Database()
+  await seedTenantRow(controlDb, tA, "active")
+  await seedTenantDatabaseRow(controlDb, tA, { schemaVersion: "2" })
+  const res = await new D1TenantDbResolver({ controlDb, tenantDb }).resolveTenantDb(tA)
+  assert.equal(res.ok, true)
+  if (res.ok) assert.equal(res.schemaVersion, "2")
+})
+
+test("contract: pre-0006 schema version 1 fails closed (migration-required, not routable)", async () => {
+  const controlDb = new FakeD1Database()
+  const tenantDb = new FakeD1Database()
+  await seedTenantRow(controlDb, tA, "active")
+  await seedTenantDatabaseRow(controlDb, tA, { schemaVersion: "1" })
+  const res = await new D1TenantDbResolver({ controlDb, tenantDb }).resolveTenantDb(tA)
+  assert.equal(res.ok, false)
+  if (!res.ok) assert.equal(res.reason, "tenant_database_schema_unsupported")
+})
+
+test("contract: a well-formed but unsupported schema version fails closed", async () => {
+  const controlDb = new FakeD1Database()
+  const tenantDb = new FakeD1Database()
+  await seedTenantRow(controlDb, tA, "active")
+  await seedTenantDatabaseRow(controlDb, tA, { schemaVersion: "3" })
+  const res = await new D1TenantDbResolver({ controlDb, tenantDb }).resolveTenantDb(tA)
+  assert.equal(res.ok, false)
+  if (!res.ok) assert.equal(res.reason, "tenant_database_schema_unsupported")
+})
+
+test("contract: a missing/blank tenant context fails closed with tenant_context_required", async () => {
+  const { resolver } = makeResolver()
+  const blank = await resolver.resolveTenantDb("" as TenantId)
+  assert.equal(blank.ok, false)
+  if (!blank.ok) assert.equal(blank.reason, "tenant_context_required")
+  const ws = await resolver.resolveTenantDb("   " as TenantId)
+  assert.equal(ws.ok, false)
+  if (!ws.ok) assert.equal(ws.reason, "tenant_context_required")
+})
+
+test("contract: an absent TENANT_DB_DEFAULT binding fails closed, never a control fallback", async () => {
+  const controlDb = new FakeD1Database()
+  await seedTenantRow(controlDb, tA, "active")
+  await seedTenantDatabaseRow(controlDb, tA, {})
+  // Construct the resolver with a null tenant binding (infrastructure fault).
+  const resolver = new D1TenantDbResolver({ controlDb, tenantDb: null as unknown as D1DatabaseLike })
+  const res = await resolver.resolveTenantDb(tA)
+  assert.equal(res.ok, false)
+  if (!res.ok) assert.equal(res.reason, "tenant_database_binding_missing")
+})
+
+test("contract: the fake resolver mirrors the schema-version support gate", async () => {
+  const supported = createFakeTenantDbResolver(
+    new Map([[tA, { tenant: { status: "active" }, dbRef: { status: "active", schemaVersion: "2" } }]]),
+  )
+  const okRes = await supported.resolveTenantDb(tA)
+  assert.equal(okRes.ok, true)
+  const unsupported = createFakeTenantDbResolver(
+    new Map([[tA, { tenant: { status: "active" }, dbRef: { status: "active", schemaVersion: "9" } }]]),
+  )
+  const badRes = await unsupported.resolveTenantDb(tA)
+  assert.equal(badRes.ok, false)
+  if (!badRes.ok) assert.equal(badRes.reason, "tenant_database_schema_unsupported")
 })

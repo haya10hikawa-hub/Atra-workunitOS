@@ -19,7 +19,10 @@ export const LOCAL_FIXTURE = Object.freeze({
     tenant_id: "local-dev-tenant",
     database_name: "local-dev-tenant-db",
     database_id: "00000000-0000-4000-8000-000000000010",
-    schema_version: "1",
+    // The canonical Alpha schema version (matches migrations/manifest.json). A
+    // fixture DB is bootstrapped with the complete tenant lane (through 0006), so
+    // its registry row must declare the canonical version the resolver accepts.
+    schema_version: "2",
     status: "active",
   }),
   user: Object.freeze({ id: "local-dev-user", email: "local-dev-user@local.invalid", display_name: "Local Dev User" }),

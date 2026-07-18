@@ -14,7 +14,10 @@ import type { D1DatabaseLike } from "../../app/lib/persistence/d1/types.ts"
 /** Synthetic, well-formed D1 database id (UUID shape). NOT a real id. */
 export const VALID_DB_ID = "11111111-1111-4111-8111-111111111111"
 export const VALID_DB_NAME = "tenant-db-test"
-export const VALID_SCHEMA_VERSION = "1"
+// The canonical Alpha schema version (matches migrations/manifest.json
+// registry.TENANT_DB_DEFAULT.schemaVersion). Version "1" is the pre-0006 schema
+// the runtime rejects, so a valid registry seed must use the canonical version.
+export const VALID_SCHEMA_VERSION = "2"
 
 export type RegistryRowOverrides = {
   tenantId?: string

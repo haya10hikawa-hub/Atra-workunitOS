@@ -95,6 +95,17 @@ export class SqliteD1Database implements D1DatabaseLike {
   }
 }
 
+/**
+ * Wrap an EXISTING node:sqlite `DatabaseSync` as a `D1DatabaseLike`. Unlike
+ * `SqliteD1Database` (which creates and migrates its own `:memory:` db), this is a
+ * thin view over a handle the caller already applied migrations to — so the
+ * resolver/repositories can operate against the SAME physical database the
+ * migration runner and ledger use. Test-only.
+ */
+export function d1OverHandle(db: DatabaseSync): D1DatabaseLike {
+  return { prepare: (query: string) => new SqliteStatement(db, query) }
+}
+
 /** The committed shared tenant-data D1 migrations, in order. */
 export const TENANT_DB_MIGRATIONS = [
   "migrations/0002_tenant_core.sql",

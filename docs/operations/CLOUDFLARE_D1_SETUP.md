@@ -990,3 +990,152 @@ malicious machine owner. See
 trust model, workflow, and acceptance policy — the framework itself is **not**
 remote proof, and Issue #155 stays open until an authorized run, second-checkout
 verification, a Cloudflare-side cross-check, and human review.
+
+## 11. Alpha persistence contract & reproducible migrate CLI (P0-FIX-D1-OPERATIONAL-CONTRACT, Issue #155)
+
+The authoritative model is documented in
+[../architecture/PERSISTENCE_CONTRACT.md](../architecture/PERSISTENCE_CONTRACT.md).
+Summary: **two physical databases** — `CONTROL_DB` (control plane) and
+`TENANT_DB_DEFAULT` (shared tenant-data plane) — with tenant isolation enforced by
+mandatory `tenant_id` row predicates. There is **no** per-tenant physical D1 and
+**no** `CONTROL_DB` fallback for tenant data.
+
+### 11.1 Alpha topology
+
+```
+CONTROL_DB          tenants, tenant_databases, users, auth_identities, tenant_memberships
+TENANT_DB_DEFAULT   work_units, action_previews, approval_records, workunit_feedback,
+                    integration_connections, audit_logs, usage_events, usage_daily_summary
+```
+
+### 11.2 Local plan / apply / verify (hermetic, no retained state)
+
+The unified runner (`scripts/cf-d1-migrate.mjs`, over the canonical manifest +
+`__atra_d1_migrations` ledger) exposes three verbs with an explicit
+local/staging separation. The **local** commands run against invocation-owned,
+in-memory/temp SQLite databases and leave **no** local D1 state:
+
+```bash
+npm run cf:d1:migrate:plan-local      # deterministic per-binding plan (no IDs, no SQL)
+npm run cf:d1:migrate:apply-local     # fresh apply + replay no-op + verify, then cleanup
+npm run cf:d1:migrate:verify-local    # fresh apply + read-only schema/ledger verify
+```
+
+`apply-local` emits safe booleans: `fresh_apply`, `replay_noop`, `verify_ok`,
+`cleanup`. It exits non-zero if any is false.
+
+**Schema-version authority.** The runtime accepts exactly one
+`tenant_databases.schema_version`: the **canonical** version declared by
+`migrations/manifest.json` (`registry.TENANT_DB_DEFAULT.schemaVersion`, currently
+`2`). Version `1` is the **pre-0006 schema and is routing-incompatible** — a v1
+database is missing `action_previews.created_by_user_id`, which every
+`ActionPreview` insert requires. The resolver rejects a v1 registry row with
+`tenant_database_schema_unsupported` *before* any write; moving a v1 database
+forward is a **migration requirement**, not a supported runtime state (run
+`cf:d1:migrate:apply-*` to reach the canonical schema).
+
+### 11.3 Staging plan / preflight
+
+```bash
+npm run cf:d1:migrate:plan-staging       # offline plan (no network)
+npm run cf:d1:migrate:preflight-staging  # OFFLINE staging authority preflight (no network)
+```
+
+Both are **fully offline**. There is **no** remote staging verify or apply command
+in this PR — remote execution is not implemented (see §11.4). `plan-staging`
+prints the safe plan; `preflight-staging` validates the staging authority contract
+without contacting a provider.
+
+`preflight-staging` requires the operator's trusted staging context and reports
+safe booleans only:
+
+```bash
+# Operator sets the trusted staging context (BOTH required; values are examples):
+export CF_STAGING_ACCOUNT_ID=<32-hex Cloudflare account id>
+export CF_STAGING_PROJECT=<staging Worker/project name>
+npm run cf:d1:migrate:preflight-staging
+#   trusted_context_complete=true caller_assertions_valid=true
+#   production_prohibited=true execution_latch_absent=true
+#   local_manifest_valid=true remote=false
+```
+
+### 11.4 Staging authority preflight and the remote boundary
+
+**Remote staging verify/apply is NOT implemented in this PR.** `apply`/`verify
+--environment staging` fail closed with `staging_remote_execution_not_available`.
+A later, **independently audited** PR will add the authorized remote executor. Do
+**not** set `CF_D1_STAGING_EXECUTE=1` in this PR — `preflight` requires the latch
+to be **absent** and refuses (`staging_remote_executor_not_implemented`) if it is
+set.
+
+**Trusted staging context.** `--account` / `--project` are caller *assertions*,
+not authority. The authoritative context is read from operator-provided,
+staging-only environment variables **`CF_STAGING_ACCOUNT_ID`** and
+**`CF_STAGING_PROJECT`** — **BOTH required**, never committed, never printed.
+`preflight --environment staging` classifies them (all fail-closed, values never
+echoed):
+
+| Condition                                              | Result                                 |
+| ------------------------------------------------------ | -------------------------------------- |
+| neither configured                                     | `staging_context_unconfigured`         |
+| exactly one configured                                 | `staging_context_incomplete`           |
+| both configured but malformed (format/bounds)          | `staging_context_invalid`              |
+| caller asserts only one of account/project             | `staging_context_assertion_incomplete` |
+| caller asserts a value disagreeing with trusted context| `unexpected_cloudflare_context`        |
+| both valid; caller assertions match (or absent)        | preflight passes (offline)             |
+
+Validation is bounded: trimmed, non-empty, length-capped, no control characters;
+account id = 32-hex, project name = conservative allowlist. `plan` and local
+commands never accept `--account`/`--project`. These checks run in the **real**
+CLI path and are covered by CLI subprocess tests (`tests/d1MigrationCli.test.mts`).
+
+### 11.5 Migration rollback policy
+
+Migrations are forward-only and append-only. `once` migrations are not reversible
+in place (SQLite has no transactional `DROP COLUMN` guard). Rollback is a
+forward-fix migration plus, if needed, a restore from a pre-apply D1 export.
+Never edit a committed migration file — its `sha256` is pinned and a changed
+checksum fails closed (see §11.6).
+
+### 11.6 Checksum-drift response
+
+If verification reports `digest_mismatch`, a committed migration's bytes no longer
+match the manifest `sha256`. Do **not** force-apply. Restore the original bytes
+(git), or, if the change is intentional, add a **new** append-only migration —
+never mutate an applied one.
+
+### 11.7 Failure recovery
+
+- `apply` failing mid-lane: the ledger records a migration only after its DDL
+  commits, so a failed migration is never recorded as applied. Re-run `apply`;
+  the reconciler skips satisfied migrations and resumes at the first pending one.
+- Unknown/inconsistent state (`schema_without_history`, `history_without_schema`,
+  `foreign_binding`): verification fails closed and **no** destructive repair is
+  attempted. Investigate with `verify` output (safe categories only).
+
+### 11.8 Required evidence before deployment
+
+1. `npm run cf:d1:migrate:plan-local` — plan reviewed.
+2. `npm run cf:d1:migrate:apply-local` — `fresh_apply/replay_noop/verify_ok/cleanup` all true.
+3. `node --test tests/d1MigrationRunner.test.mts tests/d1OperationalProof.test.mts
+   tests/tenantSchemaCompatibility.test.mts tests/tenantDbResolver.test.mts
+   tests/tenantIsolationRoutes.test.mts tests/d1MigrationCli.test.mts` — green.
+4. With the operator's trusted context set,
+   `npm run cf:d1:migrate:preflight-staging` passes (offline).
+5. A later, **independently audited** PR implements the remote executor; an
+   **authorized** remote staging plan → apply → verify is then run against a real
+   staging D1 and its evidence pack (§10) independently reviewed. That remote step
+   is **not** part of this PR.
+
+### 11.9 Issue #155 closure criteria
+
+Issue #155 stays **open** until an authorized remote staging plan → apply → verify
+has been executed against a real staging D1 (by the future, independently audited
+remote-executor PR) and its evidence independently reviewed. The repository/local
+implementation criteria (contract documented + enforced, no `CONTROL_DB` fallback,
+mandatory tenant scope, reproducible manifest + ledger,
+fresh/replay/partial/checksum-drift proofs, registry-row coupling, cross-tenant
+isolation, hermetic local proof, and an offline staging **preflight**) are met by
+this change; the remote staging-evidence criterion is the remaining blocker. See
+[../architecture/PERSISTENCE_CONTRACT.md](../architecture/PERSISTENCE_CONTRACT.md)
+§9.
