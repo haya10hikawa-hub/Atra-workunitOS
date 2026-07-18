@@ -2,7 +2,13 @@
 
 ## Base and baseline (recorded 2026-07-19)
 
-- `origin/main` @ `0b20218d593dd0978cac69026dd15c79184a149d`
+- `origin/main` @ `2669f2ea5da052e801cb3a49251c96a34ec20939`
+- Base history: the program started on `0b20218d` (all baseline gates below were
+  first recorded there). PR #172 merged mid-program (persistence/operations
+  area: `tenantSchemaVersion.ts`, `d1MigrationRunner.mjs`, `cf:d1:migrate:*`
+  commands, +5 test suites); the root branch was rebased forward onto
+  `2669f2ea` per the rollback strategy and every gate re-run green on the new
+  base. Inventory §9/§16 additions from #172 are noted inline.
 - Root branch: `refactor/large-saas-foundation` (isolated worktree, clean).
 - Unmerged PR dependencies (recorded, NOT cherry-picked; base stays
   independent): #174 (WorkUnit formation plan), #173 (Goal/Done UX contract),
@@ -15,12 +21,12 @@ Baseline gates on the base SHA (all green):
 
 | Gate | Result |
 |---|---|
-| `npm test` | 4591 tests: 4590 pass, 0 fail, 1 skip (~14 s, deterministic across runs) |
+| `npm test` | base 0b20218d: 4591/4590/1 skip; rebased base 2669f2ea: 4646/4645/1 skip (~14 s, deterministic) |
 | `npm run alpha:safety-gate` | pass (35 checks) |
 | `npm run lint` | pass |
 | `npm run build` | pass |
 | `npm run cf:build` | pass (OpenNext worker bundle) |
-| `npx tsc --noEmit` | **81 pre-existing errors in 23 test files** (no CI gate — AUD-005) |
+| `npx tsc --noEmit` | **81 pre-existing errors in 23 test files** on 0b20218d; **86 in 25 test files** on 2669f2ea (PR #172 type drift in tenantNodeProductionFailClosed/tenantRepositoryAuthority tests — evidence for #179; no CI gate — AUD-005) |
 | `git diff --check` | clean |
 | `npm audit` | 15 vulns (2 low / 6 moderate / 7 high) — toolchain, #128 |
 

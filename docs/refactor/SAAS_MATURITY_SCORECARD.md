@@ -1,6 +1,6 @@
 # SaaS Maturity Scorecard (L0–L5)
 
-Base: `origin/main` @ `0b20218d`. Scale: L0 absent · L1 prototype · L2
+Base: `origin/main` @ `2669f2ea`. Scale: L0 absent · L1 prototype · L2
 small-team · L3 normal production SaaS · L4 large-scale SaaS · L5 regulated /
 mission-critical. Scores are justified by code, tests, runtime behavior, and
 operational documentation — not by test existence or intention.

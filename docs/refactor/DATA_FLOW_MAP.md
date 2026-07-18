@@ -1,6 +1,6 @@
 # Data-Flow Map — Large-SaaS Refactor Program
 
-Base: `origin/main` @ `0b20218d`. Companion to `DEPENDENCY_MAP.md` (module
+Base: `origin/main` @ `2669f2ea`. Companion to `DEPENDENCY_MAP.md` (module
 structure); this file follows the data.
 
 ## F1 — Authentication & tenant attribution

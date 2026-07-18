@@ -11,7 +11,7 @@
   `refactor/persistence-integrity`, `refactor/execution-safety`,
   `refactor/reliability-observability`, `refactor/test-deployment-platform`)
   targeting the root branch `refactor/large-saas-foundation` (cut from
-  `origin/main` @ `0b20218d`) via Draft PRs sized ≤15 files / ≤800 lines with
+  `origin/main` @ `2669f2ea`) via Draft PRs sized ≤15 files / ≤800 lines with
   one primary invariant each. Characterization tests precede every behavior
   move (Phase 15 order). Issues are closed only after independent audit
   (`Fixes candidate:` linking, no auto-close keywords).

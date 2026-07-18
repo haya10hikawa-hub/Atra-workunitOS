@@ -1,6 +1,6 @@
 # Dependency Map — Large-SaaS Refactor Program
 
-Base: `origin/main` @ `0b20218d`. Derived from the static import graph rooted at
+Base: `origin/main` @ `2669f2ea`. Derived from the static import graph rooted at
 `app/page.tsx`, `app/layout.tsx`, and the 9 API routes (see
 `SYSTEM_INVENTORY.md` §0 for the reachability method).
 

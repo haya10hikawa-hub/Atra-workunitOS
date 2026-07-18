@@ -1,6 +1,6 @@
 # System Inventory — Large-SaaS Refactor Program
 
-Base: `origin/main` @ `0b20218d593dd0978cac69026dd15c79184a149d` (2026-07-19).
+Base: `origin/main` @ `2669f2ea5da052e801cb3a49251c96a34ec20939` (2026-07-19).
 Method: static import-graph analysis from every runtime entry point (page, layout,
 9 API routes), file-by-file inspection of security/persistence/LLM boundaries, and
 the full baseline gate run recorded in `REFACTOR_PROGRAM.md`.
@@ -133,6 +133,11 @@ mismatch); request-id conventions differ per route (`resolveRequestId` vs
   lanes) + `schema-contract.json` + `scripts/lib/d1MigrationManifest.mjs`,
   `d1MigrationLedger.mjs` (`__atra_d1_migrations`, 7 reconcile states,
   fail-closed) — P0-PERSIST-015 rounds 1–4.
+- PR #172 (merged mid-program, absorbed by root rebase): `d1MigrationRunner.mjs`
+  + `cf-d1-migrate.mjs` with `cf:d1:migrate:{plan,apply,verify}-local` and
+  `plan/preflight-staging` commands, `tenantSchemaVersion.ts` runtime schema
+  alignment, `docs/architecture/PERSISTENCE_CONTRACT.md`,
+  `docs/operations/CLOUDFLARE_D1_SETUP.md`.
 - Gated remote ops: `cf:d1:migrations:apply` (double env-gate, validated config,
   no `--yes`), `cf:d1:bootstrap:apply` (reconstruct-and-compare artifact
   binding, TOCTOU-closed private exec config), read-only remote verify.

@@ -1,6 +1,6 @@
 # Target Architecture — Large-SaaS Foundation
 
-Program root: `refactor/large-saas-foundation` (base `origin/main` @ `0b20218d`).
+Program root: `refactor/large-saas-foundation` (base `origin/main` @ `2669f2ea`).
 Companion ADRs: `docs/adr/ADR-0001..0004`.
 
 ## Layering (required dependency direction)
