@@ -6,6 +6,7 @@ import {
   type SessionResolutionFailureReason,
   type SessionResolutionResult,
 } from "../application/auth/sessionResolver.ts"
+import { composeRequestServices } from "../runtime/composeRequestServices.ts"
 import {
   resolveValidatedRequestRuntimeConfig,
   type ValidatedRequestRuntimeConfig,
@@ -20,22 +21,32 @@ export type SessionVerificationResult = SessionResolutionResult
  * control-DB binding all come from the request-scoped validated runtime config —
  * never ambient `process.env` (the config's local path owns that seam). Routes
  * resolve the config ONCE and thread it in; a config error fails closed.
+ *
+ * The ENTIRE facade flow (runtime resolution → composeRequestServices → pure
+ * resolveSession) runs inside a single fail-closed envelope: an ORDINARY invalid
+ * runtime config returns `unauthorized`, while any UNEXPECTED exception from
+ * runtime resolution, config projection, or auth/session-authority adapter
+ * construction resolves to `internal_error` instead of rejecting the route
+ * promise. The exception, runtime config, secrets, DB bindings, and tenant data
+ * are never logged or exposed.
  */
 export async function requireSession(
   request: Request = new Request("http://localhost"),
   runtime?: ValidatedRequestRuntimeConfig,
 ): Promise<SessionVerificationResult> {
-  let rt = runtime
-  if (!rt) {
-    const resolved = resolveValidatedRequestRuntimeConfig()
-    if (!resolved.ok) return { ok: false, reason: "unauthorized" }
-    rt = resolved.runtime
+  try {
+    let rt = runtime
+    if (!rt) {
+      const resolved = resolveValidatedRequestRuntimeConfig()
+      if (!resolved.ok) return { ok: false, reason: "unauthorized" }
+      rt = resolved.runtime
+    }
+    // Compose the request-scoped session dependencies (auth adapter, control
+    // session-authority adapter, security policy), then invoke the pure resolver.
+    return await resolveSession(request, composeRequestServices(rt))
+  } catch {
+    return { ok: false, reason: "internal_error" }
   }
-  return resolveSession(request, {
-    auth: rt.auth,
-    security: rt.security,
-    controlDbBinding: rt.persistence.CONTROL_DB,
-  })
 }
 
 export function getSessionErrorStatus(reason: SessionResolutionFailureReason): number {

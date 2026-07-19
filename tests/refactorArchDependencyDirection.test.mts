@@ -81,3 +81,37 @@ test("every application edge-exception is exact (source+target+edgeKind+modality
   for (const exc of APPLICATION_VALUE_EXCEPTIONS) { assert.equal(exc.typeOnly, false); assert.equal(exc.edgeKind, "static-import"); check(exc) }
   for (const exc of APPLICATION_TYPEONLY_EXCEPTIONS) { assert.equal(exc.typeOnly, true); assert.equal(exc.edgeKind, "type-only-import"); check(exc) }
 })
+
+// ─── 3. WS1-PR2 invariant: no application VALUE dependency on runtime/
+//        security/infrastructure/persistence ─────────────────────
+
+test("APPLICATION_VALUE_EXCEPTIONS is empty (session authority composed outside application)", () => {
+  assert.equal(APPLICATION_VALUE_EXCEPTIONS.length, 0)
+})
+
+test("sessionResolver.ts has no value edge to runtime/security/infrastructure/persistence-impl", () => {
+  const forbiddenPrefixes = [
+    "app/lib/runtime/",
+    "app/lib/security/",
+    "app/lib/infrastructure/",
+    "app/lib/persistence/",
+  ]
+  const edges = parseModuleEdges(path.join(appRoot, "lib", "application", "auth", "sessionResolver.ts"))
+  const valueEdgesToForbidden = edges
+    .filter((e) => !e.isTypeOnly && e.resolvedTarget && forbiddenPrefixes.some((p) => rel(e.resolvedTarget as string).startsWith(p)))
+    .map((e) => `${e.edgeKind} → ${rel(e.resolvedTarget as string)}`)
+  assert.deepEqual(valueEdgesToForbidden, [], "sessionResolver must not take a value dependency on runtime/security/infrastructure/persistence")
+})
+
+test("no application module takes a VALUE dependency on runtime/security/infrastructure/persistence-impl", () => {
+  const forbiddenPrefixes = ["app/lib/runtime/", "app/lib/security/", "app/lib/infrastructure/", "app/lib/persistence/"]
+  const violations: string[] = []
+  for (const file of listSourceFiles(path.join(appRoot, "lib", "application"))) {
+    for (const edge of parseModuleEdges(file)) {
+      if (edge.isTypeOnly || !edge.resolvedTarget) continue
+      const target = rel(edge.resolvedTarget)
+      if (forbiddenPrefixes.some((p) => target.startsWith(p))) violations.push(`${rel(file)} [${edge.edgeKind}] → ${target}`)
+    }
+  }
+  assert.deepEqual(violations, [], "application layer has a forbidden value dependency")
+})

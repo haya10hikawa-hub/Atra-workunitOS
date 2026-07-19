@@ -322,17 +322,20 @@ export interface EdgeException {
 // Roots an application module may depend on without an exception.
 const APPLICATION_ALLOWED_ROOTS = ["app/lib/domain/", "app/lib/application/", "app/lib/tenant/"]
 
-/** Exact VALUE-edge exceptions (each authorizes ONLY its one source→target+form). */
-export const APPLICATION_VALUE_EXCEPTIONS: readonly EdgeException[] = [
-  { source: "app/lib/application/auth/sessionResolver.ts", target: "app/lib/infrastructure/persistence/control/controlRepositoryResolver.ts", edgeKind: "static-import", typeOnly: false, reason: "sessionResolver constructs control repositories directly; invert behind a port", removalIssue: "#182 (refactor/tenant-security)" },
-  { source: "app/lib/application/auth/sessionResolver.ts", target: "app/lib/runtime/requestRuntimeConfig.ts", edgeKind: "static-import", typeOnly: false, reason: "sessionResolver reads the runtime env authority directly; thread from composition root", removalIssue: "#182 (refactor/tenant-security)" },
-  { source: "app/lib/application/auth/sessionResolver.ts", target: "app/lib/security/policy.ts", edgeKind: "static-import", typeOnly: false, reason: "sessionResolver uses RBAC role normalization; move behind an auth port", removalIssue: "#182 (refactor/tenant-security)" },
-]
+/**
+ * Exact VALUE-edge exceptions. EMPTY as of WS1-PR2 (compose session authority
+ * outside application): sessionResolver's three value edges to security/policy,
+ * the infrastructure control resolver, and the runtime env authority were
+ * removed by injecting an auth adapter + a domain session-authority port + a
+ * composition root. The application layer now takes NO value dependency on
+ * runtime/security/infrastructure/persistence. Do not re-add without a tracked
+ * removal plan; the architecture test asserts this list is empty.
+ */
+export const APPLICATION_VALUE_EXCEPTIONS: readonly EdgeException[] = []
 
 /** Exact TYPE-ONLY-edge exceptions (shared-contract type imports; must be type-only). */
 export const APPLICATION_TYPEONLY_EXCEPTIONS: readonly EdgeException[] = [
   { source: "app/lib/application/auth/resolveAuthAdapter.ts", target: "app/lib/runtime/requestRuntimeConfig.ts", edgeKind: "type-only-import", typeOnly: true, reason: "AuthRuntimeConfig type contract", removalIssue: "#182 (ports extraction)" },
-  { source: "app/lib/application/auth/sessionResolver.ts", target: "app/lib/persistence/d1/types.ts", edgeKind: "type-only-import", typeOnly: true, reason: "D1DatabaseLike type contract", removalIssue: "#182 (ports extraction)" },
   { source: "app/lib/application/workunitInbox/persistenceMapping.ts", target: "app/lib/persistence/types.ts", edgeKind: "type-only-import", typeOnly: true, reason: "persistence row type contract", removalIssue: "#182 (ports extraction)" },
   { source: "app/lib/application/decomposition/types.ts", target: "app/lib/llm/types.ts", edgeKind: "type-only-import", typeOnly: true, reason: "LLM boundary type contract", removalIssue: "#182 (ports extraction)" },
   { source: "app/lib/application/actionField/errorState.ts", target: "app/lib/security/safeErrors.ts", edgeKind: "type-only-import", typeOnly: true, reason: "safe-error code type contract", removalIssue: "#182 (ports extraction)" },
@@ -761,4 +764,104 @@ export function processSymbolReferences(file: string): number {
 
   walk(sf, [])
   return count
+}
+
+// ═══ §G  exact type-contract module exemption (reachability ratchet) ══
+//
+// A PURE type-contract module (an `interface`/`type` port with NO runtime
+// footprint) emits nothing, so it is inherently orphaned by the value-edge
+// reachability metric even though it is a legitimate, used dependency. Rather
+// than RAISE the global 203/88 ceilings (which would also silently tolerate real
+// dead runtime code), the ratchet exempts EXACTLY such modules — and ONLY after
+// PROVING, per exact path, that the module truly is a pure type contract with a
+// live type-only consumer. A stale entry (file gone / no type-only importer) or a
+// module converted into runtime code (value import/export, runtime declaration,
+// side effect) FAILS validation, so the exemption cannot mask a regression.
+
+function isExistingFile(absPath: string): boolean {
+  try { return fs.statSync(absPath).isFile() } catch { return false }
+}
+
+/** A top-level statement that emits NO runtime code: `import type`, `interface`,
+ *  `type` alias, or a type-only `export {…}`/`export type * from`. */
+function statementIsTypeOnly(stmt: ts.Statement): boolean {
+  if (ts.isInterfaceDeclaration(stmt) || ts.isTypeAliasDeclaration(stmt)) return true
+  if (ts.isImportDeclaration(stmt)) return stmt.importClause ? importIsTypeOnly(stmt.importClause) : false
+  if (ts.isExportDeclaration(stmt)) return exportIsTypeOnly(stmt)
+  return false
+}
+
+export type TypeContractViolationCode =
+  | "not_a_file" // exact path is missing or not a regular file
+  | "value_import" // an outbound value/side-effect import (runtime load)
+  | "value_export" // a runtime-emitting export (value binding / value re-export)
+  | "runtime_declaration" // a runtime-emittable top-level declaration or side effect
+  | "stale_no_type_only_importer" // no production module imports it via a type-only edge
+
+export interface TypeContractViolation { readonly code: TypeContractViolationCode; readonly detail: string }
+
+/**
+ * SELF analysis (module's own AST only — resolvable on a throwaway fixture): the
+ * module must contain NO value import (incl. side-effect import), NO value
+ * export, and NO runtime-emittable top-level declaration or side effect.
+ */
+export function typeContractSelfViolations(absFile: string): TypeContractViolation[] {
+  if (!isExistingFile(absFile)) return [{ code: "not_a_file", detail: rel(absFile) }]
+  const v: TypeContractViolation[] = []
+  for (const edge of parseModuleEdges(absFile)) {
+    if (isRuntimeEdge(edge)) v.push({ code: "value_import", detail: `${edge.edgeKind} "${edge.specifier ?? "<dynamic>"}"` })
+  }
+  for (const stmt of parseSourceFile(absFile).statements) {
+    if (ts.isImportDeclaration(stmt) || ts.isImportEqualsDeclaration(stmt)) continue // imports scored via edges
+    if (statementIsTypeOnly(stmt)) continue
+    const isExport = hasExportModifier(stmt) || ts.isExportDeclaration(stmt) || ts.isExportAssignment(stmt)
+    v.push({ code: isExport ? "value_export" : "runtime_declaration", detail: ts.SyntaxKind[stmt.kind] })
+  }
+  return v
+}
+
+/** Production (app/**, non-test) modules that import `absModuleFile` through a
+ *  type-only edge. Empty ⇒ the exemption is stale. */
+export function productionTypeOnlyImporters(absModuleFile: string): string[] {
+  const importers: string[] = []
+  for (const f of listSourceFiles(appRoot)) {
+    if (f === absModuleFile) continue
+    if (parseModuleEdges(f).some((e) => e.resolvedTarget === absModuleFile && e.isTypeOnly)) importers.push(rel(f))
+  }
+  return importers
+}
+
+export interface TypeContractClassification { readonly ok: boolean; readonly reasons: readonly string[] }
+
+/** Classify ONE absolute path as an exact pure type-contract exemption. Fails
+ *  closed: any self violation OR a stale (no type-only importer) module → not ok. */
+export function classifyTypeContractModule(absFile: string): TypeContractClassification {
+  if (!isExistingFile(absFile)) return { ok: false, reasons: ["not_a_file: exact file path required (no directory or glob)"] }
+  const reasons = typeContractSelfViolations(absFile).map((s) => `${s.code}: ${s.detail}`)
+  if (productionTypeOnlyImporters(absFile).length === 0) reasons.push("stale_no_type_only_importer: no production module imports it via a type-only edge")
+  return { ok: reasons.length === 0, reasons }
+}
+
+export interface TypeContractValidation {
+  readonly validated: ReadonlySet<string> // absolute paths that passed EVERY check
+  readonly rejections: readonly { readonly module: string; readonly reasons: readonly string[] }[]
+}
+
+/**
+ * Validate EXACT repo-relative type-contract exemptions. Each entry is resolved by
+ * EXACT path (a directory or `**` glob does not resolve to a file and is rejected)
+ * and must pass `classifyTypeContractModule`. Only fully-validated modules are
+ * exempted from the reachability counts; every rejection is reported so a stale or
+ * converted exemption makes the ratchet fail rather than silently pass.
+ */
+export function validateTypeContractExemptions(exactRelPaths: readonly string[]): TypeContractValidation {
+  const validated = new Set<string>()
+  const rejections: { module: string; reasons: readonly string[] }[] = []
+  for (const relPath of exactRelPaths) {
+    const absPath = path.join(repoRoot, relPath)
+    const result = classifyTypeContractModule(absPath)
+    if (result.ok) validated.add(absPath)
+    else rejections.push({ module: relPath, reasons: result.reasons })
+  }
+  return { validated, rejections }
 }
