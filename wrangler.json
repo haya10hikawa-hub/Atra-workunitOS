@@ -11,7 +11,8 @@
   "vars": {
     "EXTERNAL_ACTIONS_ENABLED": "false",
     "ALLOW_LEGACY_INGEST_FALLBACK": "false",
-    "PERSISTENCE_MODE": "d1"
+    "PERSISTENCE_MODE": "d1",
+    "ALLOWED_ORIGINS": "REPLACE_WITH_ALLOWED_ORIGINS"
   },
   "d1_databases": [
     {

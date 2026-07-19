@@ -52,6 +52,10 @@ export type SecurityRuntimeConfig = {
   readonly allowDevWorkspaceBootstrap: boolean
   readonly allowControlLessDevSession: boolean
   readonly devSessionRole?: string
+  /** Normalized, deduplicated CSRF origin allowlist (frozen). The single
+   *  request-scoped authority for `validateCsrfOrigin`; never read from env by
+   *  the CSRF validator itself. */
+  readonly allowedOrigins: readonly string[]
 }
 
 export type LlmRuntimeConfig = {
@@ -78,6 +82,8 @@ export type RequestRuntimeConfigError =
   | "dev_flag_forbidden"
   | "dev_adapter_forbidden"
   | "forbidden_capability"
+  | "missing_allowed_origins"
+  | "malformed_allowed_origins"
 
 // ─── Forbidden production capabilities ───────────────────────────
 //
@@ -110,6 +116,56 @@ const MAX_VAR_LENGTH = 256
 const MAX_SECRET_LENGTH = 8192
 const MAX_IDENTIFIER_LENGTH = 1024
 const MIN_JWT_SECRET_BYTES = 32
+
+// ─── CSRF allowed-origin contract ────────────────────────────────
+const MAX_ALLOWED_ORIGINS_RAW_LENGTH = 4096
+const MAX_ALLOWED_ORIGINS = 16
+const MAX_ORIGIN_LENGTH = 512
+/** The ONLY localhost default, permitted in local development only. */
+export const LOCALHOST_DEFAULT_ORIGIN = "http://localhost:3000"
+
+export type AllowedOriginsResult =
+  | { readonly ok: true; readonly origins: readonly string[] }
+  | { readonly ok: false; readonly reason: "missing_allowed_origins" | "malformed_allowed_origins" }
+
+/** Normalize one origin string to its canonical `URL.origin`, or null when the
+ *  entry violates the contract (non-http/https, credentials, query, fragment,
+ *  a path other than "/", or an opaque/null origin). */
+function normalizeOriginEntry(value: string): string | null {
+  let url: URL
+  try { url = new URL(value) } catch { return null }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null
+  if (url.username !== "" || url.password !== "") return null
+  if (url.search !== "" || url.hash !== "") return null
+  if (url.pathname !== "" && url.pathname !== "/") return null
+  if (url.origin === "null" || url.origin === "") return null
+  return url.origin
+}
+
+/**
+ * Validate + normalize a comma-separated origin allowlist against the canonical
+ * contract. Never echoes the rejected value; returns only a safe reason category.
+ * Bounds: <=4096 raw chars, <=16 origins, <=512 chars each. Rejects empty
+ * entries and wildcards. Deduplicates deterministically (first occurrence wins).
+ */
+export function parseAllowedOrigins(raw: string | undefined): AllowedOriginsResult {
+  if (raw === undefined || raw.trim() === "") return { ok: false, reason: "missing_allowed_origins" }
+  if (raw.length > MAX_ALLOWED_ORIGINS_RAW_LENGTH) return { ok: false, reason: "malformed_allowed_origins" }
+  const entries = raw.split(",")
+  if (entries.length > MAX_ALLOWED_ORIGINS) return { ok: false, reason: "malformed_allowed_origins" }
+  const origins: string[] = []
+  const seen = new Set<string>()
+  for (const entry of entries) {
+    const trimmed = entry.trim()
+    if (trimmed === "" || trimmed.length > MAX_ORIGIN_LENGTH || trimmed === "*") return { ok: false, reason: "malformed_allowed_origins" }
+    const normalized = normalizeOriginEntry(trimmed)
+    if (normalized === null) return { ok: false, reason: "malformed_allowed_origins" }
+    if (!seen.has(normalized)) { seen.add(normalized); origins.push(normalized) }
+  }
+  if (origins.length === 0) return { ok: false, reason: "missing_allowed_origins" }
+  if (origins.length > MAX_ALLOWED_ORIGINS) return { ok: false, reason: "malformed_allowed_origins" }
+  return { ok: true, origins }
+}
 
 // ─── Primitive validation ────────────────────────────────────────
 
@@ -150,6 +206,13 @@ function resolveCloudflareConfig(raw: AppEnv): RequestRuntimeConfigResult {
   // separately gated (it may be "true"); it is NOT a development/fallback capability.
   const externalActions = parseBoolLiteral(raw.EXTERNAL_ACTIONS_ENABLED)
   if (externalActions === null) return { ok: false, error: "malformed_var" }
+
+  // CSRF origins — REQUIRED in Cloudflare production, sourced ONLY from the
+  // request-scoped env. Missing/empty/oversized/malformed fails config resolution.
+  const rawOrigins = raw.ALLOWED_ORIGINS
+  if (rawOrigins !== undefined && typeof rawOrigins !== "string") return { ok: false, error: "malformed_allowed_origins" }
+  const originsResult = parseAllowedOrigins(rawOrigins)
+  if (!originsResult.ok) return { ok: false, error: originsResult.reason }
 
   // Every production development/fallback capability must be absent or "false".
   for (const key of FORBIDDEN_PRODUCTION_CAPABILITIES) {
@@ -202,6 +265,7 @@ function resolveCloudflareConfig(raw: AppEnv): RequestRuntimeConfigResult {
       allowDevSession: false,
       allowDevWorkspaceBootstrap: false,
       allowControlLessDevSession: false,
+      allowedOrigins: Object.freeze([...originsResult.origins]),
     }),
     llm: Object.freeze({
       provider: provider.value,
@@ -255,6 +319,20 @@ function resolveLocalConfig(
     }
   }
 
+  // CSRF origins (local): use an explicitly-supplied valid value; otherwise
+  // default ONLY to localhost. A supplied-but-invalid value fails closed (never
+  // silently downgraded to the localhost default). NEXT_PUBLIC_APP_URL is NOT a
+  // server-side security authority and is never consulted here.
+  const rawOrigins = typeof processEnv.ALLOWED_ORIGINS === "string" ? processEnv.ALLOWED_ORIGINS : undefined
+  let allowedOrigins: readonly string[]
+  if (rawOrigins === undefined || rawOrigins.trim() === "") {
+    allowedOrigins = Object.freeze([LOCALHOST_DEFAULT_ORIGIN])
+  } else {
+    const res = parseAllowedOrigins(rawOrigins)
+    if (!res.ok) return { ok: false, error: res.reason }
+    allowedOrigins = Object.freeze([...res.origins])
+  }
+
   const runtime: ValidatedRequestRuntimeConfig = {
     source: "local",
     persistence,
@@ -266,6 +344,7 @@ function resolveLocalConfig(
       allowDevWorkspaceBootstrap: !isProduction && processEnv.ALLOW_DEV_WORKSPACE_BOOTSTRAP === "true",
       allowControlLessDevSession: !isProduction && processEnv.ALLOW_DEV_CONTROLLESS_SESSION === "true",
       devSessionRole: processEnv.DEV_SESSION_ROLE,
+      allowedOrigins,
     }),
     llm: Object.freeze({
       provider: processEnv.LLM_PROVIDER,

@@ -8,16 +8,19 @@ import {
   validateD1Id,
   validateDeployConfig,
   validateGeneratedConfigLocation,
+  validateAllowedOrigins,
   buildConfigWithIds,
   parseConfig,
   loadConfigFile,
   SYNTHETIC_D1_IDS,
+  SYNTHETIC_ALLOWED_ORIGIN,
   GENERATED_CONFIG_GITIGNORE_RULE,
   EXPECTED_WORKER_MAIN,
   EXPECTED_ASSETS_DIR,
 } from "../scripts/lib/cfDeployConfig.mjs"
 import { getDeployStepMetadata } from "../scripts/cloudflare-deploy.mjs"
 import { parseArgs as parsePreflightArgs } from "../scripts/cloudflare-deploy-preflight.mjs"
+import { ALLOWED_ORIGIN_VECTORS } from "./helpers/allowedOriginVectors.ts"
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 type LooseD1 = { binding: string; database_name?: string; database_id?: unknown }
@@ -405,7 +408,7 @@ const validate = (config: unknown) => validateDeployConfig(config, { repoRoot: R
 /** Rebuild the committed base with explicit ids and (optionally) names. */
 function configWith({ controlId = SYNTHETIC_D1_IDS.CONTROL_DB, tenantId = SYNTHETIC_D1_IDS.TENANT_DB_DEFAULT, controlName, tenantName }:
   { controlId?: string; tenantId?: string; controlName?: string; tenantName?: string }): LooseConfig {
-  const cfg = buildConfigWithIds(baseConfig, { CONTROL_DB: controlId, TENANT_DB_DEFAULT: tenantId }) as LooseConfig
+  const cfg = buildConfigWithIds(baseConfig, { CONTROL_DB: controlId, TENANT_DB_DEFAULT: tenantId }, { allowedOrigins: "https://app.example.test" }) as LooseConfig
   for (const db of cfg.d1_databases) {
     if (db.binding === "CONTROL_DB" && controlName !== undefined) db.database_name = controlName
     if (db.binding === "TENANT_DB_DEFAULT" && tenantName !== undefined) db.database_name = tenantName
@@ -497,4 +500,60 @@ test("the ID-collision rule applies regardless of allowPlaceholderIds, and never
   // …and the committed base (two DIFFERENT placeholder ids) must stay valid for the
   // preflight self-check, which is what publishes a safe config.
   assert.deepEqual(validateDeployConfig(baseConfig, { repoRoot: REPO_ROOT, allowPlaceholderIds: true }).failures, [])
+})
+
+// ─── CSRF allowed-origins deploy contract (Issue #176) ──────────
+// Shared vectors keep the deploy + runtime validators aligned.
+
+test("validateAllowedOrigins accepts the shared valid vectors, normalized + deduplicated", () => {
+  for (const v of ALLOWED_ORIGIN_VECTORS.valid) {
+    const res = validateAllowedOrigins(v.raw)
+    assert.ok(res.ok, "valid vector must pass")
+    if (res.ok) assert.deepEqual(res.origins, [...v.origins])
+  }
+})
+
+test("validateAllowedOrigins rejects the shared malformed vectors (safe category only)", () => {
+  for (const raw of ALLOWED_ORIGIN_VECTORS.malformed) {
+    const res = validateAllowedOrigins(raw)
+    assert.equal(res.ok, false)
+    if (!res.ok) {
+      assert.ok(res.reason === "malformed" || res.reason === "missing")
+      // No output echoes the configured origin value.
+      assert.ok(!String(res.reason).includes("example.com"))
+    }
+  }
+})
+
+test("full validation rejects a missing / placeholder / malformed deploy origin", () => {
+  const missing = buildConfigWithIds(baseConfig, SYNTHETIC_D1_IDS) as LooseConfig & { vars: Record<string, unknown> }
+  delete missing.vars.ALLOWED_ORIGINS
+  assert.ok(validateDeployConfig(missing, { repoRoot: REPO_ROOT }).failures.includes("allowed_origins_missing"))
+
+  const placeholder = buildConfigWithIds(baseConfig, SYNTHETIC_D1_IDS) as LooseConfig & { vars: Record<string, unknown> }
+  placeholder.vars.ALLOWED_ORIGINS = "REPLACE_WITH_ALLOWED_ORIGINS"
+  assert.ok(validateDeployConfig(placeholder, { repoRoot: REPO_ROOT }).failures.includes("allowed_origins_placeholder"))
+
+  const malformed = buildConfigWithIds(baseConfig, SYNTHETIC_D1_IDS) as LooseConfig & { vars: Record<string, unknown> }
+  malformed.vars.ALLOWED_ORIGINS = "*"
+  assert.ok(validateDeployConfig(malformed, { repoRoot: REPO_ROOT }).failures.includes("allowed_origins_malformed"))
+})
+
+test("committed base placeholder origin is accepted only under the base-structure check", () => {
+  assert.ok(validateDeployConfig(baseConfig, { repoRoot: REPO_ROOT, allowPlaceholderIds: true }).failures.every((f) => !String(f).startsWith("allowed_origins_")))
+  assert.ok(validateDeployConfig(baseConfig, { repoRoot: REPO_ROOT, allowPlaceholderIds: false }).failures.includes("allowed_origins_placeholder"))
+})
+
+test("synthetic config carries ONLY the approved synthetic origin", () => {
+  const synthetic = buildConfigWithIds(baseConfig, SYNTHETIC_D1_IDS) as LooseConfig & { vars: Record<string, unknown> }
+  assert.equal(synthetic.vars.ALLOWED_ORIGINS, SYNTHETIC_ALLOWED_ORIGIN)
+  assert.deepEqual(validateDeployConfig(synthetic, { repoRoot: REPO_ROOT, configPath: `${REPO_ROOT}/wrangler.deploy.synthetic.json` }).failures, [])
+})
+
+test("a real-id config gets NO synthetic origin auto-injected (must be explicit or fail)", () => {
+  const realIds = { CONTROL_DB: "11111111-1111-4111-8111-111111111111", TENANT_DB_DEFAULT: "22222222-2222-4222-8222-222222222222" }
+  const cfg = buildConfigWithIds(baseConfig, realIds) as LooseConfig & { vars: Record<string, unknown> }
+  // No auto-inject: the base placeholder remains → full validation fails closed.
+  assert.notEqual(cfg.vars.ALLOWED_ORIGINS, SYNTHETIC_ALLOWED_ORIGIN)
+  assert.ok(validateDeployConfig(cfg, { repoRoot: REPO_ROOT, configPath: `${REPO_ROOT}/wrangler.deploy.json` }).failures.includes("allowed_origins_placeholder"))
 })

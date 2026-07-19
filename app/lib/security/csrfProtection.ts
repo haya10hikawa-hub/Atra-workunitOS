@@ -1,49 +1,44 @@
 /**
- * Phase 5A: CSRF / Origin Protection
+ * CSRF / Origin Protection (pure, injected).
  *
- * Validates Origin and Referer headers for state-changing POST requests.
- * Rejects cross-site and malformed origins.
+ * Validates the Origin/Referer of a state-changing POST request against a
+ * NORMALIZED allowlist supplied by the caller. This module reads NO environment
+ * variable and holds NO module-scope configuration: the allowlist is the
+ * request-scoped `security.allowedOrigins` projection from
+ * `resolveValidatedRequestRuntimeConfig`. The same imported function validates
+ * different requests against different injected allowlists.
  *
- * Production: missing Origin/Referer on browser-like POST is blocked.
- * Dev: may allow missing Origin behind explicit dev flag only.
+ * Matching is EXACT against `new URL(header).origin` — no suffix, substring, or
+ * wildcard matching, and ports are significant. An empty allowlist fails closed.
  */
 
 export type CsrfCheckResult = { readonly ok: true } | { readonly ok: false; readonly reason: "csrf_failed" | "invalid_origin" }
 
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean)
-
-export function validateCsrfOrigin(request: Request): CsrfCheckResult {
+/**
+ * @param request         the incoming request
+ * @param allowedOrigins  normalized `URL.origin` values (from the request-scoped
+ *                        validated runtime config); an empty list fails closed.
+ */
+export function validateCsrfOrigin(request: Request, allowedOrigins: readonly string[]): CsrfCheckResult {
   const origin = request.headers.get("Origin")
   const referer = request.headers.get("Referer")
 
-  // If both Origin and Referer are missing, block in production
-  if (!origin && !referer) {
-    return { ok: false, reason: "csrf_failed" }
-  }
+  // Both Origin and Referer missing → cannot verify same-origin → blocked.
+  if (!origin && !referer) return { ok: false, reason: "csrf_failed" }
 
-  const originValue = origin ?? referer!
+  const headerValue = origin ?? referer!
 
+  let candidate: string
   try {
-    const url = new URL(originValue)
-    const originHost = `${url.protocol}//${url.host}`
-
-    if (ALLOWED_ORIGINS.some((allowed) => normalizeOrigin(allowed) === originHost)) {
-      return { ok: true }
-    }
-
-    return { ok: false, reason: "invalid_origin" }
+    candidate = new URL(headerValue).origin
   } catch {
     return { ok: false, reason: "invalid_origin" }
   }
-}
+  // Opaque / null origin never matches.
+  if (candidate === "null" || candidate === "") return { ok: false, reason: "invalid_origin" }
 
-function normalizeOrigin(value: string): string | null {
-  try {
-    return new URL(value).origin
-  } catch {
-    return null
-  }
+  // Empty allowlist fails closed; exact origin match only (a Referer path is
+  // discarded by `URL.origin`, so an allowed origin with a path still matches).
+  if (allowedOrigins.includes(candidate)) return { ok: true }
+  return { ok: false, reason: "invalid_origin" }
 }

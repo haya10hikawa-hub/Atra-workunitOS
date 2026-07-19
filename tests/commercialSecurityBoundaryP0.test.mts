@@ -16,7 +16,7 @@ const MUTATING_ROUTES = [
 test("P0: every current mutating WorkUnit route enforces CSRF origin", async () => {
   for (const path of MUTATING_ROUTES) {
     const source = await readFile(path, "utf8")
-    assert.ok(source.includes("validateCsrfOrigin(request)"), path)
+    assert.ok(source.includes("validateCsrfOrigin(request"), path)
   }
 })
 

@@ -88,6 +88,7 @@ function baseRuntimeConfig(persistence: ValidatedRequestRuntimeConfig["persisten
       allowLegacyIngestFallback: false,
       allowDevSession: true,
       allowDevWorkspaceBootstrap: false,
+      allowedOrigins: ["http://localhost:3000"],
       allowControlLessDevSession: false,
     },
     llm: { allowMock: false, allowLegacyFallback: false, isProduction: false },

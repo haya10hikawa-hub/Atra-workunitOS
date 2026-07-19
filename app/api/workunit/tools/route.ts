@@ -119,19 +119,10 @@ export async function GET(request: Request): Promise<NextResponse> {
 export async function POST(request: Request): Promise<NextResponse> {
   const requestId = resolveRequestId(request)
 
-  // ── 1. CSRF / Origin protection ─────────────────────────────
-  const csrf = validateCsrfOrigin(request)
-  if (!csrf.ok) {
-    audit("workunit_tools_csrf_blocked" as AuditEventKind, requestId, { reason: csrf.reason })
-    return errorResponse(requestId, csrf.reason, 403)
-  }
-
-  // ── 2. Audit: request received ──────────────────────────────
-  audit("tool_request_received", requestId)
-
-  // ── 2b. Resolve the request-scoped runtime config ONCE ──────
-  // Auth, security (kill switch), LLM, and persistence all derive from this one
-  // frozen snapshot. A config error (malformed Cloudflare env) fails closed.
+  // ── 1. Resolve the request-scoped runtime config ONCE ───────
+  // Resolved BEFORE CSRF so the origin allowlist is the validated, request-scoped
+  // projection. Config resolution is pure; no persistence/audit-persistence/
+  // provider/LLM/repository effect occurs before CSRF passes.
   const runtimeResult = resolveValidatedRequestRuntimeConfig()
   if (!runtimeResult.ok) {
     audit("integration_missing" as AuditEventKind, requestId, { reason: "runtime_config_invalid" })
@@ -139,7 +130,17 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
   const runtime = runtimeResult.runtime
 
-  // ── 3. Session boundary ─────────────────────────────────────
+  // ── 2. CSRF / Origin protection (request-scoped allowlist) ──
+  const csrf = validateCsrfOrigin(request, runtime.security.allowedOrigins)
+  if (!csrf.ok) {
+    audit("workunit_tools_csrf_blocked" as AuditEventKind, requestId, { reason: csrf.reason })
+    return errorResponse(requestId, csrf.reason, 403)
+  }
+
+  // ── 3. Audit: request received ──────────────────────────────
+  audit("tool_request_received", requestId)
+
+  // ── 4. Session boundary ─────────────────────────────────────
   const sessionResult = await requireSession(request, runtime)
   if (!sessionResult.ok) {
     audit("auth_required", requestId, { reason: sessionResult.reason })

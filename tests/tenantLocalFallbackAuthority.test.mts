@@ -40,6 +40,7 @@ function runtime(over: {
       allowDevSession: over.allowDevSession ?? true,
       allowDevWorkspaceBootstrap: false,
       allowControlLessDevSession: false,
+      allowedOrigins: ["http://localhost:3000"],
     },
     llm: { allowMock: false, allowLegacyFallback: false, isProduction: over.isProduction ?? false },
   }

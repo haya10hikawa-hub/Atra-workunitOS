@@ -43,7 +43,7 @@ async function seedSession(controlDb: FakeD1Database, tenantId: string, opts: { 
 function cloudflareEnv(controlDb: FakeD1Database, tenantDb: FakeD1Database): AppEnv {
   return {
     CONTROL_DB: controlDb, TENANT_DB_DEFAULT: tenantDb, PERSISTENCE_MODE: "d1",
-    EXTERNAL_ACTIONS_ENABLED: "false", AUTH_ADAPTER: "jwt",
+    EXTERNAL_ACTIONS_ENABLED: "false", ALLOWED_ORIGINS: "https://app.example.test", AUTH_ADAPTER: "jwt",
     JWT_AUTH_SECRET: SECRET, JWT_AUTH_ISSUER: ISS, JWT_AUTH_AUDIENCE: AUD,
   } as AppEnv
 }

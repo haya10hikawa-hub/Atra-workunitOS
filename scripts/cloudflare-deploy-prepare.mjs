@@ -9,9 +9,10 @@
  * Inputs (environment):
  *   CLOUDFLARE_CONTROL_DB_ID        → CONTROL_DB.database_id
  *   CLOUDFLARE_TENANT_DB_DEFAULT_ID → TENANT_DB_DEFAULT.database_id
+ *   CLOUDFLARE_ALLOWED_ORIGINS      → vars.ALLOWED_ORIGINS (normalized)
  *
  * SAFETY:
- *   - Never prints any database ID; only safe field names / categories.
+ *   - Never prints any database ID or origin value; only safe field names / categories.
  *   - Deletes any stale generated config FIRST, so a failed preparation cannot
  *     leave a config that a later deploy silently reuses.
  *   - Writes the generated config with 0600 permissions.
@@ -27,6 +28,7 @@ import {
   loadConfigFile,
   buildConfigWithIds,
   validateD1Id,
+  validateAllowedOrigins,
   validateDeployConfig,
   REQUIRED_D1_BINDINGS,
 } from "./lib/cfDeployConfig.mjs"
@@ -67,13 +69,21 @@ function main() {
       ids[binding] = value
     }
   }
+
+  // Validate the CSRF origin allowlist BEFORE writing (never echo the value).
+  const originsRes = validateAllowedOrigins(process.env.CLOUDFLARE_ALLOWED_ORIGINS)
+  if (!originsRes.ok) {
+    failures.push(`allowed_origins_${originsRes.reason} (CLOUDFLARE_ALLOWED_ORIGINS)`)
+  }
+
   if (failures.length > 0) {
     for (const f of failures) console.error(`prepare: FAIL ${f}`)
-    console.error("prepare: invalid deployment IDs — no config written.")
+    console.error("prepare: invalid deployment configuration — no config written.")
     process.exit(1)
   }
 
-  const generated = buildConfigWithIds(base.config, ids)
+  // Inject the NORMALIZED origins (deduplicated, canonical), not the raw input.
+  const generated = buildConfigWithIds(base.config, ids, { allowedOrigins: originsRes.origins.join(",") })
 
   // Final validation before persisting (defense in depth).
   const check = validateDeployConfig(generated, {

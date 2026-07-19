@@ -139,10 +139,13 @@ test("the live Approval / ActionPreview routes are byte-identical to the P6-FIX-
   // four-eyes, and RBAC are otherwise unchanged. The pins are updated to the new
   // content; a further accidental/unauthorized edit still fails.
   const PINNED_BASELINE_DIGESTS: Readonly<Record<string, string>> = {
+    // WS2-PR1 (#176): CSRF now resolves the request-scoped runtime config BEFORE
+    // validating the origin against `runtime.security.allowedOrigins`. The route
+    // orchestration otherwise unchanged; digests re-pinned to the new bytes.
     "app/api/workunit/[id]/approval/route.ts":
-      "4b8ece954371d1a552de9e073c30d3c4244136ad5056ad873c3f5ab30e3c5278",
+      "823937d61163b9496b7c93cdbc350ebd5ef9e3753783a70fed92a8210a412346",
     "app/api/workunit/[id]/action-preview/route.ts":
-      "ca5544297bc453133751efa79285749feb3898df4e7767564a61bd25d0ce86be",
+      "fec2e12d2f7b9a1a9a723c3984ab3d61b080876cc5aad185eb22c194c488e846",
     "app/lib/security/approvalStore.ts":
       "fe95e65db109e10f60236a9ebe2870c29b7dcdd8ed837e3b9397aa9937d0c04c",
   }

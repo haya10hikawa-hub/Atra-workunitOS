@@ -61,12 +61,7 @@ export async function POST(
   const { id: workUnitId } = await params
   const requestId = `dry-run:${workUnitId}:${Date.now()}`
 
-  const csrf = validateCsrfOrigin(request)
-  if (!csrf.ok) return errorResponse(requestId, csrf.reason, 403)
-
-  audit("execution_dry_run_requested", requestId, { workUnitId })
-
-  // ── 0. Request-scoped runtime config (resolved ONCE) ─────────
+  // ── 0. Request-scoped runtime config (resolved ONCE, before CSRF) ─
   const runtimeResult = resolveValidatedRequestRuntimeConfig()
   if (!runtimeResult.ok) {
     audit("execution_dry_run_failed", requestId, { reason: "runtime_config_invalid" })
@@ -74,6 +69,11 @@ export async function POST(
   }
   const runtime = runtimeResult.runtime
   const killSwitchEnv = projectRuntimeAuthorizationEnv(runtime.security)
+
+  const csrf = validateCsrfOrigin(request, runtime.security.allowedOrigins)
+  if (!csrf.ok) return errorResponse(requestId, csrf.reason, 403)
+
+  audit("execution_dry_run_requested", requestId, { workUnitId })
 
   // ── 1. Session ───────────────────────────────────────────────
   const sessionResult = await requireSession(request, runtime)
