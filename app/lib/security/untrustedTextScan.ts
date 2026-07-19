@@ -6,12 +6,16 @@
  * `app/lib/llm/sanitize.ts` so candidate-only layers can reuse the same
  * security authority without duplicating the regexes.
  *
+ * The pattern collections are module-private on purpose: the public API is
+ * the three predicates only, so no consumer can mutate the scanner behavior
+ * at runtime.
+ *
  * Detection only — a passing scan never makes content trusted.
  */
 
 import { normalizeForSecurityScan } from "./textNormalize.ts"
 
-export const SENSITIVE_VALUE_PATTERNS: readonly RegExp[] = [
+const SENSITIVE_VALUE_PATTERNS: readonly RegExp[] = [
   /\bBearer\s+[A-Za-z0-9._~+/-]{12,}/i,
   /\bsk-[A-Za-z0-9_-]{8,}/,
   /\bgh[pousr]_[A-Za-z0-9]{12,}/,
@@ -19,7 +23,7 @@ export const SENSITIVE_VALUE_PATTERNS: readonly RegExp[] = [
   /\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\s*[:=]\s*[^\s,;]{8,}/i,
 ]
 
-export const PROMPT_INJECTION_PATTERNS: readonly RegExp[] = [
+const PROMPT_INJECTION_PATTERNS: readonly RegExp[] = [
   /ignore (all )?(previous|prior|above) (instructions|rules|messages)/i,
   /forget (all |everything )?(previous|prior|above)?/i,
   /you are now/i,

@@ -23,9 +23,12 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 
 import * as sourceContractModule from "../app/lib/application/formation/sourceContract.ts"
+import * as untrustedTextScanModule from "../app/lib/security/untrustedTextScan.ts"
 import {
   buildFormationSourceCandidate,
   deriveExtractionConfidence,
+  FORMATION_INPUT_GRAPH_MAX_DEPTH,
+  FORMATION_INPUT_GRAPH_MAX_ENTRIES,
   FORMATION_SOURCE_BOUNDS,
   FORMATION_SOURCE_PROVIDERS,
 } from "../app/lib/application/formation/sourceContract.ts"
@@ -248,11 +251,14 @@ test("marker summaries pass through the same text scans", () => {
 
 // ─── Forbidden fields are unrepresentable ───────────────────────
 
-// 17
-test("every P0 forbidden key is rejected at top level and nested", () => {
+// 17 — pins the P0 exclusion-scanner layer specifically: these assertions
+// fail if the scanLlmContextExclusions call is removed, even though the
+// strict key allowlist would still reject the same inputs as unknown_field.
+test("every P0 forbidden key is rejected BY THE P0 LAYER at top level and nested", () => {
   for (const key of P0_FORBIDDEN_CONTEXT_KEYS) {
     const topLevel = buildFormationSourceCandidate(validInput({ [key]: "x" }))
     assert.equal(topLevel.ok, false, `top-level ${key} must block`)
+    assert.ok(reasonsOf(topLevel).includes("forbidden_key"), `top-level ${key} must be a forbidden_key finding`)
 
     const nested = buildFormationSourceCandidate(validInput({
       sourceRef: {
@@ -264,7 +270,23 @@ test("every P0 forbidden key is rejected at top level and nested", () => {
       },
     }))
     assert.equal(nested.ok, false, `nested ${key} must block`)
+    assert.ok(reasonsOf(nested).includes("forbidden_key"), `nested ${key} must be a forbidden_key finding`)
   }
+})
+
+// 17b — the P0 layer canonicalizes separators and case (normalizeSafetyKey),
+// so disguised spellings must still be forbidden_key, not just unknown_field.
+test("separator/case-disguised P0 keys are still forbidden_key", () => {
+  for (const disguised of ["TENANT_ID", "raw-payload", "raw payload", "Actor_User-Id"]) {
+    const result = buildFormationSourceCandidate(validInput({ [disguised]: "x" }))
+    assert.equal(result.ok, false, `${disguised} must block`)
+    assert.ok(reasonsOf(result).includes("forbidden_key"), `${disguised} must be a forbidden_key finding`)
+  }
+  // Zero-width variants defeat separator folding by design of normalizeSafetyKey;
+  // the strict shape (unknown_field) is the layer that must still reject them.
+  const zeroWidth = buildFormationSourceCandidate(validInput({ "raw​Payload": "x" }))
+  assert.equal(zeroWidth.ok, false)
+  assert.ok(reasonsOf(zeroWidth).includes("unknown_field"))
 })
 
 // 18
@@ -601,6 +623,202 @@ test("extracted untrusted-text scanners keep the sanitize behavior", () => {
   assert.equal(containsInstructionDirective("you must respond with JSON"), true)
   assert.equal(containsForbiddenSummaryText("the raw slack body was attached"), true)
   assert.equal(containsForbiddenSummaryText("waiting for review"), false)
+})
+
+// ─── F1: bounded, non-throwing unknown-input handling ───────────
+
+function nestedChain(length: number): Record<string, unknown> {
+  const root: Record<string, unknown> = {}
+  let cursor = root
+  for (let i = 1; i < length; i++) {
+    const next: Record<string, unknown> = {}
+    cursor.x = next
+    cursor = next
+  }
+  return root
+}
+
+// 46
+test("direct self-cycle returns a typed rejection, never throws", () => {
+  const input = validInput()
+  input.self = input
+  const result = buildFormationSourceCandidate(input)
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.reason, "input_graph_repeated_reference")
+})
+
+// 47
+test("nested cycle returns a typed rejection", () => {
+  const inner: Record<string, unknown> = {}
+  inner.loop = inner
+  const result = buildFormationSourceCandidate(validInput({
+    sourceRef: { source: "github", externalId: "x", capturedAt: "2026-07-19T00:00:00Z", extra: inner },
+  }))
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.reason, "input_graph_repeated_reference")
+})
+
+// 48 — documented tree policy: repeated references are rejected even without
+// a cycle, because normalized adapter input is JSON-shaped and never shares.
+test("two fields referencing the same object are rejected", () => {
+  const shared = { kind: "open_question", summary: "who owns this" }
+  const result = buildFormationSourceCandidate(validInput({ unresolvedMarkers: [shared, shared] }))
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.reason, "input_graph_repeated_reference")
+})
+
+// 49
+test("exact maximum depth passes the graph preflight", () => {
+  const result = buildFormationSourceCandidate(validInput({
+    deepProbe: nestedChain(FORMATION_INPUT_GRAPH_MAX_DEPTH - 1),
+  }))
+  assert.equal(result.ok, false)
+  assert.ok(reasonsOf(result).every((reason) => !reason.startsWith("input_graph")), "depth at limit must not be a graph rejection")
+  assert.ok(reasonsOf(result).includes("unknown_field"))
+})
+
+// 50
+test("maximum depth plus one is rejected as too deep", () => {
+  const result = buildFormationSourceCandidate(validInput({
+    deepProbe: nestedChain(FORMATION_INPUT_GRAPH_MAX_DEPTH),
+  }))
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.reason, "input_graph_too_deep")
+})
+
+// 51
+test("exact traversal-entry limit passes the graph preflight", () => {
+  const result = buildFormationSourceCandidate({
+    filler: new Array(FORMATION_INPUT_GRAPH_MAX_ENTRIES - 1).fill(0),
+  })
+  assert.equal(result.ok, false)
+  assert.ok(reasonsOf(result).every((reason) => !reason.startsWith("input_graph")), "entries at limit must not be a graph rejection")
+})
+
+// 52
+test("traversal-entry limit plus one is rejected as too large", () => {
+  const result = buildFormationSourceCandidate({
+    filler: new Array(FORMATION_INPUT_GRAPH_MAX_ENTRIES).fill(0),
+  })
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.reason, "input_graph_too_large")
+})
+
+// 53 — this exact construction threw an uncaught RangeError before the fix.
+test("a 200k-deep chain is a typed rejection, not a stack overflow", () => {
+  const result = buildFormationSourceCandidate(validInput({ deepProbe: nestedChain(200_000) }))
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.reason, "input_graph_too_deep")
+})
+
+// 54
+test("own enumerable getters are rejected without being invoked", () => {
+  let invoked = false
+  const trap: Record<string, unknown> = {}
+  Object.defineProperty(trap, "boom", {
+    enumerable: true,
+    get() {
+      invoked = true
+      throw new Error("GETTER_MARKER")
+    },
+  })
+  const result = buildFormationSourceCandidate(validInput({ trapProbe: trap }))
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.reason, "input_graph_accessor_property")
+  assert.equal(invoked, false, "the getter must never run")
+  assert.equal(JSON.stringify(result).includes("GETTER_MARKER"), false)
+})
+
+// 55
+test("hostile proxy traps become a value-free internal rejection", () => {
+  const hostile = new Proxy({}, {
+    ownKeys() {
+      throw new Error("PROXY_MARKER")
+    },
+  })
+  const result = buildFormationSourceCandidate(hostile)
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.reason, "internal_validation_error")
+  assert.equal(JSON.stringify(result).includes("PROXY_MARKER"), false)
+})
+
+// 56
+test("the builder stays clean across calls after a blocked graph", () => {
+  const cyclic = validInput()
+  cyclic.self = cyclic
+  assert.equal(buildFormationSourceCandidate(cyclic).ok, false)
+  assert.equal(buildFormationSourceCandidate(validInput()).ok, true)
+})
+
+// 57 — totality corpus: buildFormationSourceCandidate never throws.
+test("no adversarial input in the corpus throws", () => {
+  const cyclic = validInput()
+  cyclic.self = cyclic
+  const shared = { a: 1 }
+  const corpus: unknown[] = [
+    cyclic,
+    { x: shared, y: shared },
+    validInput({ deepProbe: nestedChain(200_000) }),
+    { filler: new Array(FORMATION_INPUT_GRAPH_MAX_ENTRIES + 5).fill(0) },
+    new Proxy({}, { ownKeys() { throw new Error("boom") } }),
+    new Map([["k", "v"]]),
+    new Set(["v"]),
+    new Date(),
+    () => "fn",
+    Symbol("probe"),
+    BigInt(10),
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    "",
+    0,
+    false,
+    [],
+    {},
+    null,
+    undefined,
+    validInput(),
+  ]
+  for (const input of corpus) {
+    const result = buildFormationSourceCandidate(input)
+    assert.equal(typeof result.ok, "boolean")
+    assert.equal(result.candidateOnly, true)
+  }
+})
+
+// ─── F2: predicate-only scanner surface ─────────────────────────
+
+// 58 — export-surface ratchet: pattern storage must stay module-private so
+// no runtime consumer can mutate scanner behavior.
+test("untrusted-text scanner exports the three predicates only", () => {
+  assert.deepEqual(Object.keys(untrustedTextScanModule).sort(), [
+    "containsInstructionDirective",
+    "containsPromptInjection",
+    "containsSensitiveValue",
+  ])
+})
+
+// ─── F3: source-byte integrity ──────────────────────────────────
+
+// 59 — the contract source must stay plain text: no NUL, no C0 controls
+// beyond tab/LF/CR, no DEL — otherwise grep/file-class tooling silently
+// skips a safety-relevant module.
+test("contract source contains no NUL or unexpected control bytes", () => {
+  const bytes = readFileSync(join(import.meta.dirname!, "../app/lib/application/formation/sourceContract.ts"))
+  const offending: string[] = []
+  for (let i = 0; i < bytes.length; i++) {
+    const byte = bytes[i]!
+    if (byte === 0x09 || byte === 0x0a || byte === 0x0d) continue
+    if (byte < 0x20 || byte === 0x7f) offending.push(`offset ${i}: 0x${byte.toString(16)}`)
+  }
+  assert.deepEqual(offending, [])
 })
 
 // 45

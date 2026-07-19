@@ -24,7 +24,7 @@
  *     flags; input attempting to supply it is rejected.
  */
 
-import type { SourceRef } from "../../domain/types.ts"
+import type { SourceRef, SourceType } from "../../domain/types.ts"
 import { scanLlmContextExclusions } from "../llmContext/exclusionScanner.ts"
 import { containsForbiddenSummaryText } from "../safety/p0Policy.ts"
 import {
@@ -35,6 +35,9 @@ import {
 
 // ─── Closed enums (plan Section 4.1) ────────────────────────────
 
+// `satisfies` pins every formation provider to the canonical domain
+// SourceType at compile time: adding a provider that SourceType does not
+// know fails the TypeScript check instead of drifting silently.
 export const FORMATION_SOURCE_PROVIDERS = [
   "github",
   "slack",
@@ -42,7 +45,7 @@ export const FORMATION_SOURCE_PROVIDERS = [
   "gmail",
   "google_calendar",
   "google_drive",
-] as const
+] as const satisfies readonly SourceType[]
 
 export type FormationSourceProvider = (typeof FORMATION_SOURCE_PROVIDERS)[number]
 
@@ -127,6 +130,13 @@ export const FORMATION_SOURCE_BOUNDS = {
 // Deterministic confidence banding: count of `inferred: true` entries across
 // the candidate. Initial banding — never a free numeric similarity.
 export const EXTRACTION_CONFIDENCE_MEDIUM_MAX_INFERRED = 2
+
+// Defensive input-graph limits for the unknown-input preflight (not product
+// thresholds). The valid contract shape is at most ~4 levels deep and a few
+// hundred entries, so these are deliberately generous. Exported as immutable
+// number primitives because boundary tests need the exact values.
+export const FORMATION_INPUT_GRAPH_MAX_DEPTH = 32
+export const FORMATION_INPUT_GRAPH_MAX_ENTRIES = 10_000
 
 // ─── Nested records ─────────────────────────────────────────────
 
@@ -224,6 +234,11 @@ export type FormationSourceCandidateInput = Omit<
 
 export type FormationSourceRejectionReason =
   | "input_not_object"
+  | "input_graph_repeated_reference"
+  | "input_graph_too_deep"
+  | "input_graph_too_large"
+  | "input_graph_accessor_property"
+  | "internal_validation_error"
   | "unknown_field"
   | "forbidden_key"
   | "forbidden_value"
@@ -315,12 +330,30 @@ const AUTHORITY_SIGNAL_KEYS = new Set(["kind", "inferred"])
  * Validate normalized provider input against the F1A contract and build the
  * candidate-only record. Deterministic, pure, fail-closed: any finding blocks
  * the whole input; nothing is repaired or defaulted from malformed values.
+ *
+ * Total over `unknown`: for every JavaScript value this function returns a
+ * typed result and never throws. A bounded iterative graph preflight rejects
+ * cyclic/shared-reference graphs, over-deep or over-large inputs, and
+ * accessor properties BEFORE any recursive scan or property read; a narrow
+ * outer catch converts anything unexpected into a value-free typed rejection.
  */
 export function buildFormationSourceCandidate(input: unknown): FormationSourceContractResult {
-  if (!isRecord(input)) {
-    return blocked([{ path: "$", reason: "input_not_object" }])
+  try {
+    if (!isRecord(input)) {
+      return blocked([{ path: "$", reason: "input_not_object" }])
+    }
+    const graph = preflightInputGraph(input)
+    if (!graph.ok) {
+      return blocked([{ path: "$", reason: graph.reason }])
+    }
+    return validateShape(input)
+  } catch {
+    // Fail closed. The finding carries no exception text and no input values.
+    return blocked([{ path: "$", reason: "internal_validation_error" }])
   }
+}
 
+function validateShape(input: Record<string, unknown>): FormationSourceContractResult {
   // Reuse the P0 exclusion authority first: forbidden keys and forbidden
   // value text anywhere in the input block before any field is read.
   const exclusionScan = scanLlmContextExclusions(input)
@@ -480,6 +513,84 @@ export function deriveExtractionConfidence(inferredCount: number): FormationExtr
   return "low"
 }
 
+// ─── Input-graph preflight (F1 bounded unknown-input handling) ──
+
+type InputGraphPreflightResult =
+  | { readonly ok: true }
+  | {
+    readonly ok: false
+    readonly reason:
+      | "input_graph_repeated_reference"
+      | "input_graph_too_deep"
+      | "input_graph_too_large"
+      | "input_graph_accessor_property"
+  }
+
+/**
+ * Bounded, iterative, read-only sweep over the raw input graph, run BEFORE
+ * the recursive P0 scanner or any field validator touches the value.
+ *
+ * Policy (fail-closed):
+ *   - The input must be a finite TREE: any repeated object reference —
+ *     including every cycle — is rejected. Normalized adapter input is
+ *     JSON-shaped and can never share references.
+ *   - Depth and total traversed entries are capped so pathological graphs
+ *     cannot cause unbounded recursion, stack overflow, or unbounded CPU.
+ *   - Own enumerable accessor properties are rejected without being invoked,
+ *     so no getter runs here or in any later validation stage. Non-index own
+ *     properties on arrays are ignored: no scanner or validator ever reads
+ *     them, so they cannot reach a candidate.
+ *   - Only own enumerable properties are inspected; prototypes are never
+ *     walked. Sparse-array holes count toward the entry budget (over-count,
+ *     never under-count).
+ */
+function preflightInputGraph(root: unknown): InputGraphPreflightResult {
+  if (root === null || typeof root !== "object") return { ok: true }
+  const seen = new WeakSet<object>()
+  const stack: { readonly value: object; readonly depth: number }[] = [{ value: root, depth: 1 }]
+  let entries = 0
+
+  while (stack.length > 0) {
+    const { value, depth } = stack.pop()!
+    if (seen.has(value)) return { ok: false, reason: "input_graph_repeated_reference" }
+    seen.add(value)
+    if (depth > FORMATION_INPUT_GRAPH_MAX_DEPTH) return { ok: false, reason: "input_graph_too_deep" }
+
+    if (Array.isArray(value)) {
+      if (value.length > FORMATION_INPUT_GRAPH_MAX_ENTRIES - entries) {
+        return { ok: false, reason: "input_graph_too_large" }
+      }
+      entries += value.length
+      for (let index = 0; index < value.length; index++) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, index)
+        if (descriptor === undefined) continue
+        if (!("value" in descriptor)) return { ok: false, reason: "input_graph_accessor_property" }
+        const nested: unknown = descriptor.value
+        if (nested !== null && typeof nested === "object") {
+          stack.push({ value: nested, depth: depth + 1 })
+        }
+      }
+      continue
+    }
+
+    const keys = Object.keys(value)
+    if (keys.length > FORMATION_INPUT_GRAPH_MAX_ENTRIES - entries) {
+      return { ok: false, reason: "input_graph_too_large" }
+    }
+    entries += keys.length
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      if (descriptor === undefined) continue
+      if (!("value" in descriptor)) return { ok: false, reason: "input_graph_accessor_property" }
+      const nested: unknown = descriptor.value
+      if (nested !== null && typeof nested === "object") {
+        stack.push({ value: nested, depth: depth + 1 })
+      }
+    }
+  }
+  return { ok: true }
+}
+
 // ─── Field validators ───────────────────────────────────────────
 
 function validateSourceRef(
@@ -515,16 +626,21 @@ function validateSourceRef(
 
   const capturedAt = validateIsoDateTime(value.capturedAt, `${path}.capturedAt`, true, findings)
 
+  // No cast: the ref is only constructed when `source` equals the validated
+  // provider, whose literals are pinned to SourceType via `satisfies`. When
+  // the provider itself is missing/invalid the whole input is already
+  // blocked, so returning undefined here cannot mask a valid input.
   if (
+    provider === undefined ||
     typeof source !== "string" ||
+    source !== provider ||
     externalId === undefined ||
-    capturedAt === undefined ||
-    (provider !== undefined && source !== provider)
+    capturedAt === undefined
   ) {
     return undefined
   }
   return {
-    source: source as SourceRef["source"],
+    source: provider,
     externalId,
     ...(container !== undefined ? { container } : {}),
     ...(url !== undefined ? { url } : {}),
@@ -803,7 +919,7 @@ function rejectDuplicateRefs(
   const seen = new Set<string>()
   entries.forEach((entry, index) => {
     if (!entry) return
-    const key = `${entry.provider} ${entry.sourceObjectId}`
+    const key = `${entry.provider} ${entry.sourceObjectId}`
     if (seen.has(key)) {
       findings.push({ path: `${path}[${index}]`, reason: "duplicate_entry" })
       return
@@ -820,9 +936,9 @@ function rejectSupersessionCycles(
   findings: FormationSourceContractFinding[],
 ): void {
   const refKey = (ref: { readonly provider: FormationSourceProvider; readonly sourceObjectId: string }) =>
-    `${ref.provider} ${ref.sourceObjectId}`
+    `${ref.provider} ${ref.sourceObjectId}`
   const selfKey = provider !== undefined && sourceObjectId !== undefined
-    ? `${provider} ${sourceObjectId}`
+    ? `${provider} ${sourceObjectId}`
     : undefined
 
   const supersedesKeys = new Set<string>()
