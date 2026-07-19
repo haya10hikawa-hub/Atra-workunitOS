@@ -131,12 +131,20 @@ export const FORMATION_SOURCE_BOUNDS = {
 // the candidate. Initial banding — never a free numeric similarity.
 export const EXTRACTION_CONFIDENCE_MEDIUM_MAX_INFERRED = 2
 
-// Defensive input-graph limits for the unknown-input preflight (not product
+// Defensive parsed-JSON-graph limits for the preflight (not product
 // thresholds). The valid contract shape is at most ~4 levels deep and a few
 // hundred entries, so these are deliberately generous. Exported as immutable
-// number primitives because boundary tests need the exact values.
+// number primitives because boundary tests need the exact values. They apply to
+// the INERT tree produced by `JSON.parse`, never to a caller-controlled object.
 export const FORMATION_INPUT_GRAPH_MAX_DEPTH = 32
 export const FORMATION_INPUT_GRAPH_MAX_ENTRIES = 10_000
+
+// Maximum accepted length of the raw JSON TEXT, enforced BEFORE `JSON.parse` so
+// oversized input never allocates a parse tree. The unit is UTF-16 code units —
+// exactly `String.prototype.length` (NOT bytes, NOT code points) — because that
+// is the value checked against the raw string. 262,144 (256 * 1024) bounds all
+// downstream parse and traversal work.
+export const FORMATION_SOURCE_JSON_MAX_LENGTH = 262_144
 
 // ─── Nested records ─────────────────────────────────────────────
 
@@ -233,6 +241,9 @@ export type FormationSourceCandidateInput = Omit<
 // ─── Result contract ────────────────────────────────────────────
 
 export type FormationSourceRejectionReason =
+  | "input_not_json_text"
+  | "input_json_too_large"
+  | "input_json_invalid"
   | "input_not_object"
   | "input_graph_repeated_reference"
   | "input_graph_too_deep"
@@ -324,29 +335,75 @@ const UNRESOLVED_MARKER_KEYS = new Set(["kind", "summary"])
 const DECISION_MARKER_KEYS = new Set(["kind", "summary", "inferred"])
 const AUTHORITY_SIGNAL_KEYS = new Set(["kind", "inferred"])
 
+// ─── Inert JSON type (parsed-tree only; never exported) ─────────
+//
+// The shape `JSON.parse` can produce. Used to reason about the parsed tree,
+// which — unlike an arbitrary caller object — has no accessors, no Proxy traps,
+// no class prototypes, no cycles, and no shared references.
+type JsonPrimitive = string | number | boolean | null
+type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
+
 // ─── Validator / builder ────────────────────────────────────────
 
 /**
- * Validate normalized provider input against the F1A contract and build the
- * candidate-only record. Deterministic, pure, fail-closed: any finding blocks
- * the whole input; nothing is repaired or defaulted from malformed values.
+ * Parse raw JSON text into the candidate-only record. Deterministic, pure,
+ * fail-closed: any finding blocks the whole input; nothing is repaired.
  *
- * Total over `unknown`: for every JavaScript value this function returns a
- * typed result and never throws. A bounded iterative graph preflight rejects
- * cyclic/shared-reference graphs, over-deep or over-large inputs, and
- * accessor properties BEFORE any recursive scan or property read; a narrow
- * outer catch converts anything unexpected into a value-free typed rejection.
+ * INERT-DATA BOUNDARY (the F1A safety guarantee):
+ *   - This function is total over `unknown`: it returns a typed result for every
+ *     value and never throws.
+ *   - Only a primitive `string` proceeds. A non-string value is rejected WITHOUT
+ *     being read, enumerated, stringified, cloned, or otherwise inspected — so no
+ *     Proxy trap and no accessor can execute at this boundary, and no class
+ *     instance, Proxy, Map, Set, Date, function, or symbol can enter.
+ *   - Accepted content comes EXCLUSIVELY from bounded raw JSON text: the length
+ *     cap is enforced before `JSON.parse`, and `JSON.parse` runs with no reviver.
+ *   - Shape validation then runs over the INERT parsed tree, so every property
+ *     read is over plain JSON data, not a caller-controlled capability. The
+ *     iterative depth/entry limits apply to that parsed tree.
+ *   - No claim is made that an arbitrary JavaScript object graph can be safely
+ *     enumerated; such graphs never reach enumeration because non-string input is
+ *     rejected first.
  */
-export function buildFormationSourceCandidate(input: unknown): FormationSourceContractResult {
+export function buildFormationSourceCandidate(rawJson: unknown): FormationSourceContractResult {
+  // 1. Inert boundary: only string input may proceed. No inspection of a
+  //    non-string value — no read, no enumerate, no String()/JSON.stringify.
+  if (typeof rawJson !== "string") {
+    return blocked([{ path: "$", reason: "input_not_json_text" }])
+  }
+  // 2. Bounded raw text (UTF-16 code units) BEFORE parsing.
+  if (rawJson.length > FORMATION_SOURCE_JSON_MAX_LENGTH) {
+    return blocked([{ path: "$", reason: "input_json_too_large" }])
+  }
+  // 3. Parse without a reviver (a reviver would observe attacker keys/values).
+  let parsed: JsonValue
   try {
-    if (!isRecord(input)) {
+    parsed = JSON.parse(rawJson) as JsonValue
+  } catch {
+    // No parse-exception message is exposed; the finding carries no substring.
+    return blocked([{ path: "$", reason: "input_json_invalid" }])
+  }
+  // 4. Validate ONLY the newly parsed inert value. The original string is never
+  //    referenced again.
+  return validateParsedCandidate(parsed)
+}
+
+/**
+ * Validate an inert parsed-JSON value. Private: the public boundary guarantees
+ * the argument came from `JSON.parse`, so its property reads and enumeration are
+ * over inert data. The narrow catch is defense-in-depth against internal misuse.
+ */
+function validateParsedCandidate(parsed: JsonValue): FormationSourceContractResult {
+  try {
+    if (!isPlainJsonRecord(parsed)) {
+      // Top-level arrays and primitives are not candidates.
       return blocked([{ path: "$", reason: "input_not_object" }])
     }
-    const graph = preflightInputGraph(input)
+    const graph = preflightInputGraph(parsed)
     if (!graph.ok) {
       return blocked([{ path: "$", reason: graph.reason }])
     }
-    return validateShape(input)
+    return validateShape(parsed)
   } catch {
     // Fail closed. The finding carries no exception text and no input values.
     return blocked([{ path: "$", reason: "internal_validation_error" }])
@@ -527,22 +584,22 @@ type InputGraphPreflightResult =
   }
 
 /**
- * Bounded, iterative, read-only sweep over the raw input graph, run BEFORE
- * the recursive P0 scanner or any field validator touches the value.
+ * Bounded, iterative, read-only sweep over the INERT parsed-JSON tree, run
+ * BEFORE the recursive P0 scanner or any field validator touches the value.
+ * The argument comes exclusively from `JSON.parse`, so it can contain no Proxy,
+ * accessor, class instance, cycle, or shared reference; the checks below are
+ * therefore a defense-in-depth bound on parsed-tree SIZE, not a mechanism for
+ * safely enumerating arbitrary caller objects.
  *
  * Policy (fail-closed):
- *   - The input must be a finite TREE: any repeated object reference —
- *     including every cycle — is rejected. Normalized adapter input is
- *     JSON-shaped and can never share references.
- *   - Depth and total traversed entries are capped so pathological graphs
- *     cannot cause unbounded recursion, stack overflow, or unbounded CPU.
- *   - Own enumerable accessor properties are rejected without being invoked,
- *     so no getter runs here or in any later validation stage. Non-index own
- *     properties on arrays are ignored: no scanner or validator ever reads
- *     them, so they cannot reach a candidate.
- *   - Only own enumerable properties are inspected; prototypes are never
- *     walked. Sparse-array holes count toward the entry budget (over-count,
- *     never under-count).
+ *   - Depth and total traversed entries are capped so a deep or wide parsed tree
+ *     cannot cause unbounded recursion, stack overflow, or unbounded CPU in the
+ *     recursive P0 scanner or the validators. The raw-text length cap already
+ *     bounds total entries; this is a second, explicit bound.
+ *   - The repeated-reference and accessor-property branches remain as
+ *     defense-in-depth: `JSON.parse` output never triggers them, so they only
+ *     fire under internal misuse (calling this with a non-parsed value).
+ *   - Only own enumerable properties are inspected; prototypes are never walked.
  */
 function preflightInputGraph(root: unknown): InputGraphPreflightResult {
   if (root === null || typeof root !== "object") return { ok: true }
@@ -603,7 +660,7 @@ function validateSourceRef(
     findings.push({ path, reason: "missing_required_field" })
     return undefined
   }
-  if (!isRecord(value)) {
+  if (!isPlainJsonRecord(value)) {
     findings.push({ path, reason: "invalid_type" })
     return undefined
   }
@@ -658,7 +715,7 @@ function validateTimestamps(
     findings.push({ path, reason: "missing_required_field" })
     return undefined
   }
-  if (!isRecord(value)) {
+  if (!isPlainJsonRecord(value)) {
     findings.push({ path, reason: "invalid_type" })
     return undefined
   }
@@ -684,7 +741,7 @@ function validateExplicitDeadline(
 ): FormationExplicitDeadline | undefined {
   const path = "$.explicitDeadline"
   if (value === undefined) return undefined
-  if (!isRecord(value)) {
+  if (!isPlainJsonRecord(value)) {
     findings.push({ path, reason: "invalid_type" })
     return undefined
   }
@@ -707,7 +764,7 @@ function validateActorAssertion(
   path: string,
   findings: FormationSourceContractFinding[],
 ): FormationActorAssertion | undefined {
-  if (!isRecord(value)) {
+  if (!isPlainJsonRecord(value)) {
     findings.push({ path, reason: "invalid_type" })
     return undefined
   }
@@ -732,7 +789,7 @@ function validateSourceLink(
   path: string,
   findings: FormationSourceContractFinding[],
 ): FormationSourceLink | undefined {
-  if (!isRecord(value)) {
+  if (!isPlainJsonRecord(value)) {
     findings.push({ path, reason: "invalid_type" })
     return undefined
   }
@@ -752,7 +809,7 @@ function validateObjectRef(
   path: string,
   findings: FormationSourceContractFinding[],
 ): FormationObjectRef | undefined {
-  if (!isRecord(value)) {
+  if (!isPlainJsonRecord(value)) {
     findings.push({ path, reason: "invalid_type" })
     return undefined
   }
@@ -769,7 +826,7 @@ function validateVersionInfo(
 ): FormationVersionInfo | undefined {
   const path = "$.versionInfo"
   if (value === undefined) return undefined
-  if (!isRecord(value)) {
+  if (!isPlainJsonRecord(value)) {
     findings.push({ path, reason: "invalid_type" })
     return undefined
   }
@@ -788,7 +845,7 @@ function validateSupersessionClaim(
   path: string,
   findings: FormationSourceContractFinding[],
 ): FormationSupersessionClaim | undefined {
-  if (!isRecord(value)) {
+  if (!isPlainJsonRecord(value)) {
     findings.push({ path, reason: "invalid_type" })
     return undefined
   }
@@ -805,7 +862,7 @@ function validateUnresolvedMarker(
   path: string,
   findings: FormationSourceContractFinding[],
 ): FormationUnresolvedMarker | undefined {
-  if (!isRecord(value)) {
+  if (!isPlainJsonRecord(value)) {
     findings.push({ path, reason: "invalid_type" })
     return undefined
   }
@@ -824,7 +881,7 @@ function validateDecisionMarker(
   path: string,
   findings: FormationSourceContractFinding[],
 ): FormationDecisionMarker | undefined {
-  if (!isRecord(value)) {
+  if (!isPlainJsonRecord(value)) {
     findings.push({ path, reason: "invalid_type" })
     return undefined
   }
@@ -844,7 +901,7 @@ function validateAuthoritySignal(
   path: string,
   findings: FormationSourceContractFinding[],
 ): FormationAuthoritySignal | undefined {
-  if (!isRecord(value)) {
+  if (!isPlainJsonRecord(value)) {
     findings.push({ path, reason: "invalid_type" })
     return undefined
   }
@@ -1190,6 +1247,14 @@ function blocked(findings: readonly FormationSourceContractFinding[]): Formation
   return { ok: false, candidateOnly: true, reason: findings[0]?.reason ?? "input_not_object", findings }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value)
+/**
+ * Plain JSON record predicate. Accepts only a non-null, non-array object whose
+ * prototype is `Object.prototype` or `null` — the shapes `JSON.parse` produces.
+ * Called ONLY on already-parsed inert values (never on caller-controlled input),
+ * so reading the prototype cannot trigger a Proxy trap or accessor.
+ */
+function isPlainJsonRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false
+  const proto = Object.getPrototypeOf(value)
+  return proto === Object.prototype || proto === null
 }
