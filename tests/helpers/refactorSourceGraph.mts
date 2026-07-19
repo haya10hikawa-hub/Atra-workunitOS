@@ -2,11 +2,19 @@
  * Shared AST source-dependency graph + route-handler analysis for the refactor
  * architecture safety gates (Refactor Program, umbrella #182).
  *
- * Test-only. Uses the repository's TypeScript compiler API so the gates reason
- * about the REAL dependency forms and REAL handler calls instead of regex/name
- * matching. Every module dependency form is emitted as a normalized edge; an
- * unknown dependency form inside a protected layer is surfaced, never silently
- * dropped.
+ * Test-only. Uses the repository's TypeScript compiler API (and the repository's
+ * actual tsconfig for module resolution) so the gates reason about the REAL
+ * dependency forms, REAL alias resolution, and REAL handler control flow rather
+ * than regex / name / substring matching.
+ *
+ * Review map (see also the PR "review guide" section):
+ *   §A config + module resolution   — loads tsconfig; ts.resolveModuleName
+ *   §B dependency edges             — correct import/export type-only semantics
+ *   §C reachability                 — value edges only (type-only excluded)
+ *   §D layer policies               — exact value + type-only edge exceptions
+ *   §E route model                  — canonical guard identity, effect sinks,
+ *                                      unconditional-dominance, route coverage
+ *   §F domain env authority         — AST `process` symbol detection
  */
 
 import ts from "typescript"
@@ -19,21 +27,36 @@ export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)
 export const appRoot = path.join(repoRoot, "app")
 
 const SOURCE_EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]
-const RESOLVE_EXTS = [".ts", ".tsx", ".mts", ".cts", ".d.ts", ".js", ".jsx", ".mjs", ".cjs"]
-// tsconfig: baseUrl ".", paths { "@/*": ["./app/*", "./*"] }
-const ALIAS_ROOTS = ["app", ""]
 const NODE_BUILTINS = new Set(builtinModules)
 
-export type EdgeKind =
-  | "static-import" // import x from "y"        (value)
-  | "type-only-import" // import type x from "y"
-  | "side-effect-import" // import "y"
-  | "export-from" // export { a } from "y"
-  | "export-star" // export * from "y"
-  | "dynamic-import" // import("y")  (literal)
-  | "import-equals" // import x = require("y")
-  | "require" // require("y")  (literal)
-  | "non-literal-dynamic" // import(expr) / require(expr)
+export const rel = (p: string): string => path.relative(repoRoot, p).split(path.sep).join("/")
+export const abs = (relPath: string): string => path.join(repoRoot, relPath)
+
+// ═══ §A  configuration-derived module resolution ═════════════════
+
+let _parsedConfig: ts.ParsedCommandLine | null = null
+export function loadTsConfig(): ts.ParsedCommandLine {
+  if (_parsedConfig) return _parsedConfig
+  const configPath = path.join(repoRoot, "tsconfig.json")
+  const read = ts.readConfigFile(configPath, ts.sys.readFile)
+  if (read.error) throw new Error("failed to read tsconfig.json")
+  _parsedConfig = ts.parseJsonConfigFileContent(read.config, ts.sys, repoRoot)
+  return _parsedConfig
+}
+
+const _resolveCache = new Map<string, string | null>()
+/** Resolve a specifier from a file to an absolute repo file using the ACTIVE
+ *  tsconfig (baseUrl, paths, moduleResolution, extensions). Returns null when
+ *  unresolved or resolved into node_modules. */
+function configResolveFile(specifier: string, fromFile: string): string | null {
+  const key = `${fromFile} ${specifier}`
+  const cached = _resolveCache.get(key)
+  if (cached !== undefined) return cached
+  const result = ts.resolveModuleName(specifier, fromFile, loadTsConfig().options, ts.sys)
+  const file = result.resolvedModule?.resolvedFileName ?? null
+  _resolveCache.set(key, file)
+  return file
+}
 
 export type TargetKind =
   | "relative"
@@ -42,6 +65,40 @@ export type TargetKind =
   | "node-builtin"
   | "unresolved-internal"
   | "non-literal-dynamic"
+
+export function resolveSpecifier(
+  fromFile: string,
+  specifier: string,
+): { targetKind: TargetKind; resolvedTarget: string | null } {
+  const head = specifier.startsWith("node:") ? "node:" : specifier.split("/")[0]
+  if (specifier.startsWith("node:") || NODE_BUILTINS.has(head)) {
+    return { targetKind: "node-builtin", resolvedTarget: null }
+  }
+  const resolved = configResolveFile(specifier, fromFile)
+  if (resolved && resolved.includes(`${path.sep}node_modules${path.sep}`)) {
+    return { targetKind: "bare-package", resolvedTarget: null }
+  }
+  if (resolved) {
+    return { targetKind: specifier.startsWith(".") ? "relative" : "alias", resolvedTarget: resolved }
+  }
+  if (specifier.startsWith(".") || specifier.startsWith("@/")) {
+    return { targetKind: "unresolved-internal", resolvedTarget: null }
+  }
+  return { targetKind: "bare-package", resolvedTarget: null } // uninstalled third-party
+}
+
+// ═══ §B  dependency edges (correct type-only semantics) ══════════
+
+export type EdgeKind =
+  | "static-import" // import x from "y"  (value)
+  | "type-only-import" // import type ... from "y"
+  | "side-effect-import" // import "y"
+  | "export-from" // export { a } from "y"
+  | "export-star" // export * from "y"
+  | "dynamic-import" // import("y")  (literal)
+  | "import-equals" // import x = require("y")
+  | "require" // require("y")  (literal)
+  | "non-literal-dynamic" // import(expr) / require(expr)
 
 export interface DependencyEdge {
   readonly sourceFile: string // absolute
@@ -53,95 +110,56 @@ export interface DependencyEdge {
   readonly isLiteral: boolean
 }
 
-// Edge kinds that carry a runtime (value) dependency. type-only imports and
-// type-only export-from are EXCLUDED — a module reached only through them is
-// never loaded at runtime.
-const RUNTIME_EDGE_KINDS: ReadonlySet<EdgeKind> = new Set<EdgeKind>([
-  "static-import",
-  "side-effect-import",
-  "export-from",
-  "export-star",
-  "dynamic-import",
-  "import-equals",
-  "require",
+// Value (runtime) dependency: carries a real module load. A module reached only
+// through these edges with isTypeOnly=false is loaded at runtime.
+const VALUE_EDGE_KINDS: ReadonlySet<EdgeKind> = new Set<EdgeKind>([
+  "static-import", "side-effect-import", "export-from", "export-star",
+  "dynamic-import", "import-equals", "require",
 ])
-
-// ─── file discovery ─────────────────────────────────────────────
-
-export function listSourceFiles(dir: string): string[] {
-  const out: string[] = []
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name.startsWith(".")) continue
-    const p = path.join(dir, entry.name)
-    if (entry.isDirectory()) out.push(...listSourceFiles(p))
-    else if (SOURCE_EXTS.some((e) => entry.name.endsWith(e))) out.push(p)
-  }
-  return out
+function isRuntimeEdge(edge: DependencyEdge): boolean {
+  return VALUE_EDGE_KINDS.has(edge.edgeKind) && !edge.isTypeOnly
 }
-
-// ─── specifier resolution ───────────────────────────────────────
-
-function resolveFileCandidate(base: string): string | null {
-  const candidates = [base, ...RESOLVE_EXTS.map((e) => base + e), ...RESOLVE_EXTS.map((e) => path.join(base, "index" + e))]
-  for (const c of candidates) {
-    try { if (fs.statSync(c).isFile()) return c } catch { /* keep looking */ }
-  }
-  return null
-}
-
-export function resolveSpecifier(
-  fromFile: string,
-  specifier: string,
-): { targetKind: TargetKind; resolvedTarget: string | null } {
-  if (specifier.startsWith(".")) {
-    const resolved = resolveFileCandidate(path.resolve(path.dirname(fromFile), specifier))
-    return { targetKind: resolved ? "relative" : "unresolved-internal", resolvedTarget: resolved }
-  }
-  if (specifier.startsWith("@/")) {
-    const sub = specifier.slice(2)
-    for (const aliasRoot of ALIAS_ROOTS) {
-      const resolved = resolveFileCandidate(path.join(repoRoot, aliasRoot, sub))
-      if (resolved) return { targetKind: "alias", resolvedTarget: resolved }
-    }
-    return { targetKind: "unresolved-internal", resolvedTarget: null }
-  }
-  const head = specifier.startsWith("node:") ? specifier : specifier.split("/")[0]
-  if (specifier.startsWith("node:") || NODE_BUILTINS.has(head)) {
-    return { targetKind: "node-builtin", resolvedTarget: null }
-  }
-  return { targetKind: "bare-package", resolvedTarget: null }
-}
-
-// ─── AST edge extraction ────────────────────────────────────────
 
 function scriptKindFor(file: string): ts.ScriptKind {
-  if (file.endsWith(".tsx") || file.endsWith(".jsx")) return ts.ScriptKind.TSX
-  return ts.ScriptKind.TS
+  return file.endsWith(".tsx") || file.endsWith(".jsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
 }
 
 export function parseSourceFile(file: string): ts.SourceFile {
-  const src = fs.readFileSync(file, "utf8")
-  return ts.createSourceFile(file, src, ts.ScriptTarget.Latest, /*setParentNodes*/ true, scriptKindFor(file))
+  return ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest, /*setParentNodes*/ true, scriptKindFor(file))
 }
 
-function namedImportsAllTypeOnly(clause: ts.ImportClause): boolean {
+/**
+ * An ImportDeclaration is type-only ONLY when the entire import is type-only.
+ * A default import OR a namespace import makes it a VALUE import regardless of
+ * any `type` modifiers on named elements.
+ */
+function importIsTypeOnly(clause: ts.ImportClause): boolean {
+  if (clause.isTypeOnly) return true // `import type ...`
+  if (clause.name) return false // default binding is a value
   const nb = clause.namedBindings
+  if (nb && ts.isNamespaceImport(nb)) return false // `import * as ns` is a value
   if (nb && ts.isNamedImports(nb) && nb.elements.length > 0) return nb.elements.every((e) => e.isTypeOnly)
   return false
+}
+
+/** An export-from/star is type-only only when the whole export is type-only. */
+function exportIsTypeOnly(node: ts.ExportDeclaration): boolean {
+  if (node.isTypeOnly) return true // `export type { X }` / `export type * from`
+  const clause = node.exportClause
+  if (clause && ts.isNamedExports(clause) && clause.elements.length > 0) return clause.elements.every((e) => e.isTypeOnly)
+  return false // `export * from` and mixed `export { type X, valueY }` are value
 }
 
 export function parseModuleEdges(file: string): DependencyEdge[] {
   const sf = parseSourceFile(file)
   const edges: DependencyEdge[] = []
 
-  const push = (specifier: string | null, edgeKind: EdgeKind, isTypeOnly: boolean, targetKindOverride?: TargetKind) => {
+  const push = (specifier: string | null, edgeKind: EdgeKind, isTypeOnly: boolean) => {
     if (specifier === null) {
       edges.push({ sourceFile: file, specifier: null, edgeKind, targetKind: "non-literal-dynamic", resolvedTarget: null, isTypeOnly: false, isLiteral: false })
       return
     }
-    const r = targetKindOverride
-      ? { targetKind: targetKindOverride, resolvedTarget: null as string | null }
-      : resolveSpecifier(file, specifier)
+    const r = resolveSpecifier(file, specifier)
     edges.push({ sourceFile: file, specifier, edgeKind, targetKind: r.targetKind, resolvedTarget: r.resolvedTarget, isTypeOnly, isLiteral: true })
   }
 
@@ -150,12 +168,12 @@ export function parseModuleEdges(file: string): DependencyEdge[] {
       const clause = node.importClause
       if (!clause) push(node.moduleSpecifier.text, "side-effect-import", false)
       else {
-        const typeOnly = clause.isTypeOnly || namedImportsAllTypeOnly(clause)
+        const typeOnly = importIsTypeOnly(clause)
         push(node.moduleSpecifier.text, typeOnly ? "type-only-import" : "static-import", typeOnly)
       }
     } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
-      const kind: EdgeKind = node.exportClause ? "export-from" : "export-star"
-      push(node.moduleSpecifier.text, kind, node.isTypeOnly)
+      const typeOnly = exportIsTypeOnly(node)
+      push(node.moduleSpecifier.text, node.exportClause ? "export-from" : "export-star", typeOnly)
     } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) && node.moduleReference.expression && ts.isStringLiteral(node.moduleReference.expression)) {
       push(node.moduleReference.expression.text, "import-equals", node.isTypeOnly)
     } else if (ts.isCallExpression(node)) {
@@ -171,32 +189,34 @@ export function parseModuleEdges(file: string): DependencyEdge[] {
     }
     ts.forEachChild(node, visit)
   }
-
   visit(sf)
   return edges
 }
 
-// ─── graph + reachability ───────────────────────────────────────
+// ═══ §C  reachability ════════════════════════════════════════════
 
-export function buildGraph(files: string[]): Map<string, DependencyEdge[]> {
-  const graph = new Map<string, DependencyEdge[]>()
-  for (const f of files) graph.set(f, parseModuleEdges(f))
-  return graph
+export function listSourceFiles(dir: string): string[] {
+  const out: string[] = []
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name.startsWith(".")) continue
+    const p = path.join(dir, entry.name)
+    if (entry.isDirectory()) out.push(...listSourceFiles(p))
+    else if (SOURCE_EXTS.some((e) => entry.name.endsWith(e))) out.push(p)
+  }
+  return out
 }
 
-const edgeCache = new Map<string, DependencyEdge[]>()
+const _edgeCache = new Map<string, DependencyEdge[]>()
 function edgesOf(file: string): DependencyEdge[] {
-  let e = edgeCache.get(file)
-  if (!e) { e = parseModuleEdges(file); edgeCache.set(file, e) }
+  let e = _edgeCache.get(file)
+  if (!e) { e = parseModuleEdges(file); _edgeCache.set(file, e) }
   return e
 }
 
-export interface ReachabilityOptions {
-  /** Follow only runtime (value) edges. Type-only edges are excluded. Default true. */
-  readonly runtimeOnly?: boolean
-}
+export interface ReachabilityOptions { readonly runtimeOnly?: boolean }
 
-/** BFS over the AST graph from `entries` (absolute paths). Returns absolute paths. */
+/** BFS over the AST graph. When runtimeOnly (default), follows only value edges;
+ *  type-only import AND type-only export edges are excluded. */
 export function reachableFrom(entries: string[], options: ReachabilityOptions = {}): Set<string> {
   const runtimeOnly = options.runtimeOnly ?? true
   const seen = new Set<string>()
@@ -208,21 +228,13 @@ export function reachableFrom(entries: string[], options: ReachabilityOptions = 
     let edges: DependencyEdge[]
     try { edges = edgesOf(file) } catch { continue }
     for (const edge of edges) {
-      if (runtimeOnly && !RUNTIME_EDGE_KINDS.has(edge.edgeKind)) continue
+      if (runtimeOnly && !isRuntimeEdge(edge)) continue
       if (edge.resolvedTarget && !seen.has(edge.resolvedTarget)) queue.push(edge.resolvedTarget)
     }
   }
   return seen
 }
 
-// ─── deterministic runtime entry inventory ──────────────────────
-
-/**
- * The known runtime entry points on the program base: the App Router page +
- * layout and every API route. Listed explicitly (not just discovered) so that
- * DELETING a known route fails the reachability test. Discovery may find MORE
- * (new routes) but never fewer of these.
- */
 export const KNOWN_RUNTIME_ENTRY_POINTS: readonly string[] = [
   "app/page.tsx",
   "app/layout.tsx",
@@ -239,170 +251,50 @@ export const KNOWN_RUNTIME_ENTRY_POINTS: readonly string[] = [
 
 export function discoverRuntimeEntryPoints(): string[] {
   const entries: string[] = []
-  for (const rel of ["app/page.tsx", "app/layout.tsx"]) {
-    const abs = path.join(repoRoot, rel)
-    if (fs.existsSync(abs)) entries.push(abs)
+  for (const r of ["app/page.tsx", "app/layout.tsx"]) {
+    const a = path.join(repoRoot, r)
+    if (fs.existsSync(a)) entries.push(a)
   }
+  entries.push(...discoverRouteFiles())
+  return entries
+}
+
+/** Every API route module under app/api (route.ts / route.tsx). */
+export function discoverRouteFiles(): string[] {
+  const routes: string[] = []
   const apiRoot = path.join(appRoot, "api")
+  if (!fs.existsSync(apiRoot)) return routes
   const stack = [apiRoot]
   while (stack.length > 0) {
     const dir = stack.pop() as string
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const p = path.join(dir, entry.name)
       if (entry.isDirectory()) stack.push(p)
-      else if (entry.name === "route.ts" || entry.name === "route.tsx") entries.push(p)
+      else if (entry.name === "route.ts" || entry.name === "route.tsx") routes.push(p)
     }
   }
-  return entries
+  return routes.sort()
 }
 
-export const rel = (p: string): string => path.relative(repoRoot, p).split(path.sep).join("/")
-export const abs = (relPath: string): string => path.join(repoRoot, relPath)
-
-// ─── route handler call analysis ────────────────────────────────
-
-const HTTP_METHODS = new Set(["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
-
-export interface HandlerAnalysis {
-  readonly method: string
-  /** Every function/method name actually invoked along the handler's call path
-   *  (handler body + transitively-called LOCAL helpers), excluding dead code
-   *  after an unconditional return/throw and excluding unused helpers. */
-  readonly calledNames: ReadonlySet<string>
-  /** Same calls in source-linear order (helpers inlined at their call site). */
-  readonly orderedNames: readonly string[]
+export function knownEntryPointsMissing(known: readonly string[]): string[] {
+  return known.filter((r) => !fs.existsSync(path.join(repoRoot, r)))
 }
 
-function calleeName(expr: ts.Expression): string | null {
-  if (ts.isIdentifier(expr)) return expr.text
-  if (ts.isPropertyAccessExpression(expr)) return expr.name.text
-  return null
-}
-
-function hasExportModifier(node: ts.Node): boolean {
-  const mods = ts.canHaveModifiers(node) ? ts.getModifiers(node) : undefined
-  return !!mods && mods.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
-}
-
-interface LocalFn { readonly name: string; readonly body: ts.Node }
-
-function collectLocalFunctions(sf: ts.SourceFile): Map<string, ts.Node> {
-  const fns = new Map<string, ts.Node>()
-  for (const stmt of sf.statements) {
-    if (ts.isFunctionDeclaration(stmt) && stmt.name && stmt.body) {
-      fns.set(stmt.name.text, stmt.body)
-    } else if (ts.isVariableStatement(stmt)) {
-      for (const decl of stmt.declarationList.declarations) {
-        if (ts.isIdentifier(decl.name) && decl.initializer && (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer))) {
-          fns.set(decl.name.text, decl.initializer.body)
-        }
-      }
-    }
-  }
-  return fns
-}
-
-function collectExportedHandlers(sf: ts.SourceFile): LocalFn[] {
-  const handlers: LocalFn[] = []
-  for (const stmt of sf.statements) {
-    if (ts.isFunctionDeclaration(stmt) && stmt.name && stmt.body && HTTP_METHODS.has(stmt.name.text) && hasExportModifier(stmt)) {
-      handlers.push({ name: stmt.name.text, body: stmt.body })
-    } else if (ts.isVariableStatement(stmt) && hasExportModifier(stmt)) {
-      for (const decl of stmt.declarationList.declarations) {
-        if (ts.isIdentifier(decl.name) && HTTP_METHODS.has(decl.name.text) && decl.initializer && (ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer))) {
-          handlers.push({ name: decl.name.text, body: decl.initializer.body })
-        }
-      }
-    }
-  }
-  return handlers
-}
-
-function isUnconditionalTerminator(stmt: ts.Statement): boolean {
-  return ts.isReturnStatement(stmt) || ts.isThrowStatement(stmt)
-}
-
-/**
- * Analyze one exported handler: collect calls actually reachable along the
- * handler's execution, inlining LOCAL helper functions at their call site and
- * pruning statements after an unconditional return/throw in the same block.
- */
-export function analyzeHandler(handlerBody: ts.Node, localFns: Map<string, ts.Node>, method: string): HandlerAnalysis {
-  const ordered: string[] = []
-  const inlineStack = new Set<string>()
-
-  const walkNode = (node: ts.Node): void => {
-    if (ts.isBlock(node)) {
-      for (const stmt of node.statements) {
-        walkNode(stmt)
-        if (isUnconditionalTerminator(stmt)) break // subsequent siblings are dead code
-      }
-      return
-    }
-    if (ts.isCallExpression(node)) {
-      // Evaluate arguments first (they run before/around the call in practice;
-      // for our name-set + ordering purposes either order is acceptable, but we
-      // record the callee at its lexical position after visiting the callee expr).
-      const name = calleeName(node.expression)
-      // Visit the callee's object side (e.g. obj in obj.method()) and arguments
-      // so nested calls are captured in a stable order.
-      ts.forEachChild(node.expression, walkNode)
-      for (const arg of node.arguments) walkNode(arg)
-      if (name) {
-        ordered.push(name)
-        const localBody = localFns.get(name)
-        if (localBody && !inlineStack.has(name)) {
-          inlineStack.add(name)
-          walkNode(localBody)
-          inlineStack.delete(name)
-        }
-      }
-      return
-    }
-    ts.forEachChild(node, walkNode)
-  }
-
-  walkNode(handlerBody)
-  return { method, calledNames: new Set(ordered), orderedNames: ordered }
-}
-
-/** Analyze every exported HTTP handler in a route module (by absolute path). */
-export function analyzeRouteModule(absFile: string): HandlerAnalysis[] {
-  const sf = parseSourceFile(absFile)
-  const localFns = collectLocalFunctions(sf)
-  return collectExportedHandlers(sf).map((h) => analyzeHandler(h.body, localFns, h.name))
-}
-
-/** Method names that mutate repository / provider state (used for #156 and ordering). */
-export const STATE_CHANGING_CALLS: ReadonlySet<string> = new Set([
-  "upsert", "create", "append", "recordEvent", "insert", "update", "updateStatus",
-  "markApprovalUsed", "claimApprovalForRuntime", "runToolBackendRequest", "authorizeRuntimeCommand",
-])
-
-// ─── layer dependency policies (shared by real + adversarial tests) ──
+// ═══ §D  layer dependency policies ═══════════════════════════════
 
 export interface PolicyResult { readonly ok: boolean; readonly reason: string }
 const OK: PolicyResult = { ok: true, reason: "" }
 const deny = (reason: string): PolicyResult => ({ ok: false, reason })
 
-/** Edge kinds that are opaque/deferred module loading — forbidden inside any
- *  protected layer regardless of where they point (they defeat static review). */
 function isOpaqueForm(edge: DependencyEdge): boolean {
   return edge.edgeKind === "require" || edge.edgeKind === "non-literal-dynamic"
 }
 
-const APPLICATION_FORBIDDEN_INTERNAL = [
-  "app/lib/infrastructure/",
-  "app/lib/persistence/",
-  "app/lib/workunitInbox/sources/",
-]
-const RUNTIME_ENV_AUTHORITY = "app/lib/runtime/requestRuntimeConfig.ts"
-
 /**
- * Domain policy: a domain module may depend ONLY on domain + tenant modules,
- * by any resolvable value/type edge. Everything else is a violation, including
- * bare packages, Node builtins, require(), non-literal dynamic imports, and any
- * cross-layer edge (even type-only). process.env is checked separately from text.
+ * Domain policy: a domain module may depend ONLY on domain + tenant modules, by
+ * any resolvable value/type edge. Bare packages, Node builtins, require(),
+ * non-literal dynamic imports, unresolved internals, and every cross-layer edge
+ * (even type-only) are violations. `process` access is checked separately (§F).
  */
 export function classifyDomainEdge(edge: DependencyEdge): PolicyResult {
   if (isOpaqueForm(edge)) return deny(`opaque module form ${edge.edgeKind}`)
@@ -414,69 +306,381 @@ export function classifyDomainEdge(edge: DependencyEdge): PolicyResult {
   return deny(`domain must not import ${t}`)
 }
 
-/** An exact, edge-level exception: source+target VALUE edge tolerated pending a
- *  tracked removal. It authorizes ONLY that one source→target pair. */
+/** Exact edge exception; `typeOnly` records the required edge modality. */
 export interface EdgeException {
   readonly source: string // repo-relative
   readonly target: string // repo-relative
+  readonly typeOnly: boolean // true = tolerated ONLY as a type-only edge
   readonly reason: string
   readonly removalIssue: string
 }
 
-/**
- * EXACT edge-level exceptions for the application layer. Each is a pre-existing
- * VALUE edge tracked for removal; an exception authorizes ONLY its one
- * source→target pair (it does NOT license any other import from that source).
- * Replaces the previous file-level exception. Shrink-only.
- */
-export const APPLICATION_EDGE_EXCEPTIONS: readonly EdgeException[] = [
-  {
-    source: "app/lib/application/auth/sessionResolver.ts",
-    target: "app/lib/infrastructure/persistence/control/controlRepositoryResolver.ts",
-    reason: "sessionResolver constructs control repositories directly; to be inverted behind a port",
-    removalIssue: "#182 (workstream refactor/tenant-security)",
-  },
-  {
-    source: "app/lib/application/auth/sessionResolver.ts",
-    target: "app/lib/runtime/requestRuntimeConfig.ts",
-    reason: "sessionResolver reads the runtime env authority directly; to be threaded from the composition root",
-    removalIssue: "#182 (workstream refactor/tenant-security)",
-  },
+// Roots an application module may depend on without an exception.
+const APPLICATION_ALLOWED_ROOTS = ["app/lib/domain/", "app/lib/application/", "app/lib/tenant/"]
+
+/** Exact VALUE-edge exceptions (each authorizes ONLY its one source→target pair). */
+export const APPLICATION_VALUE_EXCEPTIONS: readonly EdgeException[] = [
+  { source: "app/lib/application/auth/sessionResolver.ts", target: "app/lib/infrastructure/persistence/control/controlRepositoryResolver.ts", typeOnly: false, reason: "sessionResolver constructs control repositories directly; invert behind a port", removalIssue: "#182 (refactor/tenant-security)" },
+  { source: "app/lib/application/auth/sessionResolver.ts", target: "app/lib/runtime/requestRuntimeConfig.ts", typeOnly: false, reason: "sessionResolver reads the runtime env authority directly; thread from composition root", removalIssue: "#182 (refactor/tenant-security)" },
+  { source: "app/lib/application/auth/sessionResolver.ts", target: "app/lib/security/policy.ts", typeOnly: false, reason: "sessionResolver uses RBAC role normalization; move behind an auth port", removalIssue: "#182 (refactor/tenant-security)" },
 ]
 
+/** Exact TYPE-ONLY-edge exceptions (shared-contract type imports; must be type-only). */
+export const APPLICATION_TYPEONLY_EXCEPTIONS: readonly EdgeException[] = [
+  { source: "app/lib/application/auth/resolveAuthAdapter.ts", target: "app/lib/runtime/requestRuntimeConfig.ts", typeOnly: true, reason: "AuthRuntimeConfig type contract", removalIssue: "#182 (ports extraction)" },
+  { source: "app/lib/application/auth/sessionResolver.ts", target: "app/lib/persistence/d1/types.ts", typeOnly: true, reason: "D1DatabaseLike type contract", removalIssue: "#182 (ports extraction)" },
+  { source: "app/lib/application/workunitInbox/persistenceMapping.ts", target: "app/lib/persistence/types.ts", typeOnly: true, reason: "persistence row type contract", removalIssue: "#182 (ports extraction)" },
+  { source: "app/lib/application/decomposition/types.ts", target: "app/lib/llm/types.ts", typeOnly: true, reason: "LLM boundary type contract", removalIssue: "#182 (ports extraction)" },
+  { source: "app/lib/application/actionField/errorState.ts", target: "app/lib/security/safeErrors.ts", typeOnly: true, reason: "safe-error code type contract", removalIssue: "#182 (ports extraction)" },
+]
+
+// Backward-compatible alias (value exceptions) retained for existing imports.
+export const APPLICATION_EDGE_EXCEPTIONS = APPLICATION_VALUE_EXCEPTIONS
+
+export interface ApplicationPolicyOptions {
+  readonly valueExceptions?: readonly EdgeException[]
+  readonly typeOnlyExceptions?: readonly EdgeException[]
+}
+
 /**
- * Application policy. Violations:
- *  - any bare-package or Node-builtin edge (incl. type-only) — application must
- *    hold no third-party/runtime-capability references;
- *  - require() / non-literal dynamic import — opaque forms;
- *  - a VALUE (non-type-only) edge into infrastructure, persistence, provider
- *    sources, or the runtime env authority — unless an EXACT edge exception
- *    matches (source AND target). Type-only edges to internal type modules are
- *    allowed (shared contracts, no runtime coupling).
- * The exact exception for one source does NOT authorize its other imports.
+ * Application policy. Allowed only: domain/application/tenant roots, OR an EXACT
+ * edge exception (value edges via valueExceptions, type-only edges via
+ * typeOnlyExceptions). Everything else — bare packages, Node builtins, opaque
+ * forms, ANY value OR type-only edge into a non-allowed layer (incl. persistence
+ * implementations and infrastructure adapters) — is a violation. A filename
+ * ending in `types.ts` is NOT auto-trusted; only exact type-only exceptions are.
  */
-export function classifyApplicationEdge(edge: DependencyEdge, exceptions: readonly EdgeException[]): PolicyResult {
+export function classifyApplicationEdge(edge: DependencyEdge, options: ApplicationPolicyOptions = {}): PolicyResult {
+  const valueExc = options.valueExceptions ?? APPLICATION_VALUE_EXCEPTIONS
+  const typeExc = options.typeOnlyExceptions ?? APPLICATION_TYPEONLY_EXCEPTIONS
+
   if (edge.targetKind === "bare-package") return deny(`third-party/provider package "${edge.specifier}"`)
   if (edge.targetKind === "node-builtin") return deny(`Node capability builtin "${edge.specifier}"`)
   if (isOpaqueForm(edge)) return deny(`opaque module form ${edge.edgeKind}`)
 
   const targetRel = edge.resolvedTarget ? rel(edge.resolvedTarget) : (edge.specifier ?? "")
-  const resolvedForbidden = !!edge.resolvedTarget &&
-    (APPLICATION_FORBIDDEN_INTERNAL.some((p) => targetRel.startsWith(p)) || targetRel === RUNTIME_ENV_AUTHORITY)
-  // A literal dynamic import may not resolve in a fixture; match its specifier too.
-  const dynamicForbidden = edge.edgeKind === "dynamic-import" &&
-    /(^|\/)infrastructure\/|(^|\/)persistence\/|workunitInbox\/sources\/|runtime\/requestRuntimeConfig/.test(edge.specifier ?? "")
+  if (edge.resolvedTarget && APPLICATION_ALLOWED_ROOTS.some((p) => targetRel.startsWith(p))) return OK
 
-  if ((resolvedForbidden || dynamicForbidden) && !edge.isTypeOnly) {
-    const src = rel(edge.sourceFile)
-    const tgt = edge.resolvedTarget ? rel(edge.resolvedTarget) : (edge.specifier ?? "")
-    if (exceptions.some((x) => x.source === src && x.target === tgt)) return OK
-    return deny(`application must not take a value dependency on ${tgt}`)
+  // Unresolved internal that is not one of the forbidden dynamic fixtures: still
+  // a violation (an application module must resolve within allowed roots).
+  const src = rel(edge.sourceFile)
+  if (edge.isTypeOnly) {
+    if (typeExc.some((x) => x.source === src && x.target === targetRel && x.typeOnly)) return OK
+    return deny(`application type-only import of non-contract module ${targetRel}`)
   }
-  return OK
+  // value edge (incl. dynamic-import) into a non-allowed layer
+  if (valueExc.some((x) => x.source === src && x.target === targetRel && !x.typeOnly)) return OK
+  // dynamic import whose specifier names a forbidden layer but did not resolve (fixture)
+  return deny(`application must not take a value dependency on ${targetRel || edge.specifier}`)
 }
 
-/** Repo-relative known entry points that are missing from disk (route deletion detector). */
-export function knownEntryPointsMissing(known: readonly string[]): string[] {
-  return known.filter((r) => !fs.existsSync(path.join(repoRoot, r)))
+// ═══ §E  route model: canonical guards, effect sinks, dominance ══
+
+const HTTP_METHODS = new Set(["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
+
+/** Canonical guard export name → canonical module (absolute). A call counts as a
+ *  guard ONLY when its callee is a bare identifier bound (possibly aliased) to
+ *  exactly this export of exactly this module. */
+const GUARD_CANONICAL: Readonly<Record<string, string>> = {
+  requireSession: abs("app/lib/security/session.ts"),
+  validateCsrfOrigin: abs("app/lib/security/csrfProtection.ts"),
+  checkRateLimit: abs("app/lib/security/rateLimitGate.ts"),
+  readBoundedJsonObject: abs("app/lib/security/requestBody.ts"),
+  resolveValidatedRequestRuntimeConfig: abs("app/lib/runtime/requestRuntimeConfig.ts"),
+}
+export const REQUIRED_POST_GUARDS = ["requireSession", "validateCsrfOrigin", "checkRateLimit", "readBoundedJsonObject"] as const
+export const REQUIRED_GET_GUARDS = ["requireSession", "resolveValidatedRequestRuntimeConfig"] as const
+
+// Exact effect sinks. Unambiguous write verbs are effects on any receiver;
+// ambiguous verbs are effects only on a persistence/provider-shaped receiver.
+const WRITE_VERBS = new Set(["upsert", "insert", "update", "updateStatus", "delete", "append", "recordEvent", "save", "put", "enqueue", "batch", "execute", "markApprovalUsed", "claimApprovalForRuntime"])
+const AMBIGUOUS_VERBS = new Set(["create", "post", "send", "run"])
+const EFFECT_RECEIVER = /^(repo|repository|repositories|store|approvalStore|provider|client|queue|db|database|usage|auditLogs|workUnits|previews|previewRepo|approvalRepo|approvalRecords|actionPreviews|feedback|bundle)$/i
+// Distinctive bare effect functions (imported): treated as effects by name.
+const BARE_EFFECT_FUNCS = new Set(["runToolBackendRequest", "authorizeRuntimeCommand"])
+
+interface ImportBinding { readonly moduleFile: string | null; readonly exported: string }
+
+function buildImportBindings(sf: ts.SourceFile, file: string): Map<string, ImportBinding> {
+  const map = new Map<string, ImportBinding>()
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue
+    const clause = stmt.importClause
+    if (!clause || clause.isTypeOnly) continue // type-only imports cannot be called
+    const moduleFile = configResolveFile(stmt.moduleSpecifier.text, file)
+    if (clause.name) map.set(clause.name.text, { moduleFile, exported: "default" })
+    const nb = clause.namedBindings
+    if (nb && ts.isNamespaceImport(nb)) map.set(nb.name.text, { moduleFile, exported: "*" })
+    if (nb && ts.isNamedImports(nb)) {
+      for (const el of nb.elements) {
+        if (el.isTypeOnly) continue
+        map.set(el.name.text, { moduleFile, exported: (el.propertyName ?? el.name).text })
+      }
+    }
+  }
+  return map
+}
+
+function guardForCall(call: ts.CallExpression, bindings: Map<string, ImportBinding>, shadowed: ReadonlySet<string>): string | null {
+  if (!ts.isIdentifier(call.expression)) return null // property access / other → never a guard
+  const local = call.expression.text
+  if (shadowed.has(local)) return null // a local binding of this name shadows the import
+  const binding = bindings.get(local)
+  if (!binding || !binding.moduleFile) return null
+  for (const [guard, canonicalModule] of Object.entries(GUARD_CANONICAL)) {
+    if (binding.moduleFile === canonicalModule && binding.exported === guard) return guard
+  }
+  return null
+}
+
+/** Names declared locally inside a handler (var/let/const/function/param/binding
+ *  element). A guard call whose identifier is shadowed by one of these is NOT the
+ *  imported canonical guard, so it must not count (fail closed on shadowing). */
+function collectLocalDeclarationNames(handlerBody: ts.Node): Set<string> {
+  const names = new Set<string>()
+  const add = (n: ts.BindingName | undefined): void => {
+    if (n && ts.isIdentifier(n)) names.add(n.text)
+    else if (n && (ts.isObjectBindingPattern(n) || ts.isArrayBindingPattern(n))) {
+      for (const el of n.elements) if (ts.isBindingElement(el)) add(el.name)
+    }
+  }
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node)) add(node.name)
+    else if (ts.isFunctionDeclaration(node) && node.name) names.add(node.name.text)
+    else if (ts.isParameter(node)) add(node.name)
+    ts.forEachChild(node, visit)
+  }
+  visit(handlerBody)
+  return names
+}
+
+function effectForCall(call: ts.CallExpression): string | null {
+  const e = call.expression
+  if (ts.isPropertyAccessExpression(e)) {
+    const method = e.name.text
+    if (WRITE_VERBS.has(method)) return method
+    if (AMBIGUOUS_VERBS.has(method)) {
+      const recv = ts.isIdentifier(e.expression) ? e.expression.text : (ts.isPropertyAccessExpression(e.expression) ? e.expression.name.text : "")
+      if (EFFECT_RECEIVER.test(recv)) return method
+    }
+    return null
+  }
+  if (ts.isIdentifier(e) && BARE_EFFECT_FUNCS.has(e.text)) return e.text
+  return null
+}
+
+export interface HandlerReport {
+  readonly method: string
+  readonly policy: "GET" | "POST" | "unclassified"
+  /** canonical guards called at depth-0 (unconditional) before the first direct effect */
+  readonly dominatingGuards: ReadonlySet<string>
+  /** first direct (non-inlined) effect position; Infinity if none */
+  readonly firstEffectPos: number
+  /** effect labels reachable following called local helpers (for #156) */
+  readonly effectsReached: ReadonlySet<string>
+}
+
+function collectLocalFunctions(sf: ts.SourceFile): Map<string, ts.Node> {
+  const fns = new Map<string, ts.Node>()
+  for (const stmt of sf.statements) {
+    if (ts.isFunctionDeclaration(stmt) && stmt.name && stmt.body) fns.set(stmt.name.text, stmt.body)
+    else if (ts.isVariableStatement(stmt)) {
+      for (const d of stmt.declarationList.declarations) {
+        if (ts.isIdentifier(d.name) && d.initializer && (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer))) fns.set(d.name.text, d.initializer.body)
+      }
+    }
+  }
+  return fns
+}
+
+function isFunctionLike(n: ts.Node): boolean {
+  return ts.isArrowFunction(n) || ts.isFunctionExpression(n) || ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n)
+}
+
+/**
+ * Depth-0 dominance walk. A call is "depth-0" (unconditionally executed before
+ * any later statement) when reached from the handler body without descending
+ * through: an if/else/loop/switch/try BODY, a function/arrow/callback body, or
+ * the conditional side of a ternary / `&&` / `||`. The TEST of an `if`/`while`
+ * and the initializer/arguments of depth-0 expressions ARE depth-0.
+ *
+ * Guards are recorded (by canonical identity) only at depth-0. Effects are
+ * recorded at any depth (they must all be dominated). Guard dominance holds when
+ * every required guard has a depth-0 call before the first direct effect.
+ */
+function analyzeDominance(handlerBody: ts.Node, bindings: Map<string, ImportBinding>): {
+  dominatingGuards: Set<string>
+  firstEffectPos: number
+} {
+  const guardPos = new Map<string, number>() // guard → earliest depth-0 pos
+  let firstEffectPos = Infinity
+  const shadowed = collectLocalDeclarationNames(handlerBody)
+
+  const walk = (node: ts.Node, depth0: boolean): void => {
+    if (isFunctionLike(node)) { walkChildren(node, false); return }
+    if (ts.isCallExpression(node)) {
+      const g = guardForCall(node, bindings, shadowed)
+      if (g && depth0) guardPos.set(g, Math.min(guardPos.get(g) ?? Infinity, node.getStart()))
+      const eff = effectForCall(node)
+      if (eff) firstEffectPos = Math.min(firstEffectPos, node.getStart())
+      // callee object + arguments evaluate at the same conditionality as the call
+      walk(node.expression, depth0)
+      for (const arg of node.arguments) walk(arg, depth0)
+      return
+    }
+    if (ts.isIfStatement(node)) {
+      walk(node.expression, depth0) // test runs unconditionally
+      walk(node.thenStatement, false)
+      if (node.elseStatement) walk(node.elseStatement, false)
+      return
+    }
+    if (ts.isConditionalExpression(node)) {
+      walk(node.condition, depth0)
+      walk(node.whenTrue, false)
+      walk(node.whenFalse, false)
+      return
+    }
+    if (ts.isBinaryExpression(node)) {
+      const op = node.operatorToken.kind
+      if (op === ts.SyntaxKind.AmpersandAmpersandToken || op === ts.SyntaxKind.BarBarToken || op === ts.SyntaxKind.QuestionQuestionToken) {
+        walk(node.left, depth0)
+        walk(node.right, false) // short-circuited
+        return
+      }
+    }
+    if (ts.isForStatement(node) || ts.isForOfStatement(node) || ts.isForInStatement(node) || ts.isWhileStatement(node) || ts.isDoStatement(node) || ts.isSwitchStatement(node) || ts.isTryStatement(node)) {
+      walkChildren(node, false)
+      return
+    }
+    walkChildren(node, depth0)
+  }
+  const walkChildren = (node: ts.Node, depth0: boolean): void => ts.forEachChild(node, (c) => walk(c, depth0))
+
+  walk(handlerBody, true)
+  const dominatingGuards = new Set<string>()
+  for (const [g, pos] of guardPos) if (pos < firstEffectPos) dominatingGuards.add(g)
+  return { dominatingGuards, firstEffectPos }
+}
+
+/** Effects reachable following CALLED local helpers (for #156 write-path proof). */
+function collectEffectsReached(handlerBody: ts.Node, localFns: Map<string, ts.Node>): Set<string> {
+  const effects = new Set<string>()
+  const inlined = new Set<string>()
+  const walk = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const eff = effectForCall(node)
+      if (eff) effects.add(eff)
+      if (ts.isIdentifier(node.expression)) {
+        const body = localFns.get(node.expression.text)
+        if (body && !inlined.has(node.expression.text)) { inlined.add(node.expression.text); walk(body) }
+      }
+      walk(node.expression)
+      for (const a of node.arguments) walk(a)
+      return
+    }
+    ts.forEachChild(node, walk)
+  }
+  walk(handlerBody)
+  return effects
+}
+
+function policyFor(method: string): "GET" | "POST" | "unclassified" {
+  if (method === "GET") return "GET"
+  if (method === "POST") return "POST"
+  return "unclassified"
+}
+
+export function analyzeRoute(absFile: string): HandlerReport[] {
+  const sf = parseSourceFile(absFile)
+  const bindings = buildImportBindings(sf, absFile)
+  const localFns = collectLocalFunctions(sf)
+  const reports: HandlerReport[] = []
+  for (const stmt of sf.statements) {
+    let name: string | undefined
+    let body: ts.Node | undefined
+    if (ts.isFunctionDeclaration(stmt) && stmt.name && stmt.body && hasExportModifier(stmt)) { name = stmt.name.text; body = stmt.body }
+    else if (ts.isVariableStatement(stmt) && hasExportModifier(stmt)) {
+      for (const d of stmt.declarationList.declarations) {
+        if (ts.isIdentifier(d.name) && d.initializer && (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer))) { name = d.name.text; body = d.initializer.body }
+      }
+    }
+    if (!name || !body || !HTTP_METHODS.has(name)) continue
+    const { dominatingGuards, firstEffectPos } = analyzeDominance(body, bindings)
+    reports.push({
+      method: name,
+      policy: policyFor(name),
+      dominatingGuards,
+      firstEffectPos,
+      effectsReached: collectEffectsReached(body, localFns),
+    })
+  }
+  return reports
+}
+
+function hasExportModifier(node: ts.Node): boolean {
+  const mods = ts.canHaveModifiers(node) ? ts.getModifiers(node) : undefined
+  return !!mods && mods.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
+}
+
+export interface GuardPolicyResult { readonly ok: boolean; readonly missing: readonly string[]; readonly reason: string }
+
+/** Evaluate guard dominance for one handler under its method policy. */
+export function evaluateGuardPolicy(report: HandlerReport): GuardPolicyResult {
+  if (report.policy === "unclassified") return { ok: false, missing: [], reason: `unclassified HTTP method ${report.method} — no guard policy defined` }
+  const required = report.policy === "POST" ? REQUIRED_POST_GUARDS : REQUIRED_GET_GUARDS
+  const missing = required.filter((g) => !report.dominatingGuards.has(g))
+  return { ok: missing.length === 0, missing, reason: missing.length ? `guards not proven to dominate: ${missing.join(", ")}` : "" }
+}
+
+export interface RouteCoverageEntry {
+  readonly file: string // repo-relative
+  readonly method: string
+  readonly policy: "GET" | "POST" | "unclassified"
+  readonly ok: boolean
+  readonly missing: readonly string[]
+  readonly reason: string
+}
+
+/** Exhaustive coverage: every exported HTTP method of every given route file is
+ *  classified and evaluated. Unclassified methods fail closed. */
+export function routePolicyCoverage(routeFiles: readonly string[]): RouteCoverageEntry[] {
+  const entries: RouteCoverageEntry[] = []
+  for (const file of routeFiles) {
+    for (const report of analyzeRoute(file)) {
+      const verdict = evaluateGuardPolicy(report)
+      entries.push({ file: rel(file), method: report.method, policy: report.policy, ok: verdict.ok, missing: verdict.missing, reason: verdict.reason })
+    }
+  }
+  return entries
+}
+
+// ═══ §F  domain environment-authority (AST, not substring) ═══════
+
+/**
+ * Detect references to the Node global `process` symbol in a source file (any
+ * value use: `process.env`, `process["env"]`, `const {env} = process`,
+ * `const p = process`). Comments and strings never produce an Identifier node,
+ * so they cannot trigger. A local binding that shadows `process` is ignored
+ * (its own declaration name is not a global reference).
+ */
+export function processSymbolReferences(file: string): number {
+  const sf = parseSourceFile(file)
+  let count = 0
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && node.text === "process") {
+      const parent = node.parent
+      const isPropName = parent && ts.isPropertyAccessExpression(parent) && parent.name === node
+      const isDeclName = parent && (
+        (ts.isVariableDeclaration(parent) && parent.name === node) ||
+        (ts.isParameter(parent) && parent.name === node) ||
+        (ts.isBindingElement(parent) && parent.name === node) ||
+        ((ts.isPropertyAssignment(parent) || ts.isPropertySignature(parent)) && parent.name === node)
+      )
+      const isImportName = parent && (ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent))
+      if (!isPropName && !isDeclName && !isImportName) count += 1
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+  return count
 }

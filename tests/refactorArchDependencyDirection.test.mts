@@ -3,26 +3,21 @@
  *
  * Locks the layering rules from docs/refactor/TARGET_ARCHITECTURE.md as
  * executable tests over the REAL TypeScript AST dependency graph
- * (tests/helpers/refactorSourceGraph.mts). Because the graph classifies every
- * dependency form — static/type-only/side-effect import, export-from,
- * export-star, literal dynamic import, import-equals, literal require, and
- * non-literal dynamic — a bare provider package or Node builtin can no longer
- * slip past the gate by not matching a relative-path regex.
+ * (tests/helpers/refactorSourceGraph.mts), which classifies every dependency
+ * form with correct import/export type-only semantics and resolves specifiers
+ * through the repository's actual tsconfig.
  *
- *   1. Domain (`app/lib/domain/**`) imports ONLY domain + tenant modules and
- *      never reads `process.env`.
- *   2. Application (`app/lib/application/**`) takes no third-party/Node-builtin
- *      dependency and no VALUE dependency on infrastructure / persistence /
- *      provider sources / the runtime env authority — except an EXACT,
- *      shrink-only edge-exception allowlist.
- *
- * These are ratchets: they characterize the boundary on the program base
- * (origin/main @ 2669f2ea) and fail when a NEW violation appears.
+ *   1. Domain (`app/lib/domain/**`) depends only on domain + tenant and never
+ *      references the Node `process` global (AST-checked).
+ *   2. Application (`app/lib/application/**`) depends only on domain / application
+ *      / tenant, OR through an EXACT edge exception — VALUE edges via
+ *      APPLICATION_VALUE_EXCEPTIONS, TYPE-ONLY edges via
+ *      APPLICATION_TYPEONLY_EXCEPTIONS. A type-only import of an infrastructure
+ *      or persistence IMPLEMENTATION is a violation.
  */
 
 import test from "node:test"
 import assert from "node:assert/strict"
-import fs from "node:fs"
 import path from "node:path"
 import {
   appRoot,
@@ -30,7 +25,9 @@ import {
   parseModuleEdges,
   classifyDomainEdge,
   classifyApplicationEdge,
-  APPLICATION_EDGE_EXCEPTIONS,
+  APPLICATION_VALUE_EXCEPTIONS,
+  APPLICATION_TYPEONLY_EXCEPTIONS,
+  processSymbolReferences,
   rel,
 } from "./helpers/refactorSourceGraph.mts"
 
@@ -48,26 +45,22 @@ test("domain modules depend only on domain + tenant (all dependency forms)", () 
   assert.deepEqual(violations, [], `domain layer gained forbidden dependencies:\n${violations.join("\n")}`)
 })
 
-test("domain modules never read process.env", () => {
+test("domain modules never reference the Node process global (AST)", () => {
   const domainDir = path.join(appRoot, "lib", "domain")
   const offenders = listSourceFiles(domainDir)
-    .filter((f) => fs.readFileSync(f, "utf8").includes("process.env"))
+    .filter((f) => processSymbolReferences(f) > 0)
     .map(rel)
   assert.deepEqual(offenders, [])
 })
 
-// ─── 2. Application → infrastructure / env ratchet ──────────────
+// ─── 2. Application → boundary ratchet ──────────────────────────
 
-// EXACT edge-level exceptions live in the helper (APPLICATION_EDGE_EXCEPTIONS):
-// each is a pre-existing VALUE edge tracked for removal, authorizing ONLY its
-// one source→target pair — it does NOT license any other import from that file.
-
-test("application modules take no forbidden dependency beyond the exact allowlist", () => {
+test("application modules take no forbidden dependency beyond the exact allowlists", () => {
   const applicationDir = path.join(appRoot, "lib", "application")
   const violations: string[] = []
   for (const file of listSourceFiles(applicationDir)) {
     for (const edge of parseModuleEdges(file)) {
-      const verdict = classifyApplicationEdge(edge, APPLICATION_EDGE_EXCEPTIONS)
+      const verdict = classifyApplicationEdge(edge)
       if (!verdict.ok) {
         violations.push(`${rel(file)} [${edge.edgeKind}${edge.isTypeOnly ? "/type" : ""}] → ${edge.specifier ?? "<non-literal>"} : ${verdict.reason}`)
       }
@@ -76,13 +69,14 @@ test("application modules take no forbidden dependency beyond the exact allowlis
   assert.deepEqual(violations, [], `application layer gained forbidden dependencies:\n${violations.join("\n")}`)
 })
 
-test("every application edge-exception still exists and is still exercised (ratchet hygiene)", () => {
-  for (const exc of APPLICATION_EDGE_EXCEPTIONS) {
-    assert.ok(fs.existsSync(path.join(appRoot, "..", exc.source)), `exception source ${exc.source} no longer exists — remove it`)
-    assert.ok(fs.existsSync(path.join(appRoot, "..", exc.target)), `exception target ${exc.target} no longer exists — remove it`)
-    // The tolerated edge must actually be present; a stale exception must be deleted.
+test("every application edge-exception is exact, correctly-typed, and still exercised (ratchet hygiene)", () => {
+  const check = (exc: (typeof APPLICATION_VALUE_EXCEPTIONS)[number]) => {
+    assert.ok(listSourceFiles(path.join(appRoot, "..", path.dirname(exc.source))).length >= 0) // source dir exists cheap-check
+    // The tolerated edge must actually be present with the required modality.
     const edges = parseModuleEdges(path.join(appRoot, "..", exc.source))
-    const present = edges.some((e) => e.resolvedTarget && rel(e.resolvedTarget) === exc.target && !e.isTypeOnly)
-    assert.ok(present, `exception ${exc.source} → ${exc.target} is stale (edge gone) — remove it`)
+    const present = edges.some((e) => e.resolvedTarget && rel(e.resolvedTarget) === exc.target && e.isTypeOnly === exc.typeOnly)
+    assert.ok(present, `exception ${exc.source} → ${exc.target} (typeOnly=${exc.typeOnly}) is stale — remove it`)
   }
+  for (const exc of APPLICATION_VALUE_EXCEPTIONS) { assert.equal(exc.typeOnly, false); check(exc) }
+  for (const exc of APPLICATION_TYPEONLY_EXCEPTIONS) { assert.equal(exc.typeOnly, true); check(exc) }
 })
