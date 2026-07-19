@@ -6,6 +6,7 @@ import assert from "node:assert/strict"
 import { requireSession as resolveSession } from "../app/lib/security/session.ts"
 import { FakeD1Database } from "./helpers/fakeD1.ts"
 import type { AppEnv } from "../app/types/cloudflare-env.ts"
+import type { ValidatedRequestRuntimeConfig } from "../app/lib/runtime/requestRuntimeConfig.ts"
 import { setTestRuntimeEnvForRequest, resetTestRuntimeEnvForRequest } from "../app/lib/runtime/requestRuntimeEnvInjection.ts"
 import { resolveControlRepositories } from "../app/lib/infrastructure/persistence/control/controlRepositoryResolver.ts"
 import type { TenantId, UserId } from "../app/lib/tenant/types.ts"
@@ -74,6 +75,61 @@ function restoreEnv(values: Record<string, string | undefined>) {
     else process.env[key] = value
   }
 }
+
+/** A structurally valid runtime config (all sections present, frozen), used as a
+ *  base for the fail-closed facade tests. */
+function baseRuntimeConfig(persistence: ValidatedRequestRuntimeConfig["persistence"]): ValidatedRequestRuntimeConfig {
+  return {
+    source: "local",
+    persistence,
+    auth: { adapter: "dev", isProduction: false },
+    security: {
+      externalActionsEnabled: false,
+      allowLegacyIngestFallback: false,
+      allowDevSession: true,
+      allowDevWorkspaceBootstrap: false,
+      allowControlLessDevSession: false,
+    },
+    llm: { allowMock: false, allowLegacyFallback: false, isProduction: false },
+  }
+}
+
+test("facade fail-closed: a composition/runtime exception resolves to typed internal_error (never rejects)", async () => {
+  // Structurally valid runtime whose persistence.CONTROL_DB getter THROWS when the
+  // composition root reads it (composeRequestServices). The route promise must NOT
+  // reject; it must fail closed to internal_error without leaking the exception.
+  const throwingPersistence = Object.defineProperty({ mode: "d1" } as Record<string, unknown>, "CONTROL_DB", {
+    enumerable: true,
+    get() { throw new Error("control-db binding blew up: secret-should-never-leak") },
+  }) as unknown as ValidatedRequestRuntimeConfig["persistence"]
+  const throwingRuntime = baseRuntimeConfig(throwingPersistence)
+
+  const result = await resolveSession(new Request("http://localhost"), throwingRuntime)
+  assert.deepEqual(result, { ok: false, reason: "internal_error" })
+})
+
+test("facade fail-closed: a genuinely missing control DB returns unauthorized (NOT internal_error)", async () => {
+  // No control DB, dev auth allowed, control-less dev session NOT allowed → the
+  // session authority is null and the resolver fails closed to unauthorized. This
+  // ordinary absence must stay distinct from an unexpected exception.
+  const runtime = baseRuntimeConfig({ mode: "disabled" })
+  const result = await resolveSession(new Request("http://localhost"), runtime)
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.reason, "unauthorized")
+})
+
+test("facade fail-closed: an invalid runtime configuration returns unauthorized", async () => {
+  // No-arg path: an injected authoritative Cloudflare env missing CONTROL_DB makes
+  // resolveValidatedRequestRuntimeConfig fail; the facade returns unauthorized.
+  try {
+    setTestRuntimeEnvForRequest({} as AppEnv, { production: true })
+    const result = await resolveSession(new Request("http://localhost"))
+    assert.equal(result.ok, false)
+    if (!result.ok) assert.equal(result.reason, "unauthorized")
+  } finally {
+    resetTestRuntimeEnvForRequest()
+  }
+})
 
 test("verified identity plus active membership resolves SessionContext", async () => {
   await withAuthEnv(async (db) => {

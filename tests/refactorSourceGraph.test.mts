@@ -35,8 +35,14 @@ import {
   abs,
   APPLICATION_VALUE_EXCEPTIONS,
   APPLICATION_TYPEONLY_EXCEPTIONS,
+  classifyTypeContractModule,
+  typeContractSelfViolations,
+  productionTypeOnlyImporters,
+  validateTypeContractExemptions,
   type DependencyEdge,
 } from "./helpers/refactorSourceGraph.mts"
+
+const SESSION_AUTHORITY_PORT = "app/lib/domain/ports/sessionAuthority.ts"
 
 function withFixtureDir<T>(fn: (dir: string) => T): T {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "refactor-adv-"))
@@ -340,4 +346,74 @@ test("B12: target kinds are classified via the config resolver", () => {
 test("B13: exception lists are well-formed (exact edge-kind + modality)", () => {
   for (const exc of APPLICATION_VALUE_EXCEPTIONS) { assert.equal(exc.typeOnly, false); assert.equal(exc.edgeKind, "static-import"); assert.ok(fs.existsSync(abs(exc.source)) && fs.existsSync(abs(exc.target))) }
   for (const exc of APPLICATION_TYPEONLY_EXCEPTIONS) { assert.equal(exc.typeOnly, true); assert.equal(exc.edgeKind, "type-only-import"); assert.ok(fs.existsSync(abs(exc.source)) && fs.existsSync(abs(exc.target))) }
+})
+
+// ═══ C. exact type-contract reachability-exemption soundness ═════
+//
+// Proves the ratchet's type-contract exemption is EXACT and fail-closed: it
+// exempts a genuine pure-type port with a live type-only consumer, and rejects
+// value modules, converted-to-runtime modules, side-effect imports, stale
+// (unimported) modules, and directory/glob paths. Fixtures are throwaway modules
+// in an OS temp dir; no committed product file is mutated.
+
+test("C1: the exact pure type-contract port is validated and exempted", () => {
+  const { validated, rejections } = validateTypeContractExemptions([SESSION_AUTHORITY_PORT])
+  assert.deepEqual(rejections, [], "the real session-authority port must validate cleanly")
+  assert.equal(validated.has(abs(SESSION_AUTHORITY_PORT)), true)
+  // Proof components: pure self + a live production type-only inbound edge.
+  assert.deepEqual(typeContractSelfViolations(abs(SESSION_AUTHORITY_PORT)), [])
+  assert.ok(productionTypeOnlyImporters(abs(SESSION_AUTHORITY_PORT)).length >= 1, "must have ≥1 production type-only importer")
+})
+
+test("C2: an unrelated dead RUNTIME file (value code, no importer) is NOT exempted", () => {
+  withFixtureDir((dir) => {
+    const dead = write(dir, "deadRuntime.ts", `export const handler = () => new Response()\nexport function helper() { return 1 }\n`)
+    const result = classifyTypeContractModule(dead)
+    assert.equal(result.ok, false)
+    assert.ok(result.reasons.some((r) => r.startsWith("value_export")), "value code must be flagged")
+    assert.ok(result.reasons.some((r) => r.startsWith("stale_no_type_only_importer")), "and it has no type-only importer")
+  })
+})
+
+test("C3: adding a VALUE EXPORT to an otherwise-pure contract invalidates the exemption", () => {
+  withFixtureDir((dir) => {
+    const converted = write(dir, "converted.ts", `export type Port = { readonly f: () => void }\nexport const RUNTIME_SINGLETON = { f() {} }\n`)
+    const violations = typeContractSelfViolations(converted)
+    assert.ok(violations.some((v) => v.code === "value_export"), "a value export must be a violation")
+    assert.equal(classifyTypeContractModule(converted).ok, false)
+  })
+})
+
+test("C4: a SIDE-EFFECT import invalidates the exemption", () => {
+  withFixtureDir((dir) => {
+    const withSideEffect = write(dir, "sideEffect.ts", `import "./register-runtime"\nexport type Port = { readonly f: () => void }\n`)
+    const violations = typeContractSelfViolations(withSideEffect)
+    assert.ok(violations.some((v) => v.code === "value_import"), "a side-effect import must be a value_import violation")
+    assert.equal(classifyTypeContractModule(withSideEffect).ok, false)
+  })
+})
+
+test("C5: a self-valid pure-type module with NO type-only inbound edge is stale and fails", () => {
+  withFixtureDir((dir) => {
+    const orphanContract = write(dir, "orphanPort.ts", `export interface OrphanPort { readonly run: () => Promise<void> }\nexport type OrphanId = string & { readonly __brand: "orphan" }\n`)
+    assert.deepEqual(typeContractSelfViolations(orphanContract), [], "self-analysis passes (pure types)")
+    assert.equal(productionTypeOnlyImporters(orphanContract).length, 0, "but no production module imports it")
+    const result = classifyTypeContractModule(orphanContract)
+    assert.equal(result.ok, false, "stale exemption must fail")
+    assert.ok(result.reasons.some((r) => r.startsWith("stale_no_type_only_importer")))
+  })
+})
+
+test("C6: exemption is EXACT-path only — directories, globs, and filename patterns are not exempted", () => {
+  // A directory and a glob never resolve to a file → rejected.
+  for (const notAFile of ["app/lib/domain/ports", "app/lib/domain/ports/**", "app/lib/domain/ports/*.ts"]) {
+    const { validated, rejections } = validateTypeContractExemptions([notAFile])
+    assert.equal(validated.size, 0, `${notAFile} must not be exempted`)
+    assert.equal(rejections.length, 1)
+    assert.ok(rejections[0].reasons.some((r) => r.startsWith("not_a_file")))
+  }
+  // The known list is exact: no wildcard characters, and it resolves to exactly one file.
+  const { validated } = validateTypeContractExemptions([SESSION_AUTHORITY_PORT])
+  assert.equal(SESSION_AUTHORITY_PORT.includes("*"), false)
+  assert.deepEqual([...validated], [abs(SESSION_AUTHORITY_PORT)], "only the exact listed file is exempted")
 })
