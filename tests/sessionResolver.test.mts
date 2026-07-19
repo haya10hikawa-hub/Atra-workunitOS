@@ -1,6 +1,9 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { resolveSession } from "../app/lib/application/auth/sessionResolver.ts"
+// After WS1-PR2 the pure resolver is injected; this suite exercises the full
+// composition path through the route-facing facade (requireSession →
+// composeRequestServices → control session-authority adapter → pure resolver).
+import { requireSession as resolveSession } from "../app/lib/security/session.ts"
 import { FakeD1Database } from "./helpers/fakeD1.ts"
 import type { AppEnv } from "../app/types/cloudflare-env.ts"
 import { setTestRuntimeEnvForRequest, resetTestRuntimeEnvForRequest } from "../app/lib/runtime/requestRuntimeEnvInjection.ts"

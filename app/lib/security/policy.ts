@@ -8,28 +8,13 @@
  * Enforcement lives in `rbac.ts` and `policy.ts`.
  */
 
-import type { LegacyTenantRole, TenantRole } from "../domain/auth/types.ts"
+import type { WorkUnitRole } from "../domain/auth/role.ts"
 
-export type WorkUnitRole = TenantRole
-export type WorkUnitRoleInput = TenantRole | LegacyTenantRole
-
-const VALID_ROLES: ReadonlySet<string> = new Set(["owner", "manager", "editor", "viewer"])
-
-export function normalizeRoleInput(role: WorkUnitRoleInput | undefined): WorkUnitRole {
-  if (role === "admin") return "manager"
-  if (role === "pm" || role === "member") return "editor"
-  if (role !== undefined && VALID_ROLES.has(role)) return role as WorkUnitRole
-  throw new RoleNormalizationError(role)
-}
-
-export class RoleNormalizationError extends Error {
-  public readonly input: unknown
-  constructor(input: unknown) {
-    super(`Cannot normalize role from input: ${String(input)}`)
-    this.name = "RoleNormalizationError"
-    this.input = input
-  }
-}
+// Role-normalization authority now lives in the domain. Re-exported here for
+// backward compatibility with existing security-layer consumers. The domain
+// module does not import security (dependency direction: security → domain).
+export { normalizeRoleInput, RoleNormalizationError } from "../domain/auth/role.ts"
+export type { WorkUnitRole, WorkUnitRoleInput } from "../domain/auth/role.ts"
 
 export type WorkUnitPermission =
   | "workunit.read"

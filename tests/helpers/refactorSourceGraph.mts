@@ -322,17 +322,20 @@ export interface EdgeException {
 // Roots an application module may depend on without an exception.
 const APPLICATION_ALLOWED_ROOTS = ["app/lib/domain/", "app/lib/application/", "app/lib/tenant/"]
 
-/** Exact VALUE-edge exceptions (each authorizes ONLY its one source→target+form). */
-export const APPLICATION_VALUE_EXCEPTIONS: readonly EdgeException[] = [
-  { source: "app/lib/application/auth/sessionResolver.ts", target: "app/lib/infrastructure/persistence/control/controlRepositoryResolver.ts", edgeKind: "static-import", typeOnly: false, reason: "sessionResolver constructs control repositories directly; invert behind a port", removalIssue: "#182 (refactor/tenant-security)" },
-  { source: "app/lib/application/auth/sessionResolver.ts", target: "app/lib/runtime/requestRuntimeConfig.ts", edgeKind: "static-import", typeOnly: false, reason: "sessionResolver reads the runtime env authority directly; thread from composition root", removalIssue: "#182 (refactor/tenant-security)" },
-  { source: "app/lib/application/auth/sessionResolver.ts", target: "app/lib/security/policy.ts", edgeKind: "static-import", typeOnly: false, reason: "sessionResolver uses RBAC role normalization; move behind an auth port", removalIssue: "#182 (refactor/tenant-security)" },
-]
+/**
+ * Exact VALUE-edge exceptions. EMPTY as of WS1-PR2 (compose session authority
+ * outside application): sessionResolver's three value edges to security/policy,
+ * the infrastructure control resolver, and the runtime env authority were
+ * removed by injecting an auth adapter + a domain session-authority port + a
+ * composition root. The application layer now takes NO value dependency on
+ * runtime/security/infrastructure/persistence. Do not re-add without a tracked
+ * removal plan; the architecture test asserts this list is empty.
+ */
+export const APPLICATION_VALUE_EXCEPTIONS: readonly EdgeException[] = []
 
 /** Exact TYPE-ONLY-edge exceptions (shared-contract type imports; must be type-only). */
 export const APPLICATION_TYPEONLY_EXCEPTIONS: readonly EdgeException[] = [
   { source: "app/lib/application/auth/resolveAuthAdapter.ts", target: "app/lib/runtime/requestRuntimeConfig.ts", edgeKind: "type-only-import", typeOnly: true, reason: "AuthRuntimeConfig type contract", removalIssue: "#182 (ports extraction)" },
-  { source: "app/lib/application/auth/sessionResolver.ts", target: "app/lib/persistence/d1/types.ts", edgeKind: "type-only-import", typeOnly: true, reason: "D1DatabaseLike type contract", removalIssue: "#182 (ports extraction)" },
   { source: "app/lib/application/workunitInbox/persistenceMapping.ts", target: "app/lib/persistence/types.ts", edgeKind: "type-only-import", typeOnly: true, reason: "persistence row type contract", removalIssue: "#182 (ports extraction)" },
   { source: "app/lib/application/decomposition/types.ts", target: "app/lib/llm/types.ts", edgeKind: "type-only-import", typeOnly: true, reason: "LLM boundary type contract", removalIssue: "#182 (ports extraction)" },
   { source: "app/lib/application/actionField/errorState.ts", target: "app/lib/security/safeErrors.ts", edgeKind: "type-only-import", typeOnly: true, reason: "safe-error code type contract", removalIssue: "#182 (ports extraction)" },

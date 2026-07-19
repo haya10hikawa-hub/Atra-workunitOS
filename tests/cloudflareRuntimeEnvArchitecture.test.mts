@@ -82,10 +82,13 @@ test("auth adapters and resolver never read process.env", () => {
   }
 })
 
-test("session resolver derives config, never reading process.env directly", () => {
+test("session resolver is injected, never reading process.env or resolving ambient config", () => {
   const src = read("app/lib/application/auth/sessionResolver.ts")
   assert.doesNotMatch(src, /process\.env/)
-  assert.match(src, /resolveValidatedRequestRuntimeConfig|options\.auth/)
+  // WS1-PR2: the resolver no longer resolves ambient runtime config; it receives
+  // its dependencies (auth adapter, session-authority port, security policy).
+  assert.doesNotMatch(src, /resolveValidatedRequestRuntimeConfig/)
+  assert.match(src, /SessionResolutionDependencies|sessionAuthority/)
 })
 
 test("route repository + control resolver read no ambient raw runtime env", () => {

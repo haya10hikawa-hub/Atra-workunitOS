@@ -6,6 +6,7 @@ import {
   type SessionResolutionFailureReason,
   type SessionResolutionResult,
 } from "../application/auth/sessionResolver.ts"
+import { composeRequestServices } from "../runtime/composeRequestServices.ts"
 import {
   resolveValidatedRequestRuntimeConfig,
   type ValidatedRequestRuntimeConfig,
@@ -31,11 +32,9 @@ export async function requireSession(
     if (!resolved.ok) return { ok: false, reason: "unauthorized" }
     rt = resolved.runtime
   }
-  return resolveSession(request, {
-    auth: rt.auth,
-    security: rt.security,
-    controlDbBinding: rt.persistence.CONTROL_DB,
-  })
+  // Compose the request-scoped session dependencies (auth adapter, control
+  // session-authority adapter, security policy), then invoke the pure resolver.
+  return resolveSession(request, composeRequestServices(rt))
 }
 
 export function getSessionErrorStatus(reason: SessionResolutionFailureReason): number {

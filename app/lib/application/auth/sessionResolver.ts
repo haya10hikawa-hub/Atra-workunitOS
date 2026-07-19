@@ -1,15 +1,20 @@
+/**
+ * Application session resolver (pure, injected use case).
+ *
+ * Orchestrates the session flow from injected dependencies only. It does NOT
+ * resolve ambient runtime configuration, select auth adapters, or construct
+ * repositories — those live in the request composition root and infrastructure
+ * adapters. It depends only on domain/application/tenant contracts.
+ *
+ * Invariant preserved: tenantId and role come from control-DB membership (via the
+ * session authority port), never from JWT claims or client fields.
+ */
+
 import type { SessionContext } from "../../domain/auth/types.ts"
 import type { TenantId, UserId } from "../../tenant/types.ts"
-import { normalizeRoleInput, RoleNormalizationError, type WorkUnitRole, type WorkUnitRoleInput } from "../../security/policy.ts"
-import { resolveControlRepositories, type ControlRepositoryBundle } from "../../infrastructure/persistence/control/controlRepositoryResolver.ts"
-import type { D1DatabaseLike } from "../../persistence/d1/types.ts"
-import type { VerifiedAuthIdentity, AuthAdapter } from "./authAdapter.ts"
-import { resolveAuthAdapter } from "./resolveAuthAdapter.ts"
-import {
-  resolveValidatedRequestRuntimeConfig,
-  type AuthRuntimeConfig,
-  type SecurityRuntimeConfig,
-} from "../../runtime/requestRuntimeConfig.ts"
+import { normalizeRoleInput, RoleNormalizationError, type WorkUnitRole, type WorkUnitRoleInput } from "../../domain/auth/role.ts"
+import type { AuthAdapter, VerifiedAuthIdentity } from "./authAdapter.ts"
+import type { SessionAuthorityPort } from "../../domain/ports/sessionAuthority.ts"
 
 export type SessionResolutionFailureReason = "unauthorized" | "forbidden" | "expired" | "invalid_tenant" | "invalid_role" | "internal_error"
 
@@ -17,82 +22,66 @@ export type SessionResolutionResult =
   | { ok: true; session: SessionContext }
   | { ok: false; reason: SessionResolutionFailureReason }
 
-export type ResolveSessionOptions = {
-  adapter?: AuthAdapter
-  auth?: AuthRuntimeConfig
-  security?: SecurityRuntimeConfig
-  controlDbBinding?: D1DatabaseLike
+/**
+ * Application-level security policy for session resolution — decoupled from the
+ * runtime config shape. The composition root maps the runtime security section
+ * into this narrow contract.
+ */
+export type SessionSecurityPolicy = {
+  readonly allowDevSession: boolean
+  readonly allowControlLessDevSession: boolean
+  readonly allowDevWorkspaceBootstrap: boolean
+  readonly devSessionRole?: string
 }
 
-// Fail-closed defaults when no validated config is available.
-const LOCKED_SECURITY: SecurityRuntimeConfig = Object.freeze({
-  externalActionsEnabled: false,
-  allowLegacyIngestFallback: false,
-  allowDevSession: false,
-  allowDevWorkspaceBootstrap: false,
-  allowControlLessDevSession: false,
-})
-
-/**
- * Resolve the authoritative auth + security sections and the control-DB binding.
- * Explicit options (threaded from the route's single runtime-config resolution)
- * take precedence; otherwise the request-scoped config is resolved here. No
- * `process.env` is read directly.
- */
-function resolveRuntimeSections(
-  options: ResolveSessionOptions,
-): { auth: AuthRuntimeConfig; security: SecurityRuntimeConfig; controlDbBinding?: D1DatabaseLike } {
-  if (options.auth && options.security) {
-    return { auth: options.auth, security: options.security, controlDbBinding: options.controlDbBinding }
-  }
-  const result = resolveValidatedRequestRuntimeConfig()
-  if (result.ok) {
-    return {
-      auth: result.runtime.auth,
-      security: result.runtime.security,
-      controlDbBinding: options.controlDbBinding ?? result.runtime.persistence.CONTROL_DB,
-    }
-  }
-  return { auth: { adapter: "none", isProduction: true }, security: LOCKED_SECURITY, controlDbBinding: options.controlDbBinding }
+export type SessionResolutionDependencies = {
+  readonly authAdapter: AuthAdapter
+  readonly sessionAuthority: SessionAuthorityPort | null
+  readonly security: SessionSecurityPolicy
 }
 
 export async function resolveSession(
   request: Request,
-  options: ResolveSessionOptions = {},
+  dependencies: SessionResolutionDependencies,
 ): Promise<SessionResolutionResult> {
+  const { authAdapter, sessionAuthority, security } = dependencies
   try {
-    const { auth, security, controlDbBinding } = resolveRuntimeSections(options)
-    const adapter = options.adapter ?? resolveAuthAdapter(auth, { allowDevSession: security.allowDevSession })
-
-    const authResult = await adapter.verify(request)
+    const authResult = await authAdapter.verify(request)
     if (!authResult.ok) return { ok: false, reason: "unauthorized" }
     const identity = authResult.identity
 
     // ─── Control-less dev session ───────────────────────────
-    // In dev sandbox with no D1/Control DB, return a session directly.
+    // Explicitly-gated dev sandbox with no control DB: return a session directly.
     if (shouldUseControlLessDevSession(identity, security)) {
       return { ok: true, session: createControlLessDevSession(identity, security) }
     }
 
-    const repos = resolveControlRepositories({ d1Binding: controlDbBinding })
-    if (!repos.ok) return { ok: false, reason: "unauthorized" }
-    if (shouldBootstrapDevWorkspace(identity, security)) await bootstrapDevWorkspace(repos.bundle, identity, security)
+    // Fail closed when no session authority is available (e.g. control DB absent).
+    if (!sessionAuthority) return { ok: false, reason: "unauthorized" }
 
-    const identityRow = await repos.bundle.authIdentities.findByProviderSubject(
-      repos.bundle.ctx,
-      identity.provider,
-      identity.providerSubject,
-    )
+    if (shouldBootstrapDevWorkspace(identity, security)) {
+      await sessionAuthority.bootstrapDevelopmentWorkspace({
+        identity: {
+          provider: identity.provider,
+          providerSubject: identity.providerSubject,
+          email: identity.email,
+          displayName: identity.displayName,
+          avatarUrl: identity.avatarUrl,
+        },
+        role: resolveDevSessionRole(security),
+      })
+    }
+
+    const identityRow = await sessionAuthority.findAuthIdentity(identity.provider, identity.providerSubject)
     if (!identityRow) return { ok: false, reason: "unauthorized" }
 
-    const user = await repos.bundle.users.findById(repos.bundle.ctx, identityRow.userId)
+    const user = await sessionAuthority.findUser(identityRow.userId)
     if (!user) return { ok: false, reason: "unauthorized" }
 
-    const membership = (await repos.bundle.memberships.listByUser(repos.bundle.ctx, user.id))
-      .find((row) => row.status === "active")
+    const membership = (await sessionAuthority.listMemberships(user.id)).find((row) => row.status === "active")
     if (!membership) return { ok: false, reason: "forbidden" }
 
-    const tenant = await repos.bundle.tenants.findById(repos.bundle.ctx, membership.tenantId)
+    const tenant = await sessionAuthority.findTenant(membership.tenantId)
     if (!tenant) return { ok: false, reason: "invalid_tenant" }
     if (tenant.status !== "active") return { ok: false, reason: "forbidden" }
 
@@ -111,97 +100,38 @@ export async function resolveSession(
       },
     }
   } catch (err) {
-    if (err instanceof RoleNormalizationError) return { ok: false, reason: "invalid_role" as SessionResolutionFailureReason }
+    if (err instanceof RoleNormalizationError) return { ok: false, reason: "invalid_role" }
     return { ok: false, reason: "internal_error" }
   }
 }
 
-// Dev-only default role. Gated by the security config (dev impossible in prod).
+// Dev-only default role. Gated by the security policy (dev impossible in prod).
 const DEV_DEFAULT_ROLE: WorkUnitRoleInput = "owner"
 
-function resolveDevSessionRole(security: SecurityRuntimeConfig): WorkUnitRole {
+function resolveDevSessionRole(security: SessionSecurityPolicy): WorkUnitRole {
   return normalizeRoleInput((security.devSessionRole as WorkUnitRoleInput | undefined) ?? DEV_DEFAULT_ROLE)
 }
 
-function shouldBootstrapDevWorkspace(identity: VerifiedAuthIdentity, security: SecurityRuntimeConfig): boolean {
+function shouldBootstrapDevWorkspace(identity: VerifiedAuthIdentity, security: SessionSecurityPolicy): boolean {
   return security.allowDevSession
     && security.allowDevWorkspaceBootstrap
     && identity.provider === "dev"
 }
 
-async function bootstrapDevWorkspace(
-  repos: ControlRepositoryBundle,
-  identity: VerifiedAuthIdentity,
-  security: SecurityRuntimeConfig,
-): Promise<void> {
-  const now = new Date().toISOString()
-  const userId = identity.providerSubject as UserId
-  const tenantId = "dev-tenant" as TenantId
-
-  const user = await repos.users.findById(repos.ctx, userId)
-  if (!user) {
-    await repos.users.create(repos.ctx, {
-      id: userId,
-      email: identity.email,
-      displayName: identity.displayName,
-      avatarUrl: identity.avatarUrl,
-      createdAt: now,
-      updatedAt: now,
-    })
-  }
-
-  const tenant = await repos.tenants.findById(repos.ctx, tenantId)
-  if (!tenant) {
-    await repos.tenants.create(repos.ctx, {
-      id: tenantId,
-      name: "Development Tenant",
-      slug: "dev-tenant",
-      createdAt: now,
-      updatedAt: now,
-    })
-  }
-
-  const membership = await repos.memberships.findByUserAndTenant(repos.ctx, userId, tenantId)
-  if (!membership) {
-    await repos.memberships.create(repos.ctx, {
-      id: "membership:dev-user:dev-tenant",
-      tenantId,
-      userId,
-      role: resolveDevSessionRole(security),
-      status: "active",
-      createdAt: now,
-      updatedAt: now,
-    })
-  }
-
-  const existingIdentity = await repos.authIdentities.findByProviderSubject(repos.ctx, identity.provider, identity.providerSubject)
-  if (!existingIdentity) {
-    await repos.authIdentities.create(repos.ctx, {
-      id: `identity:${identity.provider}:${identity.providerSubject}`,
-      userId,
-      provider: identity.provider,
-      providerSubject: identity.providerSubject,
-      email: identity.email,
-      createdAt: now,
-      updatedAt: now,
-    })
-  }
-}
-
 // ─── Control-less dev session helpers ───────────────────────
 
 /**
- * True ONLY when the request-scoped security config explicitly enables both dev
- * sessions and control-less dev sessions (both are false in Cloudflare
- * production) and the identity is a dev identity.
+ * True ONLY when the security policy explicitly enables both dev sessions and
+ * control-less dev sessions (both false in Cloudflare production) and the
+ * identity is a dev identity.
  */
-function shouldUseControlLessDevSession(identity: VerifiedAuthIdentity, security: SecurityRuntimeConfig): boolean {
+function shouldUseControlLessDevSession(identity: VerifiedAuthIdentity, security: SessionSecurityPolicy): boolean {
   return security.allowDevSession
     && security.allowControlLessDevSession
     && identity.provider === "dev"
 }
 
-function createControlLessDevSession(identity: VerifiedAuthIdentity, security: SecurityRuntimeConfig): SessionContext {
+function createControlLessDevSession(identity: VerifiedAuthIdentity, security: SessionSecurityPolicy): SessionContext {
   const now = new Date()
   return {
     userId: "dev-user" as UserId,

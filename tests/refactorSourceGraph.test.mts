@@ -58,16 +58,17 @@ const IMPORT_SESSION = `import { requireSession } from "@/lib/security/session"`
 // ═══ A. narrowing-scope adversarial cases ════════════════════════
 
 test("A1: an exception with a matching source/target but a DIFFERENT edge-kind does not apply", () => {
-  const exc = APPLICATION_VALUE_EXCEPTIONS[1] // sessionResolver → requestRuntimeConfig (static-import)
-  // Same source+target, but a dynamic-import instead of the tolerated static-import.
+  // Real APPLICATION_VALUE_EXCEPTIONS is empty (WS1-PR2), so use a synthetic
+  // value exception to exercise the exact edge-kind check.
+  const synthetic = { source: "app/lib/application/synthetic.ts", target: "app/lib/runtime/requestRuntimeConfig.ts", edgeKind: "static-import" as const, typeOnly: false, reason: "test", removalIssue: "test" }
+  const opts = { valueExceptions: [synthetic], typeOnlyExceptions: [] }
   const mismatched: DependencyEdge = {
-    sourceFile: abs(exc.source), specifier: "@/lib/runtime/requestRuntimeConfig",
-    edgeKind: "dynamic-import", targetKind: "alias", resolvedTarget: abs(exc.target), isTypeOnly: false, isLiteral: true,
+    sourceFile: abs(synthetic.source), specifier: "@/lib/runtime/requestRuntimeConfig",
+    edgeKind: "dynamic-import", targetKind: "alias", resolvedTarget: abs(synthetic.target), isTypeOnly: false, isLiteral: true,
   }
-  assert.equal(classifyApplicationEdge(mismatched).ok, false, "edge-kind mismatch must not be covered by the exception")
-  // Control: the exact tolerated edge-kind IS covered.
-  const exact: DependencyEdge = { ...mismatched, edgeKind: exc.edgeKind }
-  assert.equal(classifyApplicationEdge(exact).ok, true)
+  assert.equal(classifyApplicationEdge(mismatched, opts).ok, false, "edge-kind mismatch must not be covered by the exception")
+  const exact: DependencyEdge = { ...mismatched, edgeKind: "static-import" }
+  assert.equal(classifyApplicationEdge(exact, opts).ok, true, "the exact tolerated edge-kind IS covered")
 })
 
 test("A2: globalThis.process is detected", () => {
@@ -280,17 +281,16 @@ test("B8: bare provider packages, Node builtins, require, and dynamic infra impo
 })
 
 test("B9: an exact exception authorizes ONLY its own source→target→edge-kind", () => {
-  const source = "app/lib/application/auth/sessionResolver.ts"
-  const otherInfra = "app/lib/infrastructure/external/github/realGitHubClient.ts"
-  const forged: DependencyEdge = {
-    sourceFile: abs(source), specifier: "@/lib/infrastructure/external/github/realGitHubClient",
-    edgeKind: "static-import", targetKind: "alias", resolvedTarget: abs(otherInfra), isTypeOnly: false, isLiteral: true,
-  }
-  assert.equal(classifyApplicationEdge(forged).ok, false)
-  for (const exc of APPLICATION_VALUE_EXCEPTIONS) {
-    const okEdge: DependencyEdge = { sourceFile: abs(exc.source), specifier: "x", edgeKind: exc.edgeKind, targetKind: "relative", resolvedTarget: abs(exc.target), isTypeOnly: false, isLiteral: true }
-    assert.equal(classifyApplicationEdge(okEdge).ok, true)
-  }
+  // Synthetic value exception (real list is empty in WS1-PR2).
+  const synthetic = { source: "app/lib/application/svc.ts", target: "app/lib/infrastructure/external/github/realGitHubClient.ts", edgeKind: "static-import" as const, typeOnly: false, reason: "test", removalIssue: "test" }
+  const opts = { valueExceptions: [synthetic], typeOnlyExceptions: [] }
+  const allowed: DependencyEdge = { sourceFile: abs(synthetic.source), specifier: "x", edgeKind: "static-import", targetKind: "alias", resolvedTarget: abs(synthetic.target), isTypeOnly: false, isLiteral: true }
+  assert.equal(classifyApplicationEdge(allowed, opts).ok, true, "the exact synthetic exception edge is allowed")
+  // A DIFFERENT source with the same target is not covered.
+  const otherSource: DependencyEdge = { ...allowed, sourceFile: abs("app/lib/application/auth/sessionResolver.ts") }
+  assert.equal(classifyApplicationEdge(otherSource, opts).ok, false)
+  // With the REAL (empty) value-exception list, even the exact edge is denied.
+  assert.equal(classifyApplicationEdge(allowed).ok, false)
 })
 
 test("B10: domain policy detects provider/builtin/require/cross-layer edges and process references", () => {
