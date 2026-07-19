@@ -597,11 +597,22 @@ function bodyCallsBareIdentifier(node: ts.Node, name: string): boolean {
   walk(node)
   return found
 }
-function bodyCallsMethod(node: ts.Node, method: string): boolean {
+
+/** True iff the subtree contains an EXACT `receiver.method(...)` call where the
+ *  receiver is a bare identifier named `receiver`. `cache.upsert(...)` does NOT
+ *  satisfy `repository.upsert`; `metrics.recordEvent(...)` does NOT satisfy
+ *  `usage.recordEvent`. */
+function bodyCallsReceiverMethod(node: ts.Node, receiver: string, method: string): boolean {
   let found = false
   const walk = (n: ts.Node): void => {
     if (found) return
-    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === method) { found = true; return }
+    if (
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      n.expression.name.text === method &&
+      ts.isIdentifier(n.expression.expression) &&
+      n.expression.expression.text === receiver
+    ) { found = true; return }
     ts.forEachChild(n, walk)
   }
   walk(node)
@@ -610,12 +621,20 @@ function bodyCallsMethod(node: ts.Node, method: string): boolean {
 
 export interface InboxWritePath {
   readonly getCallsPersistWorkUnits: boolean
-  readonly persistWorkUnitsCallsUpsert: boolean
-  readonly getCallsRecordEvent: boolean
-  readonly getCallsAuditAppend: boolean
+  readonly persistWorkUnitsCallsRepositoryUpsert: boolean
+  readonly getCallsUsageRecordEvent: boolean
+  readonly getCallsAuditLogsAppend: boolean
 }
 
-/** Characterize the exact current inbox GET write path (Issue #156). */
+/**
+ * Characterize the EXACT current inbox GET write path (Issue #156) with exact
+ * receiver+method matching — not a general effect boundary:
+ *   GET             → calls bare `persistWorkUnits`
+ *   persistWorkUnits→ calls `repository.upsert(...)`
+ *   GET             → calls `usage.recordEvent(...)`
+ *   GET             → calls `auditLogs.append(...)`
+ * The #156 fix (removing the write from GET) flips these and must update the pin.
+ */
 export function inboxWritePath(absFile = abs("app/api/workunit/inbox/route.ts")): InboxWritePath {
   const sf = parseSourceFile(absFile)
   let getBody: ts.Node | null = null
@@ -626,74 +645,120 @@ export function inboxWritePath(absFile = abs("app/api/workunit/inbox/route.ts"))
   }
   return {
     getCallsPersistWorkUnits: getBody ? bodyCallsBareIdentifier(getBody, "persistWorkUnits") : false,
-    persistWorkUnitsCallsUpsert: persistBody ? bodyCallsMethod(persistBody, "upsert") : false,
-    getCallsRecordEvent: getBody ? bodyCallsMethod(getBody, "recordEvent") : false,
-    getCallsAuditAppend: getBody ? bodyCallsMethod(getBody, "append") : false,
+    persistWorkUnitsCallsRepositoryUpsert: persistBody ? bodyCallsReceiverMethod(persistBody, "repository", "upsert") : false,
+    getCallsUsageRecordEvent: getBody ? bodyCallsReceiverMethod(getBody, "usage", "recordEvent") : false,
+    getCallsAuditLogsAppend: getBody ? bodyCallsReceiverMethod(getBody, "auditLogs", "append") : false,
   }
 }
 
 // ═══ §F  domain environment-authority (AST, not substring) ═══════
 
-/** Does the file declare a LOCAL binding named `process` (var/let/const/function/
- *  param/binding-element/import)? If so, a bare `process` reference resolves to
- *  that local, not the Node global, and must be allowed. */
-function declaresLocalProcess(sf: ts.SourceFile): boolean {
-  let found = false
-  const isProcessName = (n: ts.BindingName | undefined): boolean => !!n && ts.isIdentifier(n) && n.text === "process"
-  const visit = (node: ts.Node): void => {
-    if (found) return
-    if (ts.isVariableDeclaration(node) && isProcessName(node.name)) found = true
-    else if (ts.isFunctionDeclaration(node) && node.name?.text === "process") found = true
-    else if (ts.isParameter(node) && isProcessName(node.name)) found = true
-    else if (ts.isBindingElement(node) && isProcessName(node.name)) found = true
-    else if (ts.isImportSpecifier(node) && node.name.text === "process") found = true
-    else if (ts.isImportClause(node) && node.name?.text === "process") found = true
-    ts.forEachChild(node, visit)
+const PROCESS = "process"
+
+/** Collect binding identifiers named `process` from a BindingName (handles
+ *  destructuring). */
+function bindingDeclaresProcess(name: ts.BindingName | undefined): boolean {
+  if (!name) return false
+  if (ts.isIdentifier(name)) return name.text === PROCESS
+  for (const el of name.elements) {
+    if (ts.isBindingElement(el) && bindingDeclaresProcess(el.name)) return true
   }
-  visit(sf)
-  return found
+  return false
 }
 
 /**
- * Detect references to the Node global `process` symbol in a source file (AST,
- * not substring). Counts:
- *   - bare `process` used as a value (`process.env`, `process["env"]`,
- *     `const {env}=process`, `const p=process`) — UNLESS the file declares a
- *     local `process` binding (a legitimate shadow, allowed);
- *   - `globalThis.process` and `globalThis["process"]` — ALWAYS the global,
- *     even when a local `process` is shadowed.
- * Comments and strings never produce Identifier nodes, so they never trigger.
+ * Names DIRECTLY introduced by a scope node — NOT descending into nested scopes.
+ * Scopes: SourceFile, function-like, Block, CatchClause, for-statements.
+ *   - function-like: parameters;
+ *   - CatchClause: the catch variable;
+ *   - for-statements: loop-variable declarations;
+ *   - Block / SourceFile: the direct statement-level declarations
+ *     (var/let/const, function, class, import) — hoisting is treated
+ *     block-locally, which only ever OVER-flags (never hides) a global.
+ * Returns whether this scope binds `process`.
+ */
+function scopeBindsProcess(scope: ts.Node): boolean {
+  if (ts.isFunctionDeclaration(scope) || ts.isFunctionExpression(scope) || ts.isArrowFunction(scope) ||
+      ts.isMethodDeclaration(scope) || ts.isConstructorDeclaration(scope) || ts.isGetAccessorDeclaration(scope) || ts.isSetAccessorDeclaration(scope)) {
+    return scope.parameters.some((p) => bindingDeclaresProcess(p.name))
+  }
+  if (ts.isCatchClause(scope)) {
+    return !!scope.variableDeclaration && bindingDeclaresProcess(scope.variableDeclaration.name)
+  }
+  if (ts.isForStatement(scope) || ts.isForInStatement(scope) || ts.isForOfStatement(scope)) {
+    const init = scope.initializer
+    if (init && ts.isVariableDeclarationList(init)) return init.declarations.some((d) => bindingDeclaresProcess(d.name))
+    return false
+  }
+  if (ts.isSourceFile(scope) || ts.isBlock(scope)) {
+    for (const stmt of scope.statements) {
+      if (ts.isVariableStatement(stmt) && stmt.declarationList.declarations.some((d) => bindingDeclaresProcess(d.name))) return true
+      if (ts.isFunctionDeclaration(stmt) && stmt.name?.text === PROCESS) return true
+      if (ts.isClassDeclaration(stmt) && stmt.name?.text === PROCESS) return true
+      if (ts.isImportDeclaration(stmt) && stmt.importClause) {
+        const c = stmt.importClause
+        if (c.name?.text === PROCESS) return true
+        const nb = c.namedBindings
+        if (nb && ts.isNamespaceImport(nb) && nb.name.text === PROCESS) return true
+        if (nb && ts.isNamedImports(nb) && nb.elements.some((e) => e.name.text === PROCESS)) return true
+      }
+    }
+    return false
+  }
+  return false
+}
+
+function isScopeNode(n: ts.Node): boolean {
+  return ts.isSourceFile(n) || ts.isBlock(n) || ts.isCatchClause(n) ||
+    ts.isForStatement(n) || ts.isForInStatement(n) || ts.isForOfStatement(n) ||
+    ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n) || ts.isArrowFunction(n) ||
+    ts.isMethodDeclaration(n) || ts.isConstructorDeclaration(n) || ts.isGetAccessorDeclaration(n) || ts.isSetAccessorDeclaration(n)
+}
+
+/**
+ * Detect references to the Node global `process` symbol in a source file, using
+ * PER-REFERENCE LEXICAL scope resolution (AST, not substring, not file-wide).
+ * A bare `process` value reference is the Node global unless SOME enclosing
+ * lexical scope binds `process`; a local binding in a nested/sibling/block scope
+ * therefore does NOT hide a `process.env` reference elsewhere.
+ *   - `globalThis.process` / `globalThis["process"]` are ALWAYS the global, even
+ *     when a local `process` is in scope.
+ *   - Comments and strings never produce Identifier nodes, so they never trigger.
  */
 export function processSymbolReferences(file: string): number {
   const sf = parseSourceFile(file)
-  const shadowed = declaresLocalProcess(sf)
   let count = 0
-  const visit = (node: ts.Node): void => {
-    // globalThis.process  — always the global
-    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "globalThis" && node.name.text === "process") {
+
+  const walk = (node: ts.Node, scopeBindsStack: readonly boolean[]): void => {
+    // globalThis.process — always the global
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "globalThis" && node.name.text === PROCESS) {
       count += 1
     }
-    // globalThis["process"]  — always the global
-    if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "globalThis" && ts.isStringLiteral(node.argumentExpression) && node.argumentExpression.text === "process") {
+    // globalThis["process"] — always the global
+    if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "globalThis" && ts.isStringLiteral(node.argumentExpression) && node.argumentExpression.text === PROCESS) {
       count += 1
     }
-    // bare `process` value reference (skip when locally shadowed)
-    if (!shadowed && ts.isIdentifier(node) && node.text === "process") {
+    // bare `process` value reference — global unless a lexical scope binds it
+    if (ts.isIdentifier(node) && node.text === PROCESS) {
       const parent = node.parent
       const isPropName = parent && ts.isPropertyAccessExpression(parent) && parent.name === node
       const isDeclName = parent && (
         (ts.isVariableDeclaration(parent) && parent.name === node) ||
         (ts.isParameter(parent) && parent.name === node) ||
         (ts.isBindingElement(parent) && parent.name === node) ||
-        ((ts.isPropertyAssignment(parent) || ts.isPropertySignature(parent)) && parent.name === node)
+        ((ts.isPropertyAssignment(parent) || ts.isPropertySignature(parent)) && parent.name === node) ||
+        (ts.isFunctionDeclaration(parent) && parent.name === node) ||
+        (ts.isClassDeclaration(parent) && parent.name === node)
       )
-      const isImportName = parent && (ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent))
-      // globalThis.process is handled above; don't double-count the `process` name node there
-      const isGlobalThisMember = parent && ts.isPropertyAccessExpression(parent) && parent.name === node
-      if (!isPropName && !isDeclName && !isImportName && !isGlobalThisMember) count += 1
+      const isImportOrExportName = parent && (ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent) || ts.isImportClause(parent) || ts.isNamespaceImport(parent))
+      const isValueReference = !isPropName && !isDeclName && !isImportOrExportName
+      if (isValueReference && !scopeBindsStack.some((b) => b)) count += 1
     }
-    ts.forEachChild(node, visit)
+
+    const nextStack = isScopeNode(node) ? [...scopeBindsStack, scopeBindsProcess(node)] : scopeBindsStack
+    ts.forEachChild(node, (c) => walk(c, nextStack))
   }
-  visit(sf)
+
+  walk(sf, [])
   return count
 }

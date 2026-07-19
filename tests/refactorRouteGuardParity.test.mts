@@ -87,14 +87,15 @@ test("DIRECT characterization (not dominance): every analyzable handler calls it
   }
 })
 
-test("KNOWN DEFECT PIN (#156): the exact current inbox GET write path is present", () => {
-  // Exact structural characterization of app/api/workunit/inbox/route.ts — NOT a
-  // general effect boundary. The #156 fix (removing the write from GET) must flip
-  // these and update this pin in the same PR.
+test("KNOWN DEFECT PIN (#156): the exact current inbox GET write path is present (receiver-exact)", () => {
+  // Exact structural characterization of app/api/workunit/inbox/route.ts with
+  // exact receiver+method matching — NOT a general effect boundary. The #156 fix
+  // (removing the write from GET) must flip these and update this pin.
   const wp = inboxWritePath()
   assert.equal(wp.getCallsPersistWorkUnits, true, "inbox GET no longer calls persistWorkUnits — if #156 fixed, update this pin")
-  assert.equal(wp.persistWorkUnitsCallsUpsert, true, "persistWorkUnits no longer calls .upsert — if #156 fixed, update this pin")
-  assert.equal(wp.getCallsRecordEvent, true, "inbox GET no longer calls usage.recordEvent — if #156 fixed, update this pin")
+  assert.equal(wp.persistWorkUnitsCallsRepositoryUpsert, true, "persistWorkUnits no longer calls repository.upsert — if #156 fixed, update this pin")
+  assert.equal(wp.getCallsUsageRecordEvent, true, "inbox GET no longer calls usage.recordEvent — if #156 fixed, update this pin")
+  assert.equal(wp.getCallsAuditLogsAppend, true, "inbox GET no longer calls auditLogs.append — if #156 fixed, update this pin")
 })
 
 test("KNOWN GAP PIN: GET handlers do not directly call checkRateLimit today", () => {

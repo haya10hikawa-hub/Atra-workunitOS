@@ -29,6 +29,7 @@ import {
   classifyDomainEdge,
   classifyApplicationEdge,
   analyzeRouteFile,
+  inboxWritePath,
   processSymbolReferences,
   loadTsConfig,
   abs,
@@ -137,6 +138,57 @@ test("A8: aggregate method-count equality MASKS a per-route regression; per-rout
   assert.equal(total(pinned), total(regressed))
   // A per-route comparison DETECTS it (this is why the route test pins per-file):
   assert.notDeepEqual(regressed.routeA, pinned.routeA)
+})
+
+// ═══ A′. lexical process resolution + receiver-exact #156 ════════
+
+test("A9: a nested parameter `process` does NOT hide a top-level global process.env", () => {
+  withFixtureDir((dir) => {
+    const f = write(dir, "d.ts", `export const leaked = process.env.SECRET\nfunction local(process: unknown) { return (process as { env: unknown }).env }\n`)
+    assert.equal(processSymbolReferences(f), 1, "top-level global process.env must be reported despite the nested parameter shadow")
+  })
+})
+
+test("A10: a block-local `process` does NOT hide a sibling/top-level global reference", () => {
+  withFixtureDir((dir) => {
+    const f = write(dir, "d.ts", `{\n  const process = {} as { env: Record<string, string> }\n  void process.env\n}\nexport const leaked = process.env.SECRET\n`)
+    assert.equal(processSymbolReferences(f), 1, "block-local process must not hide the later top-level global")
+    // sibling functions: one shadows, the other leaks
+    const g = write(dir, "e.ts", `function f(process: unknown){ return (process as { env: unknown }).env }\nfunction h(){ return process.env.Y }\n`)
+    assert.equal(processSymbolReferences(g), 1, "a sibling function's parameter must not hide another function's global reference")
+  })
+})
+
+test("A11: a fully local `process` reference is allowed (0)", () => {
+  withFixtureDir((dir) => {
+    assert.equal(processSymbolReferences(write(dir, "p.ts", `function local(process: unknown) { return (process as { env: unknown }).env }\n`)), 0)
+    assert.equal(processSymbolReferences(write(dir, "t.ts", `const process = {} as { env: Record<string, string> }\nexport const x = process.env.X\n`)), 0)
+  })
+})
+
+test("A12: globalThis.process still fails when a local `process` exists", () => {
+  withFixtureDir((dir) => {
+    const f = write(dir, "d.ts", `const process = {} as { env: Record<string, string> }\nexport const x = process.env.X\nexport const y = globalThis.process.env.Z\n`)
+    assert.ok(processSymbolReferences(f) >= 1, "globalThis.process must be reported even with a local process in scope")
+  })
+})
+
+test("A13: `cache.upsert` does not satisfy the `repository.upsert` inbox pin", () => {
+  withFixtureDir((dir) => {
+    const f = write(dir, "route.ts", `export async function GET(){ return persistWorkUnits() }\nfunction persistWorkUnits(){ cache.upsert(1) }\n`)
+    const wp = inboxWritePath(f)
+    assert.equal(wp.getCallsPersistWorkUnits, true)
+    assert.equal(wp.persistWorkUnitsCallsRepositoryUpsert, false, "cache.upsert must NOT satisfy repository.upsert")
+  })
+})
+
+test("A14: `metrics.recordEvent` does not satisfy the `usage.recordEvent` inbox pin", () => {
+  withFixtureDir((dir) => {
+    const f = write(dir, "route.ts", `export async function GET(){ metrics.recordEvent(1); other.append(1); return 1 }\n`)
+    const wp = inboxWritePath(f)
+    assert.equal(wp.getCallsUsageRecordEvent, false, "metrics.recordEvent must NOT satisfy usage.recordEvent")
+    assert.equal(wp.getCallsAuditLogsAppend, false, "other.append must NOT satisfy auditLogs.append")
+  })
 })
 
 // ═══ B. retained soundness cases ═════════════════════════════════
