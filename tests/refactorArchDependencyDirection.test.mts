@@ -69,14 +69,15 @@ test("application modules take no forbidden dependency beyond the exact allowlis
   assert.deepEqual(violations, [], `application layer gained forbidden dependencies:\n${violations.join("\n")}`)
 })
 
-test("every application edge-exception is exact, correctly-typed, and still exercised (ratchet hygiene)", () => {
+test("every application edge-exception is exact (source+target+edgeKind+modality) and still exercised", () => {
   const check = (exc: (typeof APPLICATION_VALUE_EXCEPTIONS)[number]) => {
-    assert.ok(listSourceFiles(path.join(appRoot, "..", path.dirname(exc.source))).length >= 0) // source dir exists cheap-check
-    // The tolerated edge must actually be present with the required modality.
+    // The tolerated edge must actually be present with the EXACT edge-kind and modality.
     const edges = parseModuleEdges(path.join(appRoot, "..", exc.source))
-    const present = edges.some((e) => e.resolvedTarget && rel(e.resolvedTarget) === exc.target && e.isTypeOnly === exc.typeOnly)
-    assert.ok(present, `exception ${exc.source} → ${exc.target} (typeOnly=${exc.typeOnly}) is stale — remove it`)
+    const present = edges.some((e) =>
+      e.resolvedTarget && rel(e.resolvedTarget) === exc.target && e.edgeKind === exc.edgeKind && e.isTypeOnly === exc.typeOnly,
+    )
+    assert.ok(present, `exception ${exc.source} → ${exc.target} (edgeKind=${exc.edgeKind}, typeOnly=${exc.typeOnly}) is stale — remove it`)
   }
-  for (const exc of APPLICATION_VALUE_EXCEPTIONS) { assert.equal(exc.typeOnly, false); check(exc) }
-  for (const exc of APPLICATION_TYPEONLY_EXCEPTIONS) { assert.equal(exc.typeOnly, true); check(exc) }
+  for (const exc of APPLICATION_VALUE_EXCEPTIONS) { assert.equal(exc.typeOnly, false); assert.equal(exc.edgeKind, "static-import"); check(exc) }
+  for (const exc of APPLICATION_TYPEONLY_EXCEPTIONS) { assert.equal(exc.typeOnly, true); assert.equal(exc.edgeKind, "type-only-import"); check(exc) }
 })

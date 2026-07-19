@@ -1,106 +1,106 @@
 /**
- * Route guard-parity characterization (Refactor Program).
+ * Route inventory + direct guard characterization (Refactor Program).
  *
- * Proves the guard surface of every API route from the REAL exported handlers,
- * with:
- *   - canonical guard IDENTITY: a call counts as a guard only when its callee is
- *     a bare identifier bound (possibly aliased) to exactly the canonical export
- *     of exactly the canonical module — `logger.requireSession(...)`, a local
- *     `const requireSession = …`, or a same-named import from elsewhere do NOT
- *     count;
- *   - guard DOMINANCE, not textual order: a guard counts only when called
- *     unconditionally (depth-0: not inside an if/else/loop/try body, a
- *     function/callback, or a short-circuit branch) at a position before the
- *     first direct state-changing effect;
- *   - EXHAUSTIVE coverage: routes and methods are DISCOVERED, not hand-listed;
- *     every discovered (route, method) must be classified and pass, and any
- *     unclassified HTTP method fails closed.
+ * SCOPE (deliberately narrow — see PR body): these are static tests. They prove
+ * a route INVENTORY and DIRECT structural characterization only:
+ *   - the exact set of route files and, per file, the exact set of exported HTTP
+ *     methods and their export FORM;
+ *   - for statically analyzable handlers, that each canonical guard is CALLED
+ *     DIRECTLY in the handler body, by canonical import identity.
  *
- * Backed by the repository's behavioral route suites (e.g.
- * tenantIsolationRoutes) which exercise the guards at runtime.
+ * They do NOT prove runtime guard dominance across arbitrary control flow, nor
+ * that effects performed by imported application services are guarded. Export
+ * forms that bind the handler indirectly (aliased export, re-export, wrapper
+ * const) are reported and FAIL CLOSED — they are not claimed covered. Runtime
+ * enforcement is tracked in the canonical-secured-route Issue #185.
+ *
+ * Coverage is asserted PER ROUTE FILE against a pinned inventory — never by an
+ * aggregate count, which can mask a per-route regression.
  */
 
 import test from "node:test"
 import assert from "node:assert/strict"
 import {
-  analyzeRoute,
-  evaluateGuardPolicy,
-  routePolicyCoverage,
+  analyzeRouteFile,
+  routeInventory,
   discoverRouteFiles,
+  inboxWritePath,
   abs,
   rel,
   REQUIRED_POST_GUARDS,
   REQUIRED_GET_GUARDS,
 } from "./helpers/refactorSourceGraph.mts"
 
-test("EXHAUSTIVE: every discovered route/method is classified and guard-dominant", () => {
-  const routeFiles = discoverRouteFiles()
-  assert.ok(routeFiles.length >= 9, `expected >= 9 route modules, found ${routeFiles.length}`)
-  const coverage = routePolicyCoverage(routeFiles)
-  assert.ok(coverage.length >= routeFiles.length, "every route must expose at least one HTTP handler")
+// Pinned per-route method inventory on the program base. A NEW route file, a
+// removed route, or a changed method set fails the exact per-route assertions
+// below (no aggregate count is used as proof).
+const KNOWN_ROUTE_METHODS: Readonly<Record<string, readonly string[]>> = {
+  "app/api/audit/recent/route.ts": ["GET"],
+  "app/api/integrations/status/route.ts": ["GET"],
+  "app/api/workunit/inbox/route.ts": ["GET"],
+  "app/api/workunit/tools/route.ts": ["GET", "POST"],
+  "app/api/workunit/[id]/action-preview/route.ts": ["POST"],
+  "app/api/workunit/[id]/approval/route.ts": ["GET", "POST"],
+  "app/api/workunit/[id]/approval/status/route.ts": ["GET"],
+  "app/api/workunit/[id]/execution/dry-run/route.ts": ["POST"],
+  "app/api/workunit/[id]/feedback/route.ts": ["POST"],
+}
 
-  const failures = coverage.filter((c) => !c.ok)
-  assert.deepEqual(
-    failures.map((f) => `${f.file} ${f.method} [${f.policy}] ${f.reason}`),
-    [],
-    "routes failed guard-policy coverage",
-  )
-  // No unclassified methods currently exist; a new PUT/DELETE handler would fail above.
-  assert.deepEqual(coverage.filter((c) => c.policy === "unclassified"), [])
+test("discovered route files exactly match the pinned inventory (per-file, not counted)", () => {
+  const discovered = discoverRouteFiles().map(rel).sort()
+  const pinned = Object.keys(KNOWN_ROUTE_METHODS).sort()
+  assert.deepEqual(discovered, pinned, "route file set changed — add/remove the route in KNOWN_ROUTE_METHODS and its guard pin")
 })
 
-test("discovered == classified: every exported HTTP method entered a policy", () => {
-  for (const file of discoverRouteFiles()) {
-    const reports = analyzeRoute(file)
-    for (const r of reports) {
-      assert.notEqual(r.policy, undefined)
-      // classification is total: GET | POST | unclassified
-      assert.ok(["GET", "POST", "unclassified"].includes(r.policy), `${rel(file)} ${r.method} has no policy bucket`)
+test("each route file's recognized HTTP methods match its pin", () => {
+  for (const [file, methods] of Object.entries(KNOWN_ROUTE_METHODS)) {
+    const report = analyzeRouteFile(abs(file))
+    assert.deepEqual(report.recognizedMethods, [...methods].sort(), `${file} method set changed`)
+  }
+})
+
+test("no current route file has zero recognized methods (explicit per-file result)", () => {
+  for (const report of routeInventory(discoverRouteFiles())) {
+    assert.equal(report.hasZeroRecognizedMethods, false, `${report.file} exports no recognized HTTP method`)
+  }
+})
+
+test("no current route uses an indeterminate export form (fail closed on aliased/reexport/wrapper)", () => {
+  for (const report of routeInventory(discoverRouteFiles())) {
+    assert.deepEqual(
+      report.indeterminateForms,
+      [],
+      `${report.file} uses an export form that cannot be statically characterized (${report.indeterminateForms.join(", ")}) — ` +
+        "convert to a direct handler or enforce guards at runtime per the canonical-secured-route Issue",
+    )
+  }
+})
+
+test("DIRECT characterization (not dominance): every analyzable handler calls its canonical guards", () => {
+  for (const report of routeInventory(discoverRouteFiles())) {
+    for (const m of report.methodExports) {
+      assert.ok(m.analyzable, `${report.file} ${m.method} is not analyzable (${m.form})`)
+      const required = m.method === "POST" ? REQUIRED_POST_GUARDS : m.method === "GET" ? REQUIRED_GET_GUARDS : []
+      const missing = required.filter((g) => !m.directGuards.has(g))
+      assert.deepEqual(missing, [], `${report.file} ${m.method} does not directly call: ${missing.join(", ")}`)
     }
   }
 })
 
-test("POST handlers: the four required guards dominate the first effect", () => {
-  for (const file of discoverRouteFiles()) {
-    for (const r of analyzeRoute(file).filter((h) => h.method === "POST")) {
-      const v = evaluateGuardPolicy(r)
-      assert.ok(v.ok, `${rel(file)} POST missing dominant guards: ${v.missing.join(", ")}`)
-      for (const g of REQUIRED_POST_GUARDS) assert.ok(r.dominatingGuards.has(g), `${rel(file)} POST: ${g} not dominant`)
+test("KNOWN DEFECT PIN (#156): the exact current inbox GET write path is present", () => {
+  // Exact structural characterization of app/api/workunit/inbox/route.ts — NOT a
+  // general effect boundary. The #156 fix (removing the write from GET) must flip
+  // these and update this pin in the same PR.
+  const wp = inboxWritePath()
+  assert.equal(wp.getCallsPersistWorkUnits, true, "inbox GET no longer calls persistWorkUnits — if #156 fixed, update this pin")
+  assert.equal(wp.persistWorkUnitsCallsUpsert, true, "persistWorkUnits no longer calls .upsert — if #156 fixed, update this pin")
+  assert.equal(wp.getCallsRecordEvent, true, "inbox GET no longer calls usage.recordEvent — if #156 fixed, update this pin")
+})
+
+test("KNOWN GAP PIN: GET handlers do not directly call checkRateLimit today", () => {
+  for (const report of routeInventory(discoverRouteFiles())) {
+    for (const m of report.methodExports.filter((x) => x.method === "GET")) {
+      assert.ok(!m.directGuards.has("checkRateLimit"), `${report.file} GET gained rate limiting — intended? update this pin`)
     }
-  }
-})
-
-test("GET handlers: session + runtime-config guards dominate", () => {
-  for (const file of discoverRouteFiles()) {
-    for (const r of analyzeRoute(file).filter((h) => h.method === "GET")) {
-      for (const g of REQUIRED_GET_GUARDS) assert.ok(r.dominatingGuards.has(g), `${rel(file)} GET: ${g} not dominant`)
-    }
-  }
-})
-
-test("KNOWN DEFECT PIN (#156): inbox GET actually reaches the write path", () => {
-  // Proven by effect-sink analysis following called local helpers, not a string:
-  // the exported GET handler transitively reaches repository.upsert (via
-  // persistWorkUnits) and usage.recordEvent. The #156 fix must change THIS
-  // assertion in the same PR.
-  const get = analyzeRoute(abs("app/api/workunit/inbox/route.ts")).find((h) => h.method === "GET")
-  assert.ok(get, "inbox GET handler not found")
-  assert.ok(get.effectsReached.has("upsert"), "inbox GET no longer reaches upsert — if #156 was fixed, update this pin")
-  assert.ok(get.effectsReached.has("recordEvent"), "inbox GET no longer records usage — if #156 was fixed, update this pin")
-})
-
-test("KNOWN GAP PIN: GET-only handlers do not call rate limiting today", () => {
-  // Adding rate limiting to GET routes is an intended reliability change
-  // (AUD-006 / #180); this pin makes its arrival explicit.
-  const getOnly = [
-    "app/api/workunit/inbox/route.ts",
-    "app/api/workunit/[id]/approval/status/route.ts",
-    "app/api/audit/recent/route.ts",
-    "app/api/integrations/status/route.ts",
-  ]
-  for (const route of getOnly) {
-    const get = analyzeRoute(abs(route)).find((h) => h.method === "GET")
-    assert.ok(get, `${route} GET not found`)
-    assert.ok(!get.dominatingGuards.has("checkRateLimit"), `${route} GET gained rate limiting — update this pin in the same PR`)
   }
 })

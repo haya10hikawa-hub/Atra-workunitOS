@@ -2,13 +2,19 @@
  * Adversarial soundness tests for the architecture safety gates
  * (Refactor Program, umbrella #182).
  *
- * Proves the shared AST graph + policies + route model actually DETECT the
- * bypasses they claim to. Every fixture is a throwaway module in an OS temp
- * directory (guards import the REAL canonical modules via the `@/` alias, which
- * resolves through the loaded tsconfig regardless of fixture location). No
- * committed product file is mutated.
+ * Proves the shared AST graph + policies + route inventory actually DETECT the
+ * bypasses they claim to, AND that the narrowed scope fails closed where static
+ * analysis cannot prove a property. Fixtures are throwaway modules in an OS temp
+ * directory; no committed product file is mutated.
  *
- * The sixteen numbered cases map 1:1 to the round-2 audit checklist.
+ * Two groups:
+ *   A. narrowing-scope cases (this round): edge-kind mismatch, globalThis
+ *      process, shadowed process, aliased/reexport/wrapper HTTP export, zero
+ *      recognized methods, aggregate-count masking.
+ *   B. retained soundness cases: import/export type semantics, type-only import
+ *      of an implementation, configured alias, guard-identity spoof/shadow,
+ *      bare/builtin/require/dynamic rejection, exact exception scoping,
+ *      dependency-form coverage, target-kind classification, domain policy.
  */
 
 import test from "node:test"
@@ -22,8 +28,7 @@ import {
   reachableFrom,
   classifyDomainEdge,
   classifyApplicationEdge,
-  analyzeRoute,
-  routePolicyCoverage,
+  analyzeRouteFile,
   processSymbolReferences,
   loadTsConfig,
   abs,
@@ -47,215 +52,172 @@ function firstEdge(file: string, spec: string): DependencyEdge {
   assert.ok(e, `no edge for ${spec}`)
   return e
 }
-function post(file: string) {
-  const r = analyzeRoute(file).find((h) => h.method === "POST")
-  assert.ok(r, "fixture has no POST handler")
-  return r
-}
-// A canonical guard import so fixtures' guard calls resolve to the real module.
 const IMPORT_SESSION = `import { requireSession } from "@/lib/security/session"`
 
-// ─── 1. default value + named type-only import is a VALUE import ─
+// ═══ A. narrowing-scope adversarial cases ════════════════════════
 
-test("case 1: `import Default, { type X }` is a VALUE import and is followed by runtime reachability", () => {
+test("A1: an exception with a matching source/target but a DIFFERENT edge-kind does not apply", () => {
+  const exc = APPLICATION_VALUE_EXCEPTIONS[1] // sessionResolver → requestRuntimeConfig (static-import)
+  // Same source+target, but a dynamic-import instead of the tolerated static-import.
+  const mismatched: DependencyEdge = {
+    sourceFile: abs(exc.source), specifier: "@/lib/runtime/requestRuntimeConfig",
+    edgeKind: "dynamic-import", targetKind: "alias", resolvedTarget: abs(exc.target), isTypeOnly: false, isLiteral: true,
+  }
+  assert.equal(classifyApplicationEdge(mismatched).ok, false, "edge-kind mismatch must not be covered by the exception")
+  // Control: the exact tolerated edge-kind IS covered.
+  const exact: DependencyEdge = { ...mismatched, edgeKind: exc.edgeKind }
+  assert.equal(classifyApplicationEdge(exact).ok, true)
+})
+
+test("A2: globalThis.process is detected", () => {
+  withFixtureDir((dir) => {
+    const f = write(dir, "d.ts", `export const x = globalThis.process.env.SECRET\n`)
+    assert.ok(processSymbolReferences(f) > 0)
+  })
+})
+
+test("A3: globalThis[\"process\"] is detected", () => {
+  withFixtureDir((dir) => {
+    const f = write(dir, "d.ts", `export const x = globalThis["process"].env.SECRET\n`)
+    assert.ok(processSymbolReferences(f) > 0)
+  })
+})
+
+test("A4: a locally shadowed `process` is ALLOWED (no false positive), but globalThis.process still fails", () => {
+  withFixtureDir((dir) => {
+    const shadowed = write(dir, "s.ts", `const process = { env: {} as Record<string, string> }\nexport const x = process.env.X\n`)
+    assert.equal(processSymbolReferences(shadowed), 0, "a locally shadowed process must not be flagged")
+    const both = write(dir, "b.ts", `const process = { env: {} as Record<string, string> }\nexport const x = process.env.X\nexport const y = globalThis.process.env.Z\n`)
+    assert.ok(processSymbolReferences(both) > 0, "globalThis.process must be flagged even when a local process is shadowed")
+  })
+})
+
+test("A5: an aliased export and a re-exported HTTP handler are reported and fail closed", () => {
+  withFixtureDir((dir) => {
+    const aliased = analyzeRouteFile(write(dir, "route.ts", `function h(request){ return new Response() }\nexport { h as POST }\n`))
+    assert.deepEqual(aliased.recognizedMethods, ["POST"])
+    const aliasedExport = aliased.methodExports.find((m) => m.method === "POST")
+    assert.equal(aliasedExport?.form, "aliased-export")
+    assert.equal(aliasedExport?.analyzable, false)
+    assert.ok(aliased.indeterminateForms.includes("aliased-export"))
+
+    const reexport = analyzeRouteFile(write(dir, "route2.ts", `export { POST } from "./other-handler"\n`))
+    assert.deepEqual(reexport.recognizedMethods, ["POST"])
+    assert.equal(reexport.methodExports.find((m) => m.method === "POST")?.form, "reexport")
+    assert.ok(reexport.indeterminateForms.includes("reexport"))
+  })
+})
+
+test("A6: a wrapper-assigned POST is reported and fails closed", () => {
+  withFixtureDir((dir) => {
+    const report = analyzeRouteFile(write(dir, "route.ts", `import { withSecuredRoute } from "@/lib/security/session"\nfunction inner(request){ return new Response() }\nexport const POST = withSecuredRoute(inner)\n`))
+    assert.deepEqual(report.recognizedMethods, ["POST"])
+    const wrapped = report.methodExports.find((m) => m.method === "POST")
+    assert.equal(wrapped?.form, "wrapper-const")
+    assert.equal(wrapped?.analyzable, false)
+    assert.ok(report.indeterminateForms.includes("wrapper-const"))
+  })
+})
+
+test("A7: a route file with zero recognized HTTP methods produces an explicit result", () => {
+  withFixtureDir((dir) => {
+    const report = analyzeRouteFile(write(dir, "route.ts", `export const config = { runtime: "edge" }\nfunction helper(){ return 1 }\n`))
+    assert.equal(report.hasZeroRecognizedMethods, true)
+    assert.deepEqual(report.recognizedMethods, [])
+    assert.deepEqual(report.methodExports, [])
+  })
+})
+
+test("A8: aggregate method-count equality MASKS a per-route regression; per-route comparison catches it", () => {
+  // Two inventories with identical TOTAL method counts but a per-route swap.
+  const pinned: Record<string, string[]> = { routeA: ["GET", "POST"], routeB: ["GET"] }
+  const regressed: Record<string, string[]> = { routeA: ["GET"], routeB: ["GET", "POST"] }
+  const total = (inv: Record<string, string[]>) => Object.values(inv).reduce((n, m) => n + m.length, 0)
+  // An aggregate-count gate would PASS (masking the regression):
+  assert.equal(total(pinned), total(regressed))
+  // A per-route comparison DETECTS it (this is why the route test pins per-file):
+  assert.notDeepEqual(regressed.routeA, pinned.routeA)
+})
+
+// ═══ B. retained soundness cases ═════════════════════════════════
+
+test("B1: `import Default, { type X }` is a VALUE import and is runtime-reachable", () => {
   withFixtureDir((dir) => {
     const dep = write(dir, "dep.mts", `const d = 1\nexport default d\nexport type X = number\n`)
     const entry = write(dir, "entry.mts", `import Dep, { type X } from "./dep.mts"\nexport const v = Dep\n`)
     const edge = firstEdge(entry, "./dep.mts")
     assert.equal(edge.edgeKind, "static-import")
     assert.equal(edge.isTypeOnly, false)
-    assert.ok(reachableFrom([entry], { runtimeOnly: true }).has(dep), "value edge not followed by runtime reachability")
+    assert.ok(reachableFrom([entry]).has(dep))
   })
 })
 
-// ─── 2. named type-only export is type-only (excluded from runtime) ─
-
-test("case 2: `export type { X } from` is type-only and NOT runtime-reachable", () => {
+test("B2: `export type { X } from` is type-only and NOT runtime-reachable", () => {
   withFixtureDir((dir) => {
     const dep = write(dir, "dep.mts", `export type X = number\n`)
     const mod = write(dir, "mod.mts", `export type { X } from "./dep.mts"\n`)
-    const edge = firstEdge(mod, "./dep.mts")
-    assert.equal(edge.isTypeOnly, true)
-    assert.equal(reachableFrom([mod], { runtimeOnly: true }).has(dep), false)
+    assert.equal(firstEdge(mod, "./dep.mts").isTypeOnly, true)
+    assert.equal(reachableFrom([mod]).has(dep), false)
   })
 })
 
-// ─── 3. mixed value/type export is a VALUE export ────────────────
-
-test("case 3: `export { type X, valueY } from` is a VALUE export and IS runtime-reachable", () => {
+test("B3: `export { type X, valueY } from` is a VALUE export and IS runtime-reachable", () => {
   withFixtureDir((dir) => {
     const dep = write(dir, "dep.mts", `export const valueY = 1\nexport type X = number\n`)
     const mod = write(dir, "mod.mts", `export { type X, valueY } from "./dep.mts"\n`)
-    const edge = firstEdge(mod, "./dep.mts")
+    assert.equal(firstEdge(mod, "./dep.mts").isTypeOnly, false)
+    assert.ok(reachableFrom([mod]).has(dep))
+  })
+})
+
+test("B4: `import Default, { type X }` from an infrastructure impl is a rejected VALUE dependency", () => {
+  withFixtureDir((dir) => {
+    const f = write(dir, "svc.ts", `import RealClient, { type GitHubApiClient } from "@/lib/infrastructure/external/github/realGitHubClient"\nexport const c = RealClient\nexport type T = GitHubApiClient\n`)
+    const edge = firstEdge(f, "@/lib/infrastructure/external/github/realGitHubClient")
+    assert.equal(edge.edgeKind, "static-import", "default+named-type must be a VALUE import")
     assert.equal(edge.isTypeOnly, false)
-    assert.ok(reachableFrom([mod], { runtimeOnly: true }).has(dep))
+    assert.equal(classifyApplicationEdge(edge).ok, false)
   })
 })
 
-// ─── 4. type-only import from a forbidden implementation fails ───
-
-test("case 4: type-only import of a persistence/infrastructure IMPLEMENTATION is rejected", () => {
+test("B5: a pure type-only import of a persistence/infra implementation is rejected", () => {
   withFixtureDir((dir) => {
-    const f = write(dir, "svc.ts", [
-      `import type { D1WorkUnitRepository } from "@/lib/persistence/d1/workUnitRepository"`,
-      `import type { RealGitHubClient } from "@/lib/infrastructure/external/github/realGitHubClient"`,
-      `export type Z = D1WorkUnitRepository | RealGitHubClient`,
-    ].join("\n") + "\n")
     for (const spec of ["@/lib/persistence/d1/workUnitRepository", "@/lib/infrastructure/external/github/realGitHubClient"]) {
+      const f = write(dir, `t_${spec.replace(/\W/g, "_")}.ts`, `import type { X } from "${spec}"\nexport type Z = X\n`)
       const edge = firstEdge(f, spec)
-      assert.equal(edge.isTypeOnly, true, `${spec} should parse as type-only`)
-      assert.ok(edge.resolvedTarget, `${spec} should resolve via tsconfig`)
-      const v = classifyApplicationEdge(edge)
-      assert.equal(v.ok, false, `type-only import of implementation ${spec} must be rejected`)
+      assert.equal(edge.isTypeOnly, true)
+      assert.ok(edge.resolvedTarget)
+      assert.equal(classifyApplicationEdge(edge).ok, false, `${spec} type-only import must be rejected`)
     }
-    // Control: a legitimate exact type-only exception IS allowed.
-    const allowed = firstEdge(
-      write(dir, "ok.ts", `import type { D1DatabaseLike } from "@/lib/persistence/d1/types"\nexport type Q = D1DatabaseLike\n`),
-      "@/lib/persistence/d1/types",
-    )
-    const okEdge: DependencyEdge = { ...allowed, sourceFile: abs("app/lib/application/auth/sessionResolver.ts") }
-    assert.equal(classifyApplicationEdge(okEdge).ok, true, "exact type-only contract exception should be allowed")
   })
 })
 
-// ─── 5. configured alias resolution comes from the loaded tsconfig ─
-
-test("case 5: `@/` alias is resolved through the loaded tsconfig paths", () => {
+test("B6: `@/` alias resolves through the loaded tsconfig paths", () => {
   const paths = loadTsConfig().options.paths
-  assert.ok(paths && paths["@/*"], "tsconfig must define the @/* path mapping")
-  const r = resolveSpecifier(abs("app/page.tsx"), "@/lib/security/session")
-  assert.equal(r.targetKind, "alias")
-  assert.equal(r.resolvedTarget, abs("app/lib/security/session.ts"))
-  // A deep alias only resolvable via the configured mapping.
-  assert.equal(
-    resolveSpecifier(abs("app/api/workunit/inbox/route.ts"), "@/lib/persistence/types").resolvedTarget,
-    abs("app/lib/persistence/types.ts"),
-  )
+  assert.ok(paths && paths["@/*"], "tsconfig must define @/*")
+  assert.equal(resolveSpecifier(abs("app/page.tsx"), "@/lib/security/session").resolvedTarget, abs("app/lib/security/session.ts"))
+  assert.equal(resolveSpecifier(abs("app/api/workunit/inbox/route.ts"), "@/lib/persistence/types").resolvedTarget, abs("app/lib/persistence/types.ts"))
 })
 
-// ─── 6-10. guard identity & dominance cannot be fooled ───────────
-
-test("case 6: a CONDITIONAL guard does not dominate the effect", () => {
+test("B7: a property-name guard spoof and a locally shadowed guard are not counted as direct guards", () => {
   withFixtureDir((dir) => {
-    const f = write(dir, "route.ts", `${IMPORT_SESSION}\nexport async function POST(request){\n  if (request) requireSession(request)\n  store.put(request)\n  return new Response()\n}\n`)
-    assert.equal(post(f).dominatingGuards.has("requireSession"), false)
+    const spoof = analyzeRouteFile(write(dir, "r1.ts", `${IMPORT_SESSION}\nexport async function POST(request){ logger.requireSession(request); return new Response() }\n`))
+    assert.equal(spoof.methodExports[0].directGuards.has("requireSession"), false)
+    const shadow = analyzeRouteFile(write(dir, "r2.ts", `${IMPORT_SESSION}\nexport async function POST(request){ const requireSession = () => true; requireSession(request); return new Response() }\n`))
+    assert.equal(shadow.methodExports[0].directGuards.has("requireSession"), false)
+    // Control: a genuine canonical (aliased) import IS counted.
+    const genuine = analyzeRouteFile(write(dir, "r3.ts", `import { requireSession as resolveSession } from "@/lib/security/session"\nexport async function POST(request){ resolveSession(request); return new Response() }\n`))
+    assert.equal(genuine.methodExports[0].directGuards.has("requireSession"), true)
   })
 })
 
-test("case 7: a guard in an UNINVOKED nested function does not dominate", () => {
+test("B8: bare provider packages, Node builtins, require, and dynamic infra imports are rejected in application", () => {
   withFixtureDir((dir) => {
-    const f = write(dir, "route.ts", `${IMPORT_SESSION}\nexport async function POST(request){\n  function helper(){ requireSession(request) }\n  store.put(request)\n  return new Response()\n}\n`)
-    assert.equal(post(f).dominatingGuards.has("requireSession"), false)
-  })
-})
-
-test("case 8: a guard in a DELAYED callback does not dominate", () => {
-  withFixtureDir((dir) => {
-    const f = write(dir, "route.ts", `${IMPORT_SESSION}\nexport async function POST(request){\n  setTimeout(() => requireSession(request), 0)\n  store.put(request)\n  return new Response()\n}\n`)
-    assert.equal(post(f).dominatingGuards.has("requireSession"), false)
-  })
-})
-
-test("case 9: a PROPERTY-NAME guard spoof (logger.requireSession) is not a guard", () => {
-  withFixtureDir((dir) => {
-    const f = write(dir, "route.ts", `${IMPORT_SESSION}\nexport async function POST(request){\n  logger.requireSession(request)\n  return new Response()\n}\n`)
-    assert.equal(post(f).dominatingGuards.has("requireSession"), false)
-  })
-})
-
-test("case 10: a LOCALLY SHADOWED guard function is not the canonical guard", () => {
-  withFixtureDir((dir) => {
-    // Imports the real guard AND shadows it with a local of the same name.
-    const f = write(dir, "route.ts", `${IMPORT_SESSION}\nexport async function POST(request){\n  const requireSession = () => true\n  requireSession(request)\n  store.put(request)\n  return new Response()\n}\n`)
-    assert.equal(post(f).dominatingGuards.has("requireSession"), false)
-    // A pure local (no import at all) is likewise not counted.
-    const g = write(dir, "route2.ts", `export async function POST(request){\n  const requireSession = () => true\n  requireSession(request)\n  return new Response()\n}\n`)
-    assert.equal(post(g).dominatingGuards.has("requireSession"), false)
-  })
-})
-
-// ─── 11. newly discovered unclassified route fails closed ────────
-
-test("case 11: a discovered route with an unclassified HTTP method fails coverage", () => {
-  withFixtureDir((dir) => {
-    const f = write(dir, "route.ts", `export async function PUT(request){ return new Response() }\n`)
-    const coverage = routePolicyCoverage([f])
-    const put = coverage.find((c) => c.method === "PUT")
-    assert.ok(put, "PUT handler not discovered")
-    assert.equal(put.policy, "unclassified")
-    assert.equal(put.ok, false)
-  })
-})
-
-// ─── 12. state-changing sinks are recognized and must be dominated ─
-
-test("case 12: unregistered/effect-capable sinks are detected and require dominance", () => {
-  withFixtureDir((dir) => {
-    // Each Phase-7 sink verb is detected as an effect.
-    const sinks: Array<[string, string]> = [
-      ["repository.save(x)", "save"],
-      ["store.put(x)", "put"],
-      ["provider.send(x)", "send"],
-      ["client.post(x)", "post"],
-      ["queue.enqueue(x)", "enqueue"],
-      ["db.batch(x)", "batch"],
-    ]
-    for (const [call, label] of sinks) {
-      const f = write(dir, `s_${label}.ts`, `export async function POST(x){ ${call}\n return new Response() }\n`)
-      assert.ok(post(f).effectsReached.has(label), `sink ${call} not detected as effect`)
-    }
-    // And an effect placed BEFORE the guard breaks dominance.
-    const g = write(dir, "order.ts", `${IMPORT_SESSION}\nexport async function POST(request){\n  store.put(request)\n  requireSession(request)\n  return new Response()\n}\n`)
-    assert.equal(post(g).dominatingGuards.has("requireSession"), false, "guard after an effect must not be counted as dominant")
-  })
-})
-
-// ─── 13. a harmless same-name method is NOT an effect ────────────
-
-test("case 13: an unrelated object's create() is NOT classified as a repository effect", () => {
-  withFixtureDir((dir) => {
-    const f = write(dir, "route.ts", `export async function POST(x){ const b = builder.create(x); const u = new URL("x"); return b }\n`)
-    const r = post(f)
-    assert.equal(r.effectsReached.has("create"), false, "harmless builder.create() must not be an effect")
-  })
-})
-
-// ─── 14-16. domain env-authority AST detection ───────────────────
-
-test("case 14: process[\"env\"] element access is detected (not just process.env)", () => {
-  withFixtureDir((dir) => {
-    const f = write(dir, "d.ts", `export const x = process["env"].SECRET\n`)
-    assert.ok(processSymbolReferences(f) > 0)
-  })
-})
-
-test("case 15: destructured and aliased process access is detected", () => {
-  withFixtureDir((dir) => {
-    const destructured = write(dir, "d1.ts", `const { env } = process\nexport const x = env.SECRET\n`)
-    assert.ok(processSymbolReferences(destructured) > 0, "destructured process not detected")
-    const aliased = write(dir, "d2.ts", `const p = process\nexport const x = p.env.SECRET\n`)
-    assert.ok(processSymbolReferences(aliased) > 0, "aliased process not detected")
-  })
-})
-
-test("case 16: process.env inside a comment or string produces NO false positive", () => {
-  withFixtureDir((dir) => {
-    const f = write(dir, "d.ts", `// process.env.FOO is only mentioned here\n/* process.env.BAR */\nexport const note = "reads process.env at runtime"\nexport const z = 1\n`)
-    assert.equal(processSymbolReferences(f), 0)
-  })
-})
-
-// ─── supporting soundness (retained from round 1) ────────────────
-
-test("bare provider packages, Node builtins, require, and dynamic infra imports are rejected in application", () => {
-  withFixtureDir((dir) => {
-    const provider = firstEdge(write(dir, "a.ts", `import { WebClient } from "@slack/web-api"\nexport const c = WebClient\n`), "@slack/web-api")
-    assert.equal(classifyApplicationEdge(provider).ok, false)
-    const builtin = firstEdge(write(dir, "b.ts", `import fs from "node:fs"\nexport const x = fs\n`), "node:fs")
-    assert.equal(classifyApplicationEdge(builtin).ok, false)
-    const sideEffect = firstEdge(write(dir, "c.ts", `import "@slack/web-api"\nexport const x = 1\n`), "@slack/web-api")
-    assert.equal(sideEffect.edgeKind, "side-effect-import")
-    assert.equal(classifyApplicationEdge(sideEffect).ok, false)
+    assert.equal(classifyApplicationEdge(firstEdge(write(dir, "a.ts", `import { WebClient } from "@slack/web-api"\nexport const c = WebClient\n`), "@slack/web-api")).ok, false)
+    assert.equal(classifyApplicationEdge(firstEdge(write(dir, "b.ts", `import fs from "node:fs"\nexport const x = fs\n`), "node:fs")).ok, false)
+    const se = firstEdge(write(dir, "c.ts", `import "@slack/web-api"\nexport const x = 1\n`), "@slack/web-api")
+    assert.equal(se.edgeKind, "side-effect-import")
+    assert.equal(classifyApplicationEdge(se).ok, false)
     const req = firstEdge(write(dir, "d.ts", `const r = require("../../infrastructure/x")\nexport const x = r\n`), "../../infrastructure/x")
     assert.equal(req.edgeKind, "require")
     assert.equal(classifyApplicationEdge(req).ok, false)
@@ -265,21 +227,21 @@ test("bare provider packages, Node builtins, require, and dynamic infra imports 
   })
 })
 
-test("an exact exception authorizes ONLY its own source→target pair", () => {
+test("B9: an exact exception authorizes ONLY its own source→target→edge-kind", () => {
   const source = "app/lib/application/auth/sessionResolver.ts"
   const otherInfra = "app/lib/infrastructure/external/github/realGitHubClient.ts"
   const forged: DependencyEdge = {
     sourceFile: abs(source), specifier: "@/lib/infrastructure/external/github/realGitHubClient",
     edgeKind: "static-import", targetKind: "alias", resolvedTarget: abs(otherInfra), isTypeOnly: false, isLiteral: true,
   }
-  assert.equal(classifyApplicationEdge(forged).ok, false, "a new forbidden import from the allowlisted source must be rejected")
+  assert.equal(classifyApplicationEdge(forged).ok, false)
   for (const exc of APPLICATION_VALUE_EXCEPTIONS) {
-    const okEdge: DependencyEdge = { sourceFile: abs(exc.source), specifier: "x", edgeKind: "static-import", targetKind: "relative", resolvedTarget: abs(exc.target), isTypeOnly: false, isLiteral: true }
+    const okEdge: DependencyEdge = { sourceFile: abs(exc.source), specifier: "x", edgeKind: exc.edgeKind, targetKind: "relative", resolvedTarget: abs(exc.target), isTypeOnly: false, isLiteral: true }
     assert.equal(classifyApplicationEdge(okEdge).ok, true)
   }
 })
 
-test("domain policy detects provider/builtin/require/cross-layer edges", () => {
+test("B10: domain policy detects provider/builtin/require/cross-layer edges and process references", () => {
   withFixtureDir((dir) => {
     const cases: Array<[string, string]> = [
       [`import { WebClient } from "@slack/web-api"\nexport const x=WebClient`, "@slack/web-api"],
@@ -295,7 +257,7 @@ test("domain policy detects provider/builtin/require/cross-layer edges", () => {
   })
 })
 
-test("all required dependency forms are parsed", () => {
+test("B11: all required dependency forms are parsed", () => {
   withFixtureDir((dir) => {
     write(dir, "dep.ts", `export const a = 1\n`)
     const f = write(dir, "forms.ts", [
@@ -315,7 +277,7 @@ test("all required dependency forms are parsed", () => {
   })
 })
 
-test("target kinds are classified via the config resolver", () => {
+test("B12: target kinds are classified via the config resolver", () => {
   assert.equal(resolveSpecifier(abs("app/api/workunit/inbox/route.ts"), "../../../lib/security/session.ts").targetKind, "relative")
   assert.equal(resolveSpecifier(abs("app/page.tsx"), "@/components/workunit-os/WorkUnitOSDashboard").targetKind, "alias")
   assert.equal(resolveSpecifier(abs("app/page.tsx"), "react").targetKind, "bare-package")
@@ -323,9 +285,7 @@ test("target kinds are classified via the config resolver", () => {
   assert.equal(resolveSpecifier(abs("app/page.tsx"), "./does-not-exist-xyz").targetKind, "unresolved-internal")
 })
 
-test("type-only exception list is well-formed (all typeOnly=true, exact)", () => {
-  for (const exc of APPLICATION_TYPEONLY_EXCEPTIONS) {
-    assert.equal(exc.typeOnly, true)
-    assert.ok(fs.existsSync(abs(exc.source)) && fs.existsSync(abs(exc.target)))
-  }
+test("B13: exception lists are well-formed (exact edge-kind + modality)", () => {
+  for (const exc of APPLICATION_VALUE_EXCEPTIONS) { assert.equal(exc.typeOnly, false); assert.equal(exc.edgeKind, "static-import"); assert.ok(fs.existsSync(abs(exc.source)) && fs.existsSync(abs(exc.target))) }
+  for (const exc of APPLICATION_TYPEONLY_EXCEPTIONS) { assert.equal(exc.typeOnly, true); assert.equal(exc.edgeKind, "type-only-import"); assert.ok(fs.existsSync(abs(exc.source)) && fs.existsSync(abs(exc.target))) }
 })

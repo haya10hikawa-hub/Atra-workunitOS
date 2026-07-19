@@ -306,10 +306,14 @@ export function classifyDomainEdge(edge: DependencyEdge): PolicyResult {
   return deny(`domain must not import ${t}`)
 }
 
-/** Exact edge exception; `typeOnly` records the required edge modality. */
+/** Exact edge exception. `edgeKind` and `typeOnly` pin the EXACT dependency form
+ *  the exception tolerates; an edge that matches source+target but differs in
+ *  edgeKind (e.g. a dynamic import where a static import was tolerated) is NOT
+ *  covered and remains a violation. */
 export interface EdgeException {
   readonly source: string // repo-relative
   readonly target: string // repo-relative
+  readonly edgeKind: EdgeKind // EXACT dependency form tolerated
   readonly typeOnly: boolean // true = tolerated ONLY as a type-only edge
   readonly reason: string
   readonly removalIssue: string
@@ -318,20 +322,20 @@ export interface EdgeException {
 // Roots an application module may depend on without an exception.
 const APPLICATION_ALLOWED_ROOTS = ["app/lib/domain/", "app/lib/application/", "app/lib/tenant/"]
 
-/** Exact VALUE-edge exceptions (each authorizes ONLY its one source→target pair). */
+/** Exact VALUE-edge exceptions (each authorizes ONLY its one source→target+form). */
 export const APPLICATION_VALUE_EXCEPTIONS: readonly EdgeException[] = [
-  { source: "app/lib/application/auth/sessionResolver.ts", target: "app/lib/infrastructure/persistence/control/controlRepositoryResolver.ts", typeOnly: false, reason: "sessionResolver constructs control repositories directly; invert behind a port", removalIssue: "#182 (refactor/tenant-security)" },
-  { source: "app/lib/application/auth/sessionResolver.ts", target: "app/lib/runtime/requestRuntimeConfig.ts", typeOnly: false, reason: "sessionResolver reads the runtime env authority directly; thread from composition root", removalIssue: "#182 (refactor/tenant-security)" },
-  { source: "app/lib/application/auth/sessionResolver.ts", target: "app/lib/security/policy.ts", typeOnly: false, reason: "sessionResolver uses RBAC role normalization; move behind an auth port", removalIssue: "#182 (refactor/tenant-security)" },
+  { source: "app/lib/application/auth/sessionResolver.ts", target: "app/lib/infrastructure/persistence/control/controlRepositoryResolver.ts", edgeKind: "static-import", typeOnly: false, reason: "sessionResolver constructs control repositories directly; invert behind a port", removalIssue: "#182 (refactor/tenant-security)" },
+  { source: "app/lib/application/auth/sessionResolver.ts", target: "app/lib/runtime/requestRuntimeConfig.ts", edgeKind: "static-import", typeOnly: false, reason: "sessionResolver reads the runtime env authority directly; thread from composition root", removalIssue: "#182 (refactor/tenant-security)" },
+  { source: "app/lib/application/auth/sessionResolver.ts", target: "app/lib/security/policy.ts", edgeKind: "static-import", typeOnly: false, reason: "sessionResolver uses RBAC role normalization; move behind an auth port", removalIssue: "#182 (refactor/tenant-security)" },
 ]
 
 /** Exact TYPE-ONLY-edge exceptions (shared-contract type imports; must be type-only). */
 export const APPLICATION_TYPEONLY_EXCEPTIONS: readonly EdgeException[] = [
-  { source: "app/lib/application/auth/resolveAuthAdapter.ts", target: "app/lib/runtime/requestRuntimeConfig.ts", typeOnly: true, reason: "AuthRuntimeConfig type contract", removalIssue: "#182 (ports extraction)" },
-  { source: "app/lib/application/auth/sessionResolver.ts", target: "app/lib/persistence/d1/types.ts", typeOnly: true, reason: "D1DatabaseLike type contract", removalIssue: "#182 (ports extraction)" },
-  { source: "app/lib/application/workunitInbox/persistenceMapping.ts", target: "app/lib/persistence/types.ts", typeOnly: true, reason: "persistence row type contract", removalIssue: "#182 (ports extraction)" },
-  { source: "app/lib/application/decomposition/types.ts", target: "app/lib/llm/types.ts", typeOnly: true, reason: "LLM boundary type contract", removalIssue: "#182 (ports extraction)" },
-  { source: "app/lib/application/actionField/errorState.ts", target: "app/lib/security/safeErrors.ts", typeOnly: true, reason: "safe-error code type contract", removalIssue: "#182 (ports extraction)" },
+  { source: "app/lib/application/auth/resolveAuthAdapter.ts", target: "app/lib/runtime/requestRuntimeConfig.ts", edgeKind: "type-only-import", typeOnly: true, reason: "AuthRuntimeConfig type contract", removalIssue: "#182 (ports extraction)" },
+  { source: "app/lib/application/auth/sessionResolver.ts", target: "app/lib/persistence/d1/types.ts", edgeKind: "type-only-import", typeOnly: true, reason: "D1DatabaseLike type contract", removalIssue: "#182 (ports extraction)" },
+  { source: "app/lib/application/workunitInbox/persistenceMapping.ts", target: "app/lib/persistence/types.ts", edgeKind: "type-only-import", typeOnly: true, reason: "persistence row type contract", removalIssue: "#182 (ports extraction)" },
+  { source: "app/lib/application/decomposition/types.ts", target: "app/lib/llm/types.ts", edgeKind: "type-only-import", typeOnly: true, reason: "LLM boundary type contract", removalIssue: "#182 (ports extraction)" },
+  { source: "app/lib/application/actionField/errorState.ts", target: "app/lib/security/safeErrors.ts", edgeKind: "type-only-import", typeOnly: true, reason: "safe-error code type contract", removalIssue: "#182 (ports extraction)" },
 ]
 
 // Backward-compatible alias (value exceptions) retained for existing imports.
@@ -363,18 +367,32 @@ export function classifyApplicationEdge(edge: DependencyEdge, options: Applicati
 
   // Unresolved internal that is not one of the forbidden dynamic fixtures: still
   // a violation (an application module must resolve within allowed roots).
+  // An exception must match source, target, EXACT edgeKind, and modality.
   const src = rel(edge.sourceFile)
+  const matches = (x: EdgeException): boolean => x.source === src && x.target === targetRel && x.edgeKind === edge.edgeKind
   if (edge.isTypeOnly) {
-    if (typeExc.some((x) => x.source === src && x.target === targetRel && x.typeOnly)) return OK
+    if (typeExc.some((x) => matches(x) && x.typeOnly)) return OK
     return deny(`application type-only import of non-contract module ${targetRel}`)
   }
   // value edge (incl. dynamic-import) into a non-allowed layer
-  if (valueExc.some((x) => x.source === src && x.target === targetRel && !x.typeOnly)) return OK
+  if (valueExc.some((x) => matches(x) && !x.typeOnly)) return OK
   // dynamic import whose specifier names a forbidden layer but did not resolve (fixture)
   return deny(`application must not take a value dependency on ${targetRel || edge.specifier}`)
 }
 
-// ═══ §E  route model: canonical guards, effect sinks, dominance ══
+// ═══ §E  route model: inventory + direct guard characterization ══
+//
+// SCOPE OF PROOF (deliberately narrow). These gates prove, per route MODULE:
+//   - the set of exported HTTP methods and their export FORM;
+//   - for statically analyzable forms (function declaration / function const),
+//     whether each canonical guard is CALLED DIRECTLY in the handler body, by
+//     canonical import identity.
+// They do NOT prove runtime guard dominance across arbitrary control flow, nor
+// that effects performed by IMPORTED application services are guarded, nor a
+// general "effect" boundary by method/receiver name. Indeterminate export forms
+// (aliased export, re-export, wrapper-assigned const) are reported and FAIL
+// CLOSED — they are not claimed covered. Runtime enforcement is tracked in the
+// canonical-secured-route Issue #185.
 
 const HTTP_METHODS = new Set(["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
 
@@ -390,14 +408,6 @@ const GUARD_CANONICAL: Readonly<Record<string, string>> = {
 }
 export const REQUIRED_POST_GUARDS = ["requireSession", "validateCsrfOrigin", "checkRateLimit", "readBoundedJsonObject"] as const
 export const REQUIRED_GET_GUARDS = ["requireSession", "resolveValidatedRequestRuntimeConfig"] as const
-
-// Exact effect sinks. Unambiguous write verbs are effects on any receiver;
-// ambiguous verbs are effects only on a persistence/provider-shaped receiver.
-const WRITE_VERBS = new Set(["upsert", "insert", "update", "updateStatus", "delete", "append", "recordEvent", "save", "put", "enqueue", "batch", "execute", "markApprovalUsed", "claimApprovalForRuntime"])
-const AMBIGUOUS_VERBS = new Set(["create", "post", "send", "run"])
-const EFFECT_RECEIVER = /^(repo|repository|repositories|store|approvalStore|provider|client|queue|db|database|usage|auditLogs|workUnits|previews|previewRepo|approvalRepo|approvalRecords|actionPreviews|feedback|bundle)$/i
-// Distinctive bare effect functions (imported): treated as effects by name.
-const BARE_EFFECT_FUNCS = new Set(["runToolBackendRequest", "authorizeRuntimeCommand"])
 
 interface ImportBinding { readonly moduleFile: string | null; readonly exported: string }
 
@@ -454,220 +464,221 @@ function collectLocalDeclarationNames(handlerBody: ts.Node): Set<string> {
   return names
 }
 
-function effectForCall(call: ts.CallExpression): string | null {
-  const e = call.expression
-  if (ts.isPropertyAccessExpression(e)) {
-    const method = e.name.text
-    if (WRITE_VERBS.has(method)) return method
-    if (AMBIGUOUS_VERBS.has(method)) {
-      const recv = ts.isIdentifier(e.expression) ? e.expression.text : (ts.isPropertyAccessExpression(e.expression) ? e.expression.name.text : "")
-      if (EFFECT_RECEIVER.test(recv)) return method
-    }
-    return null
-  }
-  if (ts.isIdentifier(e) && BARE_EFFECT_FUNCS.has(e.text)) return e.text
-  return null
-}
-
-export interface HandlerReport {
-  readonly method: string
-  readonly policy: "GET" | "POST" | "unclassified"
-  /** canonical guards called at depth-0 (unconditional) before the first direct effect */
-  readonly dominatingGuards: ReadonlySet<string>
-  /** first direct (non-inlined) effect position; Infinity if none */
-  readonly firstEffectPos: number
-  /** effect labels reachable following called local helpers (for #156) */
-  readonly effectsReached: ReadonlySet<string>
-}
-
-function collectLocalFunctions(sf: ts.SourceFile): Map<string, ts.Node> {
-  const fns = new Map<string, ts.Node>()
-  for (const stmt of sf.statements) {
-    if (ts.isFunctionDeclaration(stmt) && stmt.name && stmt.body) fns.set(stmt.name.text, stmt.body)
-    else if (ts.isVariableStatement(stmt)) {
-      for (const d of stmt.declarationList.declarations) {
-        if (ts.isIdentifier(d.name) && d.initializer && (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer))) fns.set(d.name.text, d.initializer.body)
-      }
-    }
-  }
-  return fns
+function hasExportModifier(node: ts.Node): boolean {
+  const mods = ts.canHaveModifiers(node) ? ts.getModifiers(node) : undefined
+  return !!mods && mods.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
 }
 
 function isFunctionLike(n: ts.Node): boolean {
   return ts.isArrowFunction(n) || ts.isFunctionExpression(n) || ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n)
 }
 
-/**
- * Depth-0 dominance walk. A call is "depth-0" (unconditionally executed before
- * any later statement) when reached from the handler body without descending
- * through: an if/else/loop/switch/try BODY, a function/arrow/callback body, or
- * the conditional side of a ternary / `&&` / `||`. The TEST of an `if`/`while`
- * and the initializer/arguments of depth-0 expressions ARE depth-0.
- *
- * Guards are recorded (by canonical identity) only at depth-0. Effects are
- * recorded at any depth (they must all be dominated). Guard dominance holds when
- * every required guard has a depth-0 call before the first direct effect.
- */
-function analyzeDominance(handlerBody: ts.Node, bindings: Map<string, ImportBinding>): {
-  dominatingGuards: Set<string>
-  firstEffectPos: number
-} {
-  const guardPos = new Map<string, number>() // guard → earliest depth-0 pos
-  let firstEffectPos = Infinity
+/** Canonical guards called DIRECTLY in a handler body (not inside a nested
+ *  function/arrow), by canonical import identity. A source-presence
+ *  characterization — NOT a runtime dominance/ordering proof. */
+function directGuardCalls(handlerBody: ts.Node, bindings: Map<string, ImportBinding>): Set<string> {
   const shadowed = collectLocalDeclarationNames(handlerBody)
-
-  const walk = (node: ts.Node, depth0: boolean): void => {
-    if (isFunctionLike(node)) { walkChildren(node, false); return }
-    if (ts.isCallExpression(node)) {
+  const found = new Set<string>()
+  const walk = (node: ts.Node, insideNested: boolean): void => {
+    if (isFunctionLike(node)) { ts.forEachChild(node, (c) => walk(c, true)); return }
+    if (!insideNested && ts.isCallExpression(node)) {
       const g = guardForCall(node, bindings, shadowed)
-      if (g && depth0) guardPos.set(g, Math.min(guardPos.get(g) ?? Infinity, node.getStart()))
-      const eff = effectForCall(node)
-      if (eff) firstEffectPos = Math.min(firstEffectPos, node.getStart())
-      // callee object + arguments evaluate at the same conditionality as the call
-      walk(node.expression, depth0)
-      for (const arg of node.arguments) walk(arg, depth0)
-      return
+      if (g) found.add(g)
     }
-    if (ts.isIfStatement(node)) {
-      walk(node.expression, depth0) // test runs unconditionally
-      walk(node.thenStatement, false)
-      if (node.elseStatement) walk(node.elseStatement, false)
-      return
-    }
-    if (ts.isConditionalExpression(node)) {
-      walk(node.condition, depth0)
-      walk(node.whenTrue, false)
-      walk(node.whenFalse, false)
-      return
-    }
-    if (ts.isBinaryExpression(node)) {
-      const op = node.operatorToken.kind
-      if (op === ts.SyntaxKind.AmpersandAmpersandToken || op === ts.SyntaxKind.BarBarToken || op === ts.SyntaxKind.QuestionQuestionToken) {
-        walk(node.left, depth0)
-        walk(node.right, false) // short-circuited
-        return
-      }
-    }
-    if (ts.isForStatement(node) || ts.isForOfStatement(node) || ts.isForInStatement(node) || ts.isWhileStatement(node) || ts.isDoStatement(node) || ts.isSwitchStatement(node) || ts.isTryStatement(node)) {
-      walkChildren(node, false)
-      return
-    }
-    walkChildren(node, depth0)
+    ts.forEachChild(node, (c) => walk(c, insideNested))
   }
-  const walkChildren = (node: ts.Node, depth0: boolean): void => ts.forEachChild(node, (c) => walk(c, depth0))
-
-  walk(handlerBody, true)
-  const dominatingGuards = new Set<string>()
-  for (const [g, pos] of guardPos) if (pos < firstEffectPos) dominatingGuards.add(g)
-  return { dominatingGuards, firstEffectPos }
+  walk(handlerBody, false)
+  return found
 }
 
-/** Effects reachable following CALLED local helpers (for #156 write-path proof). */
-function collectEffectsReached(handlerBody: ts.Node, localFns: Map<string, ts.Node>): Set<string> {
-  const effects = new Set<string>()
-  const inlined = new Set<string>()
-  const walk = (node: ts.Node): void => {
-    if (ts.isCallExpression(node)) {
-      const eff = effectForCall(node)
-      if (eff) effects.add(eff)
-      if (ts.isIdentifier(node.expression)) {
-        const body = localFns.get(node.expression.text)
-        if (body && !inlined.has(node.expression.text)) { inlined.add(node.expression.text); walk(body) }
-      }
-      walk(node.expression)
-      for (const a of node.arguments) walk(a)
-      return
-    }
-    ts.forEachChild(node, walk)
-  }
-  walk(handlerBody)
-  return effects
+/** How an HTTP method is exported from a route module. Only the first two forms
+ *  are statically analyzable; the rest bind the handler indirectly and are
+ *  reported as INDETERMINATE (fail closed — not claimed covered). */
+export type RouteExportForm =
+  | "function-declaration" // export function POST() {}
+  | "function-const" // export const POST = () => {} / function expr
+  | "wrapper-const" // export const POST = wrapper(handler)
+  | "aliased-export" // export { handler as POST }
+  | "reexport" // export { POST } from "./x"
+
+const ANALYZABLE_FORMS: ReadonlySet<RouteExportForm> = new Set<RouteExportForm>(["function-declaration", "function-const"])
+
+export interface RouteMethodExport {
+  readonly method: string
+  readonly form: RouteExportForm
+  readonly analyzable: boolean
+  /** canonical guards called directly in the handler body (analyzable forms only). */
+  readonly directGuards: ReadonlySet<string>
 }
 
-function policyFor(method: string): "GET" | "POST" | "unclassified" {
-  if (method === "GET") return "GET"
-  if (method === "POST") return "POST"
-  return "unclassified"
+export interface RouteFileReport {
+  readonly file: string // repo-relative
+  readonly methodExports: readonly RouteMethodExport[]
+  readonly recognizedMethods: readonly string[]
+  readonly hasZeroRecognizedMethods: boolean
+  /** export forms present that cannot be statically characterized (fail closed). */
+  readonly indeterminateForms: readonly RouteExportForm[]
 }
 
-export function analyzeRoute(absFile: string): HandlerReport[] {
+/**
+ * Enumerate EVERY HTTP-method export of a route module and classify its form.
+ * Detects (and fails closed on) aliased exports, re-exports, and wrapper-assigned
+ * consts in addition to plain function/const handlers. Always returns a report,
+ * including for a file with zero recognized HTTP exports.
+ */
+export function analyzeRouteFile(absFile: string): RouteFileReport {
   const sf = parseSourceFile(absFile)
   const bindings = buildImportBindings(sf, absFile)
-  const localFns = collectLocalFunctions(sf)
-  const reports: HandlerReport[] = []
+  const methodExports: RouteMethodExport[] = []
+
+  const pushExport = (method: string, form: RouteExportForm, body: ts.Node | null): void => {
+    const analyzable = ANALYZABLE_FORMS.has(form) && body !== null
+    methodExports.push({ method, form, analyzable, directGuards: analyzable && body ? directGuardCalls(body, bindings) : new Set() })
+  }
+
   for (const stmt of sf.statements) {
-    let name: string | undefined
-    let body: ts.Node | undefined
-    if (ts.isFunctionDeclaration(stmt) && stmt.name && stmt.body && hasExportModifier(stmt)) { name = stmt.name.text; body = stmt.body }
-    else if (ts.isVariableStatement(stmt) && hasExportModifier(stmt)) {
+    // export function POST() {}
+    if (ts.isFunctionDeclaration(stmt) && stmt.name && stmt.body && HTTP_METHODS.has(stmt.name.text) && hasExportModifier(stmt)) {
+      pushExport(stmt.name.text, "function-declaration", stmt.body)
+      continue
+    }
+    // export const POST = <arrow|funcExpr> | wrapper(handler)
+    if (ts.isVariableStatement(stmt) && hasExportModifier(stmt)) {
       for (const d of stmt.declarationList.declarations) {
-        if (ts.isIdentifier(d.name) && d.initializer && (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer))) { name = d.name.text; body = d.initializer.body }
+        if (!ts.isIdentifier(d.name) || !HTTP_METHODS.has(d.name.text)) continue
+        if (d.initializer && (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer))) {
+          pushExport(d.name.text, "function-const", d.initializer.body)
+        } else {
+          pushExport(d.name.text, "wrapper-const", null) // non-function initializer: indeterminate
+        }
+      }
+      continue
+    }
+    // export { handler as POST }  and  export { POST } from "./x"
+    if (ts.isExportDeclaration(stmt) && stmt.exportClause && ts.isNamedExports(stmt.exportClause)) {
+      const isReexport = !!stmt.moduleSpecifier
+      for (const el of stmt.exportClause.elements) {
+        const exportedName = el.name.text // the name seen by the router
+        if (!HTTP_METHODS.has(exportedName)) continue
+        pushExport(exportedName, isReexport ? "reexport" : "aliased-export", null)
       }
     }
-    if (!name || !body || !HTTP_METHODS.has(name)) continue
-    const { dominatingGuards, firstEffectPos } = analyzeDominance(body, bindings)
-    reports.push({
-      method: name,
-      policy: policyFor(name),
-      dominatingGuards,
-      firstEffectPos,
-      effectsReached: collectEffectsReached(body, localFns),
-    })
   }
-  return reports
-}
 
-function hasExportModifier(node: ts.Node): boolean {
-  const mods = ts.canHaveModifiers(node) ? ts.getModifiers(node) : undefined
-  return !!mods && mods.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
-}
-
-export interface GuardPolicyResult { readonly ok: boolean; readonly missing: readonly string[]; readonly reason: string }
-
-/** Evaluate guard dominance for one handler under its method policy. */
-export function evaluateGuardPolicy(report: HandlerReport): GuardPolicyResult {
-  if (report.policy === "unclassified") return { ok: false, missing: [], reason: `unclassified HTTP method ${report.method} — no guard policy defined` }
-  const required = report.policy === "POST" ? REQUIRED_POST_GUARDS : REQUIRED_GET_GUARDS
-  const missing = required.filter((g) => !report.dominatingGuards.has(g))
-  return { ok: missing.length === 0, missing, reason: missing.length ? `guards not proven to dominate: ${missing.join(", ")}` : "" }
-}
-
-export interface RouteCoverageEntry {
-  readonly file: string // repo-relative
-  readonly method: string
-  readonly policy: "GET" | "POST" | "unclassified"
-  readonly ok: boolean
-  readonly missing: readonly string[]
-  readonly reason: string
-}
-
-/** Exhaustive coverage: every exported HTTP method of every given route file is
- *  classified and evaluated. Unclassified methods fail closed. */
-export function routePolicyCoverage(routeFiles: readonly string[]): RouteCoverageEntry[] {
-  const entries: RouteCoverageEntry[] = []
-  for (const file of routeFiles) {
-    for (const report of analyzeRoute(file)) {
-      const verdict = evaluateGuardPolicy(report)
-      entries.push({ file: rel(file), method: report.method, policy: report.policy, ok: verdict.ok, missing: verdict.missing, reason: verdict.reason })
-    }
+  const recognizedMethods = [...new Set(methodExports.map((m) => m.method))].sort()
+  const indeterminateForms = [...new Set(methodExports.filter((m) => !m.analyzable).map((m) => m.form))]
+  return {
+    file: rel(absFile),
+    methodExports,
+    recognizedMethods,
+    hasZeroRecognizedMethods: recognizedMethods.length === 0,
+    indeterminateForms,
   }
-  return entries
+}
+
+/** One report per route FILE (including files with zero recognized methods). */
+export function routeInventory(routeFiles: readonly string[]): RouteFileReport[] {
+  return routeFiles.map(analyzeRouteFile)
+}
+
+// ── #156 EXACT current-inbox write-path characterization ─────────
+//
+// Pins the EXACT current structure of app/api/workunit/inbox/route.ts — not a
+// general effect boundary. When #156 removes the write from the GET handler,
+// these booleans flip and the pin fails, forcing the pin to be updated.
+
+function bodyCallsBareIdentifier(node: ts.Node, name: string): boolean {
+  let found = false
+  const walk = (n: ts.Node): void => {
+    if (found) return
+    if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === name) { found = true; return }
+    ts.forEachChild(n, walk)
+  }
+  walk(node)
+  return found
+}
+function bodyCallsMethod(node: ts.Node, method: string): boolean {
+  let found = false
+  const walk = (n: ts.Node): void => {
+    if (found) return
+    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && n.expression.name.text === method) { found = true; return }
+    ts.forEachChild(n, walk)
+  }
+  walk(node)
+  return found
+}
+
+export interface InboxWritePath {
+  readonly getCallsPersistWorkUnits: boolean
+  readonly persistWorkUnitsCallsUpsert: boolean
+  readonly getCallsRecordEvent: boolean
+  readonly getCallsAuditAppend: boolean
+}
+
+/** Characterize the exact current inbox GET write path (Issue #156). */
+export function inboxWritePath(absFile = abs("app/api/workunit/inbox/route.ts")): InboxWritePath {
+  const sf = parseSourceFile(absFile)
+  let getBody: ts.Node | null = null
+  let persistBody: ts.Node | null = null
+  for (const stmt of sf.statements) {
+    if (ts.isFunctionDeclaration(stmt) && stmt.name && stmt.body && hasExportModifier(stmt) && stmt.name.text === "GET") getBody = stmt.body
+    if (ts.isFunctionDeclaration(stmt) && stmt.name && stmt.body && stmt.name.text === "persistWorkUnits") persistBody = stmt.body
+  }
+  return {
+    getCallsPersistWorkUnits: getBody ? bodyCallsBareIdentifier(getBody, "persistWorkUnits") : false,
+    persistWorkUnitsCallsUpsert: persistBody ? bodyCallsMethod(persistBody, "upsert") : false,
+    getCallsRecordEvent: getBody ? bodyCallsMethod(getBody, "recordEvent") : false,
+    getCallsAuditAppend: getBody ? bodyCallsMethod(getBody, "append") : false,
+  }
 }
 
 // ═══ §F  domain environment-authority (AST, not substring) ═══════
 
+/** Does the file declare a LOCAL binding named `process` (var/let/const/function/
+ *  param/binding-element/import)? If so, a bare `process` reference resolves to
+ *  that local, not the Node global, and must be allowed. */
+function declaresLocalProcess(sf: ts.SourceFile): boolean {
+  let found = false
+  const isProcessName = (n: ts.BindingName | undefined): boolean => !!n && ts.isIdentifier(n) && n.text === "process"
+  const visit = (node: ts.Node): void => {
+    if (found) return
+    if (ts.isVariableDeclaration(node) && isProcessName(node.name)) found = true
+    else if (ts.isFunctionDeclaration(node) && node.name?.text === "process") found = true
+    else if (ts.isParameter(node) && isProcessName(node.name)) found = true
+    else if (ts.isBindingElement(node) && isProcessName(node.name)) found = true
+    else if (ts.isImportSpecifier(node) && node.name.text === "process") found = true
+    else if (ts.isImportClause(node) && node.name?.text === "process") found = true
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+  return found
+}
+
 /**
- * Detect references to the Node global `process` symbol in a source file (any
- * value use: `process.env`, `process["env"]`, `const {env} = process`,
- * `const p = process`). Comments and strings never produce an Identifier node,
- * so they cannot trigger. A local binding that shadows `process` is ignored
- * (its own declaration name is not a global reference).
+ * Detect references to the Node global `process` symbol in a source file (AST,
+ * not substring). Counts:
+ *   - bare `process` used as a value (`process.env`, `process["env"]`,
+ *     `const {env}=process`, `const p=process`) — UNLESS the file declares a
+ *     local `process` binding (a legitimate shadow, allowed);
+ *   - `globalThis.process` and `globalThis["process"]` — ALWAYS the global,
+ *     even when a local `process` is shadowed.
+ * Comments and strings never produce Identifier nodes, so they never trigger.
  */
 export function processSymbolReferences(file: string): number {
   const sf = parseSourceFile(file)
+  const shadowed = declaresLocalProcess(sf)
   let count = 0
   const visit = (node: ts.Node): void => {
-    if (ts.isIdentifier(node) && node.text === "process") {
+    // globalThis.process  — always the global
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "globalThis" && node.name.text === "process") {
+      count += 1
+    }
+    // globalThis["process"]  — always the global
+    if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "globalThis" && ts.isStringLiteral(node.argumentExpression) && node.argumentExpression.text === "process") {
+      count += 1
+    }
+    // bare `process` value reference (skip when locally shadowed)
+    if (!shadowed && ts.isIdentifier(node) && node.text === "process") {
       const parent = node.parent
       const isPropName = parent && ts.isPropertyAccessExpression(parent) && parent.name === node
       const isDeclName = parent && (
@@ -677,7 +688,9 @@ export function processSymbolReferences(file: string): number {
         ((ts.isPropertyAssignment(parent) || ts.isPropertySignature(parent)) && parent.name === node)
       )
       const isImportName = parent && (ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent))
-      if (!isPropName && !isDeclName && !isImportName) count += 1
+      // globalThis.process is handled above; don't double-count the `process` name node there
+      const isGlobalThisMember = parent && ts.isPropertyAccessExpression(parent) && parent.name === node
+      if (!isPropName && !isDeclName && !isImportName && !isGlobalThisMember) count += 1
     }
     ts.forEachChild(node, visit)
   }
