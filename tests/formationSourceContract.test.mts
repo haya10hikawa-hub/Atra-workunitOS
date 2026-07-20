@@ -488,6 +488,77 @@ test("structured deadline must be ISO-8601; inferred deadline is bounded text", 
   assert.ok(reasonsOf(inferredOversized).includes("length_exceeded"))
 })
 
+// ─── Strict Gregorian calendar validation (audit fix B1) ────────
+// Deterministic ISO date facts must be REAL Gregorian dates. Date.parse
+// silently rolls impossible dates forward (2026-02-30 → 2026-03-02), so the
+// contract validates the exact numeric components against the real calendar.
+// These cases pin that boundary and are mutation-resistant: reverting the
+// strict check to Number.isFinite(Date.parse(value)) — or forcing the calendar
+// helper true — makes the impossible-date cases build and fails these tests.
+
+// 33a — structured (date-only) deadline: calendar-impossible dates rejected
+test("structured date-only deadline rejects calendar-impossible dates", () => {
+  const rejected = ["2026-02-29", "2026-02-30", "2026-04-31", "2026-06-31", "2025-02-29", "2100-02-29"]
+  for (const value of rejected) {
+    const result = parseCandidate(validInput({ explicitDeadline: { value, inferred: false } }))
+    assert.ok(
+      reasonsOf(result).includes("timestamp_invalid"),
+      `impossible date ${value} must be rejected as timestamp_invalid`,
+    )
+  }
+})
+
+// 33b — structured date-only deadline: real Gregorian and leap dates accepted
+test("structured date-only deadline accepts real Gregorian and leap dates", () => {
+  const accepted = ["2024-02-29", "2028-02-29", "2000-02-29", "2026-12-31", "2026-07-25"]
+  for (const value of accepted) {
+    const result = parseCandidate(validInput({ explicitDeadline: { value, inferred: false } }))
+    assert.equal(result.ok, true, `real date ${value} must build`)
+  }
+})
+
+// 33c — date-time fields reject impossible dates, out-of-range times, bad offsets
+test("date-time fields reject impossible dates, times, and offsets", () => {
+  const rejected = [
+    "2026-02-29T00:00:00Z",
+    "2026-02-30T00:00:00Z",
+    "2026-04-31T12:00:00+09:00",
+    "2026-01-01T24:00:00Z", // hour must be 00..23
+    "2026-01-01T12:60:00Z", // minute must be 00..59
+    "2026-01-01T12:00:60Z", // second must be 00..59 (no leap seconds)
+    "2026-01-01T12:00:00+14:01", // at +14 the offset minute must be 00
+    "2026-01-01T12:00:00+15:00", // offset hour must be 00..14
+    "2026-01-01T12:00:00+09:60", // offset minute must be 00..59
+  ]
+  for (const capturedAt of rejected) {
+    const result = parseCandidate(validInput({
+      sourceRef: { source: "github", externalId: "pr-241", url: SOURCE_URL, capturedAt },
+    }))
+    assert.ok(
+      reasonsOf(result).includes("timestamp_invalid"),
+      `impossible date-time ${capturedAt} must be rejected as timestamp_invalid`,
+    )
+  }
+})
+
+// 33d — date-time fields accept real dates, leap days, and RFC 3339 offsets
+test("date-time fields accept real Gregorian dates and bounded offsets", () => {
+  const accepted = [
+    "2024-02-29T23:59:59Z",
+    "2028-02-29T00:00:00Z",
+    "2026-01-01T00:00:00+09:00",
+    "2026-01-01T00:00:00-05:30",
+    "2026-01-01T00:00:00+14:00",
+    "2026-01-01T00:00:00.123456789Z",
+  ]
+  for (const capturedAt of accepted) {
+    const result = parseCandidate(validInput({
+      sourceRef: { source: "github", externalId: "pr-241", url: SOURCE_URL, capturedAt },
+    }))
+    assert.equal(result.ok, true, `real date-time ${capturedAt} must build`)
+  }
+})
+
 // ─── URLs and navigation target ─────────────────────────────────
 
 // 34

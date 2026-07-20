@@ -1123,8 +1123,65 @@ function validateBoolean(
   return value
 }
 
-const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
-const ISO_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/
+// Deterministic ISO date facts must be REAL Gregorian dates. We validate the
+// exact numeric components of the input against the real calendar (days-in-month
+// plus the leap-year rule) WITHOUT constructing a Date, because Date.parse
+// silently rolls impossible dates forward — Date.parse("2026-02-30T00:00:00Z")
+// is finite and normalizes to 2026-03-02. Accepting that normalized instant
+// would make the stored deterministic string and any downstream computed instant
+// disagree. No Date.parse, no locale-sensitive API, and no wall-clock read is
+// used here, so validation is deterministic and timezone-independent.
+//
+// Accepted ISO subset:
+//   date-only : YYYY-MM-DD
+//   date-time : YYYY-MM-DDTHH:mm:ss(.<1..9 fractional digits>)?(Z | ±HH:mm)
+//   time      : hour 00..23, minute 00..59, second 00..59 (no leap seconds)
+//   offset    : RFC 3339 bound — hour 00..14, minute 00..59; at hour 14, minute 00
+const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/
+const ISO_DATE_TIME_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/
+
+function isGregorianLeapYear(year: number): boolean {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0
+}
+
+function gregorianDaysInMonth(year: number, month: number): number {
+  // Caller guarantees month is in 01..12 before consulting this table.
+  const daysByMonth = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  if (month === 2 && isGregorianLeapYear(year)) return 29
+  return daysByMonth[month - 1]
+}
+
+function isValidGregorianDate(year: number, month: number, day: number): boolean {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return false
+  if (month < 1 || month > 12) return false
+  return day >= 1 && day <= gregorianDaysInMonth(year, month)
+}
+
+function isValidUtcOffset(offsetHours: number, offsetMinutes: number): boolean {
+  if (offsetHours < 0 || offsetHours > 14) return false
+  if (offsetMinutes < 0 || offsetMinutes > 59) return false
+  return offsetHours !== 14 || offsetMinutes === 0
+}
+
+function isValidIsoDate(value: string): boolean {
+  const match = ISO_DATE_PATTERN.exec(value)
+  if (match === null) return false
+  return isValidGregorianDate(Number(match[1]), Number(match[2]), Number(match[3]))
+}
+
+function isValidIsoDateTime(value: string): boolean {
+  const match = ISO_DATE_TIME_PATTERN.exec(value)
+  if (match === null) return false
+  if (!isValidGregorianDate(Number(match[1]), Number(match[2]), Number(match[3]))) return false
+  const hour = Number(match[4])
+  const minute = Number(match[5])
+  const second = Number(match[6])
+  if (hour > 23 || minute > 59 || second > 59) return false
+  const offset = match[7]
+  if (offset === "Z") return true
+  return isValidUtcOffset(Number(offset.slice(1, 3)), Number(offset.slice(4, 6)))
+}
 
 function validateIsoDateTime(
   value: unknown,
@@ -1136,7 +1193,7 @@ function validateIsoDateTime(
     if (required) findings.push({ path, reason: "missing_required_field" })
     return undefined
   }
-  if (typeof value !== "string" || !ISO_DATE_TIME_PATTERN.test(value) || !Number.isFinite(Date.parse(value))) {
+  if (typeof value !== "string" || !isValidIsoDateTime(value)) {
     findings.push({ path, reason: "timestamp_invalid" })
     return undefined
   }
@@ -1148,7 +1205,7 @@ function validateIsoDateOrDateTime(
   path: string,
   findings: FormationSourceContractFinding[],
 ): string | undefined {
-  if (typeof value === "string" && ISO_DATE_PATTERN.test(value) && Number.isFinite(Date.parse(value))) {
+  if (typeof value === "string" && isValidIsoDate(value)) {
     return value
   }
   return validateIsoDateTime(value, path, true, findings)
