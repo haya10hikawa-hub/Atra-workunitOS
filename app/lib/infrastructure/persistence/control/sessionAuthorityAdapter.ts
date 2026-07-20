@@ -1,19 +1,24 @@
 /**
- * Control-plane session authority adapter (infrastructure).
+ * Control-plane session services (infrastructure).
  *
- * Implements the domain `SessionAuthorityPort` over the control repositories.
+ * Implements the domain session contracts over the control repositories. The
+ * read-side SessionAuthorityPort and the development-only write capability are
+ * returned as separate request-scoped objects so callers receive only the
+ * authority required for their step.
+ *
  * All control-repository-specific knowledge (D1DatabaseLike, the control bundle,
  * repository classes) stays here — never in `app/lib/application/**`.
  *
  * Repository-resolution failure fails CLOSED: when no control DB is available the
  * factory returns `null`, and the application resolver treats a null authority as
- * unauthorized (mirrors the previous `resolveControlRepositories` !ok path).
+ * unauthorized.
  */
 
 import { resolveControlRepositories, type ControlRepositoryBundle } from "./controlRepositoryResolver.ts"
 import type { D1DatabaseLike } from "../../../persistence/d1/types.ts"
 import type { TenantId, UserId } from "../../../tenant/types.ts"
 import type {
+  DevelopmentWorkspaceBootstrapPort,
   DevWorkspaceBootstrapInput,
   SessionAuthIdentity,
   SessionAuthorityPort,
@@ -22,17 +27,22 @@ import type {
   SessionUser,
 } from "../../../domain/ports/sessionAuthority.ts"
 
+export type ControlSessionServices = {
+  readonly sessionAuthority: SessionAuthorityPort
+  readonly developmentWorkspaceBootstrap: DevelopmentWorkspaceBootstrapPort
+}
+
 /**
- * Construct a session authority backed by the control repositories, or `null`
- * when the control DB is not configured (fail closed).
+ * Construct separated session-read and development-bootstrap capabilities backed
+ * by one request-scoped control repository bundle, or `null` when unavailable.
  */
-export function createControlSessionAuthority(controlDbBinding?: D1DatabaseLike): SessionAuthorityPort | null {
+export function createControlSessionServices(controlDbBinding?: D1DatabaseLike): ControlSessionServices | null {
   const repos = resolveControlRepositories({ d1Binding: controlDbBinding })
   if (!repos.ok) return null
   const { bundle } = repos
   const { ctx } = bundle
 
-  return {
+  const sessionAuthority: SessionAuthorityPort = {
     async findAuthIdentity(provider, providerSubject): Promise<SessionAuthIdentity | null> {
       const row = await bundle.authIdentities.findByProviderSubject(ctx, provider, providerSubject)
       return row ? { userId: row.userId } : null
@@ -49,10 +59,15 @@ export function createControlSessionAuthority(controlDbBinding?: D1DatabaseLike)
       const tenant = await bundle.tenants.findById(ctx, tenantId)
       return tenant ? { status: tenant.status } : null
     },
+  }
+
+  const developmentWorkspaceBootstrap: DevelopmentWorkspaceBootstrapPort = {
     async bootstrapDevelopmentWorkspace(input): Promise<void> {
       await bootstrapDevelopmentWorkspace(bundle, input)
     },
   }
+
+  return { sessionAuthority, developmentWorkspaceBootstrap }
 }
 
 /** Idempotently provision the explicitly-authorized development workspace. */
