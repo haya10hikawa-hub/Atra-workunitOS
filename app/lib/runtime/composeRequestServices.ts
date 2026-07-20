@@ -29,12 +29,20 @@ export type RequestSessionServices = {
 export function composeRequestServices(runtime: ValidatedRequestRuntimeConfig): RequestSessionServices {
   const authAdapter = resolveAuthAdapter(runtime.auth, { allowDevSession: runtime.security.allowDevSession })
   const controlServices = createControlSessionServices(runtime.persistence.CONTROL_DB)
+  const developmentWorkspaceBootstrap = shouldSupplyDevelopmentWorkspaceBootstrap(runtime.security)
+    ? controlServices?.developmentWorkspaceBootstrap ?? null
+    : null
+
   return {
     authAdapter,
     sessionAuthority: controlServices?.sessionAuthority ?? null,
-    developmentWorkspaceBootstrap: controlServices?.developmentWorkspaceBootstrap ?? null,
+    developmentWorkspaceBootstrap,
     security: toSessionSecurityPolicy(runtime.security),
   }
+}
+
+function shouldSupplyDevelopmentWorkspaceBootstrap(security: SecurityRuntimeConfig): boolean {
+  return security.allowDevSession && security.allowDevWorkspaceBootstrap
 }
 
 /** Project the runtime security config into the application session policy. */
