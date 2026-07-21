@@ -1257,6 +1257,17 @@ function validateHttpsUrl(
     findings.push({ path, reason: "url_scheme_forbidden" })
     return undefined
   }
+  // Reject embedded credentials (userinfo) and empty hosts. This is a scheme/shape
+  // rule, NOT a provider-host decision: `https://github.com@evil.example/path`
+  // parses with username "github.com" and host "evil.example" — a host-spoofing
+  // form — so a non-empty username or password is refused. An empty hostname is
+  // likewise refused as defense-in-depth (a special-scheme URL with no host already
+  // fails `new URL`). Provider-host trust stays with the provider adapters. The
+  // finding reuses `url_invalid` and never echoes the rejected URL value.
+  if (parsed.username !== "" || parsed.password !== "" || parsed.hostname === "") {
+    findings.push({ path, reason: "url_invalid" })
+    return undefined
+  }
   return value
 }
 
