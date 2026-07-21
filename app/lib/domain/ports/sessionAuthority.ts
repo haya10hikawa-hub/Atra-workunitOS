@@ -1,11 +1,13 @@
 /**
- * Session authority port (domain).
+ * Session authority contracts (domain).
  *
- * The minimal contract an application session resolver needs to establish an
- * authoritative session from the control plane. It exposes ONLY session-relevant
- * domain shapes — never D1DatabaseLike, control repository bundles, D1 repository
- * classes, Cloudflare env types, or unrelated SQL rows. Infrastructure adapters
- * implement this port; the application resolver depends only on it.
+ * Authentication reads and development-only workspace mutation are deliberately
+ * represented as separate capabilities. Application code can therefore receive
+ * the minimum authority needed for each step instead of a single port that mixes
+ * read-side session resolution with write-side bootstrap behavior.
+ *
+ * These contracts expose only session-relevant domain shapes — never D1 bindings,
+ * control repository bundles, Cloudflare runtime types, or unrelated SQL rows.
  *
  * Invariant preserved by every implementation: tenantId and role come from
  * control-DB membership, never from JWT claims or client fields.
@@ -23,6 +25,16 @@ export type SessionMembership = {
 }
 export type SessionTenant = { readonly status?: "active" | "suspended" | "deleted" }
 
+/** Read-only control-plane authority required to resolve a session. */
+export interface SessionAuthorityPort {
+  findAuthIdentity(provider: string, providerSubject: string): Promise<SessionAuthIdentity | null>
+  findUser(userId: UserId): Promise<SessionUser | null>
+  /** Memberships for the user, in control-plane order (the resolver selects the
+   *  first active one). */
+  listMemberships(userId: UserId): Promise<readonly SessionMembership[]>
+  findTenant(tenantId: TenantId): Promise<SessionTenant | null>
+}
+
 /** The fields required to bootstrap the explicitly-authorized dev workspace. */
 export type SessionBootstrapIdentity = {
   readonly provider: string
@@ -36,13 +48,10 @@ export type DevWorkspaceBootstrapInput = {
   readonly role: TenantRole
 }
 
-export interface SessionAuthorityPort {
-  findAuthIdentity(provider: string, providerSubject: string): Promise<SessionAuthIdentity | null>
-  findUser(userId: UserId): Promise<SessionUser | null>
-  /** Memberships for the user, in control-plane order (the resolver selects the
-   *  first active one). */
-  listMemberships(userId: UserId): Promise<readonly SessionMembership[]>
-  findTenant(tenantId: TenantId): Promise<SessionTenant | null>
-  /** Idempotently provision the explicitly-authorized development workspace. */
+/**
+ * Development-only write capability. It is separate from SessionAuthorityPort so
+ * ordinary session resolution never receives workspace-provisioning authority.
+ */
+export interface DevelopmentWorkspaceBootstrapPort {
   bootstrapDevelopmentWorkspace(input: DevWorkspaceBootstrapInput): Promise<void>
 }
