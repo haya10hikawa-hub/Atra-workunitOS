@@ -8,6 +8,11 @@
 import type { ExternalSignal } from "../domain/types.ts"
 import type { SanitizedSignal, RiskFlag } from "./types.ts"
 import { normalizeForSecurityScan } from "../security/textNormalize.ts"
+import {
+  containsInstructionDirective,
+  containsPromptInjection,
+  containsSensitiveValue,
+} from "../security/untrustedTextScan.ts"
 
 const MAX_CONTENT_LENGTH = 4_000
 const FORBIDDEN_METADATA_KEYS = new Set([
@@ -20,25 +25,6 @@ const ALLOWED_TEXT_METADATA_KEYS = new Set([
   "title", "actor", "actors", "timestamp", "subject", "summary", "description", "notes",
   "repository", "status", "eventtype", "intent", "nextaction", "reason", "evidence",
 ])
-const SENSITIVE_VALUE_PATTERNS = [
-  /\bBearer\s+[A-Za-z0-9._~+/-]{12,}/i,
-  /\bsk-[A-Za-z0-9_-]{8,}/,
-  /\bgh[pousr]_[A-Za-z0-9]{12,}/,
-  /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/,
-  /\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\s*[:=]\s*[^\s,;]{8,}/i,
-]
-const PROMPT_INJECTION_PATTERNS = [
-  /ignore (all )?(previous|prior|above) (instructions|rules|messages)/i,
-  /forget (all |everything )?(previous|prior|above)?/i,
-  /you are now/i,
-  /new instructions/i,
-  /system prompt/i,
-  /developer message/i,
-  /override your (rules|behavior|instructions)/i,
-  /disregard (all )?(previous|above) (instructions|rules)/i,
-  /act as (if )?you are/i,
-  /exfiltrate|data ?leak|reveal (the )?(system|secret|api ?key|token)/i,
-]
 
 /**
  * Sanitize an ExternalSignal for LLM processing.
@@ -129,29 +115,21 @@ function metadataContainsSensitiveData(metadata: Record<string, unknown> | undef
 }
 
 function containsSensitiveData(value: string): boolean {
-  return SENSITIVE_VALUE_PATTERNS.some((pattern) => pattern.test(value))
+  return containsSensitiveValue(value)
 }
 
 function detectRiskFlags(text: string, _signal: ExternalSignal): RiskFlag[] {
   void _signal;
   const flags: RiskFlag[] = []
 
-  // Canonicalize before pattern matching: homoglyphs and zero-width characters
-  // otherwise let `іgnore previous instructions` slip past every regex.
-  const scanText = normalizeForSecurityScan(text)
-
-  for (const pattern of PROMPT_INJECTION_PATTERNS) {
-    if (pattern.test(scanText)) {
-      flags.push("prompt_injection_detected")
-      break
-    }
-  }
-
-  // Check if source content contains system-like instructions
-  if (/you (must|should|need to|have to) (respond|reply|answer|output|return|generate|create|send|post)/i.test(scanText)) {
-    if (!flags.includes("prompt_injection_detected")) {
-      flags.push("source_content_includes_instruction")
-    }
+  // The shared scanners canonicalize before matching: homoglyphs and
+  // zero-width characters otherwise let `іgnore previous instructions` slip
+  // past every regex.
+  if (containsPromptInjection(text)) {
+    flags.push("prompt_injection_detected")
+  } else if (containsInstructionDirective(text)) {
+    // Source content contains system-like instructions
+    flags.push("source_content_includes_instruction")
   }
 
   return flags

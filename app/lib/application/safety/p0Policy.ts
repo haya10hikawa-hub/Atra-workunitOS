@@ -56,3 +56,13 @@ export function isForbiddenContextKey(key: string): boolean {
 export function containsForbiddenContextText(value: string): boolean {
   return FORBIDDEN_TEXT_PATTERN.test(value)
 }
+
+// Summary-boundary text screen. Moved verbatim from
+// decompositionOrchestrator.ts so every candidate-only layer screens
+// human-facing summaries against the same authority.
+const FORBIDDEN_SUMMARY_TEXT_PATTERN =
+  /\b(hash|role|approvalId|targetHash|payloadHash|tenantId|userId|actorUserId|rawPayload|rawBody|providerPayload|sendableBody|approvedOutboundPayload|approvedOutboundBody|dbUpdatePayload)\b|raw\s+(provider|slack|gmail|notion|drive|calendar)\s+(payload|body)|provider\s*(raw\s*)?(payload|body)|provider-ready\s+payload|sendable\s+(provider\s+)?(payload|body)|approved\s+outbound\s+(payload|body)/i
+
+export function containsForbiddenSummaryText(value: string): boolean {
+  return FORBIDDEN_SUMMARY_TEXT_PATTERN.test(value)
+}
