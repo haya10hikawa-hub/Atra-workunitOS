@@ -14,7 +14,10 @@ import type { SessionContext } from "../../domain/auth/types.ts"
 import type { TenantId, UserId } from "../../tenant/types.ts"
 import { normalizeRoleInput, RoleNormalizationError, type WorkUnitRole, type WorkUnitRoleInput } from "../../domain/auth/role.ts"
 import type { AuthAdapter, VerifiedAuthIdentity } from "./authAdapter.ts"
-import type { SessionAuthorityPort } from "../../domain/ports/sessionAuthority.ts"
+import type {
+  DevelopmentWorkspaceBootstrapPort,
+  SessionAuthorityPort,
+} from "../../domain/ports/sessionAuthority.ts"
 
 export type SessionResolutionFailureReason = "unauthorized" | "forbidden" | "expired" | "invalid_tenant" | "invalid_role" | "internal_error"
 
@@ -37,6 +40,8 @@ export type SessionSecurityPolicy = {
 export type SessionResolutionDependencies = {
   readonly authAdapter: AuthAdapter
   readonly sessionAuthority: SessionAuthorityPort | null
+  /** Development-only mutation capability. Ordinary session reads do not own it. */
+  readonly developmentWorkspaceBootstrap: DevelopmentWorkspaceBootstrapPort | null
   readonly security: SessionSecurityPolicy
 }
 
@@ -44,7 +49,7 @@ export async function resolveSession(
   request: Request,
   dependencies: SessionResolutionDependencies,
 ): Promise<SessionResolutionResult> {
-  const { authAdapter, sessionAuthority, security } = dependencies
+  const { authAdapter, sessionAuthority, developmentWorkspaceBootstrap, security } = dependencies
   try {
     const authResult = await authAdapter.verify(request)
     if (!authResult.ok) return { ok: false, reason: "unauthorized" }
@@ -56,11 +61,14 @@ export async function resolveSession(
       return { ok: true, session: createControlLessDevSession(identity, security) }
     }
 
-    // Fail closed when no session authority is available (e.g. control DB absent).
+    // Fail closed when no read-side session authority is available.
     if (!sessionAuthority) return { ok: false, reason: "unauthorized" }
 
     if (shouldBootstrapDevWorkspace(identity, security)) {
-      await sessionAuthority.bootstrapDevelopmentWorkspace({
+      // A requested write capability must be explicitly supplied by composition.
+      // Never infer it from the read-side authority object.
+      if (!developmentWorkspaceBootstrap) return { ok: false, reason: "internal_error" }
+      await developmentWorkspaceBootstrap.bootstrapDevelopmentWorkspace({
         identity: {
           provider: identity.provider,
           providerSubject: identity.providerSubject,
