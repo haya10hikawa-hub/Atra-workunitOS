@@ -18,6 +18,11 @@ function runtime(
       allowDevSession: options.allowDevSession ?? true,
       allowDevWorkspaceBootstrap: options.allowDevWorkspaceBootstrap ?? false,
       allowControlLessDevSession: false,
+      // Post-PR#187 integration: SecurityRuntimeConfig now requires the
+      // request-scoped CSRF allowlist. This capability-composition fixture does
+      // not exercise CSRF, so an empty allowlist keeps the type complete without
+      // affecting the read/bootstrap separation under test.
+      allowedOrigins: [],
     },
     llm: { allowMock: false, allowLegacyFallback: false, isProduction: false },
   }
