@@ -409,7 +409,7 @@ const GUARD_CANONICAL: Readonly<Record<string, string>> = {
   readBoundedJsonObject: abs("app/lib/security/requestBody.ts"),
   resolveValidatedRequestRuntimeConfig: abs("app/lib/runtime/requestRuntimeConfig.ts"),
 }
-export const REQUIRED_POST_GUARDS = ["requireSession", "validateCsrfOrigin", "checkRateLimit", "readBoundedJsonObject"] as const
+export const REQUIRED_POST_GUARDS = ["requireSession", "resolveValidatedRequestRuntimeConfig", "validateCsrfOrigin", "checkRateLimit", "readBoundedJsonObject"] as const
 export const REQUIRED_GET_GUARDS = ["requireSession", "resolveValidatedRequestRuntimeConfig"] as const
 
 interface ImportBinding { readonly moduleFile: string | null; readonly exported: string }

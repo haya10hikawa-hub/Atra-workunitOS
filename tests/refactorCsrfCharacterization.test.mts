@@ -1,87 +1,146 @@
 /**
- * CSRF origin-allowlist characterization (Issue #176 / finding AUD-002).
+ * CSRF origin authority — request-scoped, injected (Issue #176).
  *
- * Pins the CURRENT (defective) behavior of app/lib/security/csrfProtection.ts:
- * ALLOWED_ORIGINS is computed ONCE at module evaluation from process.env with a
- * `http://localhost:3000` default. A `process.env` change AFTER the module
- * loads has NO effect — which is exactly why a production deployment (whose
- * origins are not present in process.env at module-eval time) would reject
- * every legitimate browser write.
- *
- * Determinism: we drive module-eval env ourselves and load a FRESH module
- * instance via a cache-busted URL, so the result is independent of test-file
- * order and of any prior import of this module in the process. Prior env values
- * are saved and restored.
- *
- * The #176 fix (allowlist as a request-scoped runtime-config projection,
- * ADR-0003) must flip the "frozen after load" pin in the same PR.
+ * Replaces the old module-load defect pin. `validateCsrfOrigin` now reads NO
+ * environment variable and holds NO module-scope configuration; the allowlist is
+ * injected per call from the request-scoped validated runtime config. The route
+ * table proves the five POST routes enforce the request-scoped allowlist and that
+ * two request-scoped environments cannot observe each other's allowlist.
  */
 
 import test from "node:test"
 import assert from "node:assert/strict"
+import fs from "node:fs"
 import path from "node:path"
-import { pathToFileURL } from "node:url"
+import { fileURLToPath } from "node:url"
+import { validateCsrfOrigin } from "../app/lib/security/csrfProtection.ts"
+import { runWithInjectedRuntimeEnv } from "../app/lib/runtime/requestRuntimeEnvInjection.ts"
+import type { AppEnv } from "../app/types/cloudflare-env.ts"
+import { POST as toolsPost } from "../app/api/workunit/tools/route.ts"
+import { POST as previewPost } from "../app/api/workunit/[id]/action-preview/route.ts"
+import { POST as approvalPost } from "../app/api/workunit/[id]/approval/route.ts"
+import { POST as dryRunPost } from "../app/api/workunit/[id]/execution/dry-run/route.ts"
+import { POST as feedbackPost } from "../app/api/workunit/[id]/feedback/route.ts"
 
-const MODULE_PATH = path.resolve(import.meta.dirname, "..", "app", "lib", "security", "csrfProtection.ts")
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+const ALLOWED = ["https://app.example.com"]
 
-type CsrfModule = typeof import("../app/lib/security/csrfProtection.ts")
-
-/** Load a fresh instance of the module with process.env frozen to `env` at load
- *  time. Restores the prior env after evaluation. */
-async function loadWithEnv(env: { ALLOWED_ORIGINS?: string; NEXT_PUBLIC_APP_URL?: string }): Promise<CsrfModule> {
-  const priorAllowed = process.env.ALLOWED_ORIGINS
-  const priorAppUrl = process.env.NEXT_PUBLIC_APP_URL
-  try {
-    if (env.ALLOWED_ORIGINS === undefined) delete process.env.ALLOWED_ORIGINS
-    else process.env.ALLOWED_ORIGINS = env.ALLOWED_ORIGINS
-    if (env.NEXT_PUBLIC_APP_URL === undefined) delete process.env.NEXT_PUBLIC_APP_URL
-    else process.env.NEXT_PUBLIC_APP_URL = env.NEXT_PUBLIC_APP_URL
-    const url = `${pathToFileURL(MODULE_PATH).href}?csrf-char=${Math.random().toString(36).slice(2)}`
-    return (await import(url)) as CsrfModule
-  } finally {
-    if (priorAllowed === undefined) delete process.env.ALLOWED_ORIGINS
-    else process.env.ALLOWED_ORIGINS = priorAllowed
-    if (priorAppUrl === undefined) delete process.env.NEXT_PUBLIC_APP_URL
-    else process.env.NEXT_PUBLIC_APP_URL = priorAppUrl
-  }
+function post(origin: string | null): Request {
+  return new Request("http://worker/api", { method: "POST", headers: origin ? { Origin: origin } : {} })
 }
 
-function postWithOrigin(origin: string): Request {
-  return new Request("http://localhost:3000/api/workunit/tools", { method: "POST", headers: { Origin: origin } })
+// ─── 1. csrfProtection.ts reads no environment ──────────────────
+test("csrfProtection.ts contains no process.env / env origin source", () => {
+  const src = fs.readFileSync(path.join(repoRoot, "app/lib/security/csrfProtection.ts"), "utf8")
+  assert.doesNotMatch(src, /process\.env/)
+  assert.doesNotMatch(src, /ALLOWED_ORIGINS/)
+  assert.doesNotMatch(src, /NEXT_PUBLIC_APP_URL/)
+})
+
+// Source-level: no runtime file under app/lib/security/** reads process.env for
+// CSRF origin configuration.
+test("no app/lib/security/** file reads process.env for CSRF origin configuration", () => {
+  const dir = path.join(repoRoot, "app/lib/security")
+  const offenders: string[] = []
+  const walk = (d: string): void => {
+    for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, entry.name)
+      if (entry.isDirectory()) { walk(p); continue }
+      if (!entry.name.endsWith(".ts")) continue
+      const src = fs.readFileSync(p, "utf8")
+      if (/process\.env[.[]\s*["']?(ALLOWED_ORIGINS|NEXT_PUBLIC_APP_URL)/.test(src)) offenders.push(path.relative(repoRoot, p))
+    }
+  }
+  walk(dir)
+  assert.deepEqual(offenders, [])
+})
+
+// ─── 2 & 3. one imported module, different injected allowlists ──
+test("one imported validator checks different requests against different injected allowlists", () => {
+  const a = validateCsrfOrigin(post("https://a.example.com"), ["https://a.example.com"])
+  const b = validateCsrfOrigin(post("https://a.example.com"), ["https://b.example.com"])
+  assert.equal(a.ok, true)
+  assert.equal(b.ok, false)
+})
+
+test("configuration is not frozen at module load (later calls see later allowlists)", () => {
+  const first = validateCsrfOrigin(post("https://later.example.com"), [])
+  assert.equal(first.ok, false)
+  const second = validateCsrfOrigin(post("https://later.example.com"), ["https://later.example.com"])
+  assert.equal(second.ok, true)
+})
+
+// ─── 4-10. validator behavior ───────────────────────────────────
+test("allowed origin succeeds", () => { assert.equal(validateCsrfOrigin(post("https://app.example.com"), ALLOWED).ok, true) })
+test("disallowed origin fails", () => {
+  const r = validateCsrfOrigin(post("https://evil.example.com"), ALLOWED)
+  assert.deepEqual(r, { ok: false, reason: "invalid_origin" })
+})
+test("port mismatch fails (ports are significant)", () => {
+  assert.equal(validateCsrfOrigin(post("https://app.example.com:8443"), ALLOWED).ok, false)
+})
+test("malformed origin fails", () => {
+  assert.deepEqual(validateCsrfOrigin(post("not a url"), ALLOWED), { ok: false, reason: "invalid_origin" })
+})
+test("missing Origin and Referer fails", () => {
+  assert.deepEqual(validateCsrfOrigin(post(null), ALLOWED), { ok: false, reason: "csrf_failed" })
+})
+test("allowed Referer with a path succeeds", () => {
+  const req = new Request("http://worker/api", { method: "POST", headers: { Referer: "https://app.example.com/deep/path?x=1" } })
+  assert.equal(validateCsrfOrigin(req, ALLOWED).ok, true)
+})
+test("empty allowlist fails closed", () => {
+  assert.deepEqual(validateCsrfOrigin(post("https://app.example.com"), []), { ok: false, reason: "invalid_origin" })
+})
+
+// ─── route table: five POST routes enforce the request-scoped allowlist ──
+
+const fakeDb = { prepare: () => ({}) } as unknown
+function cloudflareEnv(allowedOrigins: string): AppEnv {
+  return {
+    CONTROL_DB: fakeDb, TENANT_DB_DEFAULT: fakeDb,
+    EXTERNAL_ACTIONS_ENABLED: "false", ALLOW_LEGACY_INGEST_FALLBACK: "false",
+    ALLOWED_ORIGINS: allowedOrigins,
+  } as unknown as AppEnv
 }
+function routePost(handler: unknown): (req: Request) => Promise<Response> {
+  // Both handler shapes: (request) and (request, { params }).
+  return (req: Request) => (handler as (r: Request, ctx: { params: Promise<{ id: string }> }) => Promise<Response>)(req, { params: Promise.resolve({ id: "wu-1" }) })
+}
+const ROUTES: Array<[string, (req: Request) => Promise<Response>]> = [
+  ["tools", routePost(toolsPost)],
+  ["action-preview", routePost(previewPost)],
+  ["approval", routePost(approvalPost)],
+  ["execution/dry-run", routePost(dryRunPost)],
+  ["feedback", routePost(feedbackPost)],
+]
 
-test("with no origin env configured, only the localhost default passes", async () => {
-  const mod = await loadWithEnv({})
-  assert.equal(mod.validateCsrfOrigin(postWithOrigin("http://localhost:3000")).ok, true)
-  assert.equal(mod.validateCsrfOrigin(postWithOrigin("https://app.example.com")).ok, false)
-})
+test("each POST route rejects a disallowed origin and lets an allowed origin past the CSRF gate", async () => {
+  const env = cloudflareEnv("https://allowed.example.com")
+  for (const [name, handler] of ROUTES) {
+    const disallowed = await runWithInjectedRuntimeEnv(env, () => handler(post("https://evil.example.com")), { production: true })
+    assert.equal(disallowed.status, 403, `${name}: disallowed origin must be 403`)
+    const disallowedBody = await disallowed.json() as { error?: string }
+    assert.equal(disallowedBody.error, "invalid_origin", `${name}: disallowed origin must be invalid_origin`)
 
-test("the allowlist reflects the env present AT MODULE LOAD", async () => {
-  const mod = await loadWithEnv({ ALLOWED_ORIGINS: "https://app.example.com" })
-  assert.equal(mod.validateCsrfOrigin(postWithOrigin("https://app.example.com")).ok, true)
-  assert.equal(mod.validateCsrfOrigin(postWithOrigin("http://localhost:3000")).ok, false)
-})
-
-test("KNOWN DEFECT PIN (#176): the allowlist is frozen after module load", async () => {
-  // Load with the localhost default only.
-  const mod = await loadWithEnv({})
-  // Configuration arriving AFTER evaluation (the Cloudflare-deploy situation).
-  const prior = process.env.ALLOWED_ORIGINS
-  process.env.ALLOWED_ORIGINS = "https://app.example.com"
-  try {
-    const result = mod.validateCsrfOrigin(postWithOrigin("https://app.example.com"))
-    assert.equal(
-      result.ok,
-      false,
-      "csrfProtection now honors env set after load — if #176 was fixed, replace this pin with request-scoped config assertions",
-    )
-  } finally {
-    if (prior === undefined) delete process.env.ALLOWED_ORIGINS
-    else process.env.ALLOWED_ORIGINS = prior
+    const allowed = await runWithInjectedRuntimeEnv(env, () => handler(post("https://allowed.example.com")), { production: true })
+    // Allowed origin must PASS CSRF and reach the next guard (session → 401 with
+    // no auth adapter configured). It must NOT be a CSRF invalid_origin.
+    assert.notEqual(allowed.status, 403, `${name}: allowed origin must pass CSRF`)
+    const allowedBody = await allowed.json().catch(() => ({})) as { error?: string }
+    assert.notEqual(allowedBody.error, "invalid_origin", `${name}: allowed origin must not be invalid_origin`)
   }
 })
 
-test("missing Origin AND Referer is rejected (fail-closed) — the #176 fix must preserve this", async () => {
-  const mod = await loadWithEnv({})
-  assert.equal(mod.validateCsrfOrigin(new Request("http://localhost:3000/api/workunit/tools", { method: "POST" })).ok, false)
+test("two request-scoped environments cannot observe each other's allowlists", async () => {
+  const envA = cloudflareEnv("https://a.example.com")
+  const envB = cloudflareEnv("https://b.example.com")
+  const handler = routePost(toolsPost)
+  // Concurrent, isolated request scopes: origin-a is allowed only in env A.
+  const [aInA, aInB] = await Promise.all([
+    runWithInjectedRuntimeEnv(envA, () => handler(post("https://a.example.com")), { production: true }),
+    runWithInjectedRuntimeEnv(envB, () => handler(post("https://a.example.com")), { production: true }),
+  ])
+  assert.notEqual(aInA.status, 403, "origin-a must pass CSRF in env A")
+  assert.equal(aInB.status, 403, "origin-a must be rejected in env B")
 })

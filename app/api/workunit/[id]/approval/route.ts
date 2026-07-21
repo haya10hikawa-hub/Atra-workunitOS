@@ -35,18 +35,18 @@ export async function POST(
   const { id: workUnitId } = await params
   const requestId = resolveRequestId(request)
 
-  const csrf = validateCsrfOrigin(request)
-  if (!csrf.ok) return errorResponse(requestId, csrf.reason, 403)
-
-  audit("approval_create_requested", requestId, { workUnitId })
-
-  // ── Request-scoped runtime config (resolved ONCE) ────────────
+  // ── Request-scoped runtime config (resolved ONCE, before CSRF) ─
   const runtimeResult = resolveValidatedRequestRuntimeConfig()
   if (!runtimeResult.ok) {
     audit("approval_create_failed", requestId, { reason: "runtime_config_invalid" })
     return errorResponse(requestId, "integration_missing", 503)
   }
   const runtime = runtimeResult.runtime
+
+  const csrf = validateCsrfOrigin(request, runtime.security.allowedOrigins)
+  if (!csrf.ok) return errorResponse(requestId, csrf.reason, 403)
+
+  audit("approval_create_requested", requestId, { workUnitId })
 
   // ── Session ──────────────────────────────────────────────────
   const sessionResult = await requireSession(request, runtime)

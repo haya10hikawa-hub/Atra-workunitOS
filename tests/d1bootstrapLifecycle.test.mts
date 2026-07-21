@@ -92,7 +92,7 @@ function seedControl(control: SqliteD1Database) {
 function cloudflareEnv(control: SqliteD1Database, tenant: SqliteD1Database): AppEnv {
   return {
     CONTROL_DB: control, TENANT_DB_DEFAULT: tenant, PERSISTENCE_MODE: "d1",
-    EXTERNAL_ACTIONS_ENABLED: "false", ALLOW_LEGACY_INGEST_FALLBACK: "false",
+    EXTERNAL_ACTIONS_ENABLED: "false", ALLOW_LEGACY_INGEST_FALLBACK: "false", ALLOWED_ORIGINS: "http://localhost:3000",
     AUTH_ADAPTER: "jwt", JWT_AUTH_SECRET: TEST_JWT_SECRET, JWT_AUTH_ISSUER: ISS, JWT_AUTH_AUDIENCE: AUD,
   } as unknown as AppEnv
 }

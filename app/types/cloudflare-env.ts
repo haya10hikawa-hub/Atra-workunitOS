@@ -30,6 +30,10 @@ export interface CloudflareEnv {
   EXTERNAL_ACTIONS_ENABLED?: string
   ALLOW_LEGACY_INGEST_FALLBACK?: string
 
+  // CSRF origin allowlist (comma-separated). REQUIRED in Cloudflare production;
+  // validated + normalized by requestRuntimeConfig into security.allowedOrigins.
+  ALLOWED_ORIGINS?: string
+
   // Auth configuration (request-scoped; never read from ambient process.env in prod)
   AUTH_ADAPTER?: string
   JWT_AUTH_SECRET?: string

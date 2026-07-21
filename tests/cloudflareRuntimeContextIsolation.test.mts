@@ -17,6 +17,7 @@ function cloudflareEnv(tag: string): AppEnv {
     PERSISTENCE_MODE: "d1",
     EXTERNAL_ACTIONS_ENABLED: "false",
     ALLOW_LEGACY_INGEST_FALLBACK: "false",
+    ALLOWED_ORIGINS: "https://app.example.test",
   } as unknown as AppEnv
 }
 

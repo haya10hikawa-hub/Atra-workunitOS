@@ -23,12 +23,13 @@ export async function POST(
   const { id: workUnitId } = await params
   const requestId = `fb:${workUnitId}:${Date.now()}`
 
-  const csrf = validateCsrfOrigin(request)
-  if (!csrf.ok) return errorResponse(requestId, csrf.reason, 403)
-
+  // Runtime config resolved ONCE, before CSRF (origin allowlist source).
   const runtimeResult = resolveValidatedRequestRuntimeConfig()
   if (!runtimeResult.ok) return errorResponse(requestId, "integration_missing", 503)
   const runtime = runtimeResult.runtime
+
+  const csrf = validateCsrfOrigin(request, runtime.security.allowedOrigins)
+  if (!csrf.ok) return errorResponse(requestId, csrf.reason, 403)
 
   const sessionResult = await requireSession(request, runtime)
   if (!sessionResult.ok) {

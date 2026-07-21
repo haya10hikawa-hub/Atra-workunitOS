@@ -5,6 +5,7 @@ import {
   resolveRuntimeConfigFromRawEnv,
   projectRuntimeAuthorizationEnv,
   projectLlmEnv,
+  parseAllowedOrigins,
 } from "../app/lib/runtime/requestRuntimeConfig.ts"
 import { runWithInjectedRuntimeEnv } from "../app/lib/runtime/requestRuntimeEnvInjection.ts"
 import { requireSession } from "../app/lib/security/session.ts"
@@ -14,6 +15,7 @@ import { evaluateRuntimeAuthorizationDryRun } from "../app/lib/security/runtimeA
 import { resolveRuntimeAuthorizationEvidenceResolver } from "../app/lib/security/runtimeAuthorizationEvidenceResolver.ts"
 import { FakeD1Database } from "./helpers/fakeD1.ts"
 import { signHs256Jwt } from "./helpers/jwt.ts"
+import { ALLOWED_ORIGIN_VECTORS } from "./helpers/allowedOriginVectors.ts"
 import type { AppEnv } from "../app/types/cloudflare-env.ts"
 import type { TenantId, UserId } from "../app/lib/tenant/types.ts"
 import type { Session } from "../app/lib/security/session.ts"
@@ -29,6 +31,7 @@ function cloudflareEnv(overrides: Partial<AppEnv> = {}): AppEnv {
     PERSISTENCE_MODE: "d1",
     EXTERNAL_ACTIONS_ENABLED: "false",
     ALLOW_LEGACY_INGEST_FALLBACK: "false",
+    ALLOWED_ORIGINS: "https://app.example.test",
     ...overrides,
   } as AppEnv
 }
@@ -140,7 +143,7 @@ test("7. request-scoped EXTERNAL_ACTIONS_ENABLED=false blocks even when process.
 
 test("8. request-scoped kill-switch state is honored by the Runtime Authorization gate", async () => {
   const session = { userId: "u", tenantId: "tenant-1", role: "owner", email: "e@x.local", isDevSession: false, sessionId: "s", createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 3600_000).toISOString() } as Session
-  const killEnv = projectRuntimeAuthorizationEnv({ externalActionsEnabled: false, allowLegacyIngestFallback: false, allowDevSession: false, allowDevWorkspaceBootstrap: false, allowControlLessDevSession: false })
+  const killEnv = projectRuntimeAuthorizationEnv({ externalActionsEnabled: false, allowLegacyIngestFallback: false, allowDevSession: false, allowDevWorkspaceBootstrap: false, allowControlLessDevSession: false, allowedOrigins: ["http://localhost:3000"] })
   const outcome = await evaluateRuntimeAuthorizationDryRun({
     session,
     request: { tenantId: "tenant-1", workUnitId: "wu-1", actionPreviewId: "p-1", approvalId: "a-1", actionType: "slack_reply" },
@@ -323,4 +326,86 @@ test("resolveRuntimeConfigFromRawEnv is a pure projection (no ambient reads)", (
   assert.ok(cf.ok && cf.runtime.source === "cloudflare")
   const local = resolveRuntimeConfigFromRawEnv(env, "local", { NODE_ENV: "development", PERSISTENCE_MODE: "d1" })
   assert.ok(local.ok && local.runtime.source === "local")
+})
+
+// ─── CSRF allowed-origins contract (Issue #176) ─────────────────
+// Shared vectors (tests/helpers/allowedOriginVectors.ts) keep the runtime +
+// deploy validators semantically aligned.
+
+test("parseAllowedOrigins accepts, normalizes, and deduplicates valid values", () => {
+  for (const v of ALLOWED_ORIGIN_VECTORS.valid) {
+    const res = parseAllowedOrigins(v.raw)
+    assert.ok(res.ok, `expected ok for a valid vector`)
+    if (res.ok) assert.deepEqual([...res.origins], v.origins)
+  }
+})
+
+test("parseAllowedOrigins rejects malformed/wildcard/oversized values (no value echoed)", () => {
+  for (const raw of ALLOWED_ORIGIN_VECTORS.malformed) {
+    const res = parseAllowedOrigins(raw)
+    assert.equal(res.ok, false)
+    if (!res.ok) assert.ok(res.reason === "malformed_allowed_origins" || res.reason === "missing_allowed_origins")
+  }
+})
+
+test("cloudflare production requires ALLOWED_ORIGINS → missing_allowed_origins", () => {
+  const env = cloudflareEnv({ ALLOWED_ORIGINS: undefined })
+  const res = resolveValidatedRequestRuntimeConfig({ rawEnv: env, production: true })
+  assert.equal(res.ok, false)
+  if (!res.ok) assert.equal(res.error, "missing_allowed_origins")
+})
+
+test("cloudflare production rejects a malformed ALLOWED_ORIGINS → malformed_allowed_origins", () => {
+  const res = resolveValidatedRequestRuntimeConfig({ rawEnv: cloudflareEnv({ ALLOWED_ORIGINS: "*" }), production: true })
+  assert.equal(res.ok, false)
+  if (!res.ok) assert.equal(res.error, "malformed_allowed_origins")
+})
+
+test("cloudflare valid origins normalize, deduplicate, and are frozen", () => {
+  const res = resolveValidatedRequestRuntimeConfig({ rawEnv: cloudflareEnv({ ALLOWED_ORIGINS: "https://x.example.com, https://x.example.com" }), production: true })
+  assert.ok(res.ok)
+  if (res.ok) {
+    assert.deepEqual([...res.runtime.security.allowedOrigins], ["https://x.example.com"])
+    assert.ok(Object.isFrozen(res.runtime.security.allowedOrigins))
+    assert.ok(Object.isFrozen(res.runtime.security))
+  }
+})
+
+test("local missing ALLOWED_ORIGINS defaults ONLY to localhost; explicit value overrides", () => {
+  const def = resolveValidatedRequestRuntimeConfig({ rawEnv: {} as AppEnv, production: false, processEnv: { NODE_ENV: "development" } })
+  assert.ok(def.ok)
+  if (def.ok) assert.deepEqual([...def.runtime.security.allowedOrigins], ["http://localhost:3000"])
+  const explicit = resolveValidatedRequestRuntimeConfig({ rawEnv: {} as AppEnv, production: false, processEnv: { NODE_ENV: "development", ALLOWED_ORIGINS: "https://dev.example.com" } })
+  assert.ok(explicit.ok)
+  if (explicit.ok) assert.deepEqual([...explicit.runtime.security.allowedOrigins], ["https://dev.example.com"])
+})
+
+test("local explicit-but-malformed ALLOWED_ORIGINS fails closed (no silent localhost downgrade)", () => {
+  const res = resolveValidatedRequestRuntimeConfig({ rawEnv: {} as AppEnv, production: false, processEnv: { NODE_ENV: "development", ALLOWED_ORIGINS: "*" } })
+  assert.equal(res.ok, false)
+  if (!res.ok) assert.equal(res.error, "malformed_allowed_origins")
+})
+
+test("Cloudflare request env ALLOWED_ORIGINS outranks ambient process.env", () => {
+  const prior = process.env.ALLOWED_ORIGINS
+  process.env.ALLOWED_ORIGINS = "https://ambient-attacker.example.com"
+  try {
+    const res = resolveValidatedRequestRuntimeConfig({ rawEnv: cloudflareEnv({ ALLOWED_ORIGINS: "https://real.example.com" }), production: true })
+    assert.ok(res.ok)
+    if (res.ok) assert.deepEqual([...res.runtime.security.allowedOrigins], ["https://real.example.com"])
+  } finally {
+    if (prior === undefined) delete process.env.ALLOWED_ORIGINS; else process.env.ALLOWED_ORIGINS = prior
+  }
+})
+
+test("concurrent request contexts keep separate origin allowlists", async () => {
+  const [a, b] = await Promise.all([
+    runWithInjectedRuntimeEnv(cloudflareEnv({ ALLOWED_ORIGINS: "https://a.example.com" }), () => resolveValidatedRequestRuntimeConfig(), { production: true }),
+    runWithInjectedRuntimeEnv(cloudflareEnv({ ALLOWED_ORIGINS: "https://b.example.com" }), () => resolveValidatedRequestRuntimeConfig(), { production: true }),
+  ])
+  assert.ok(a.ok && b.ok)
+  if (a.ok && b.ok) {
+    assert.deepEqual([...a.runtime.security.allowedOrigins], ["https://a.example.com"])
+    assert.deepEqual([...b.runtime.security.allowedOrigins], ["https://b.example.com"])
+  }
 })

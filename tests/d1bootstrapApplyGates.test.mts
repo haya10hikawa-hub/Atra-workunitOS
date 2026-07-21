@@ -121,6 +121,7 @@ const TEST_CONFIG_PATH = resolve(REPO_ROOT, "wrangler.deploy.bootstrapgatetest.j
 function withSyntheticConfig(fn: (configPath: string) => void, ids: Record<string, string> = SYNTHETIC_D1_IDS) {
   const base = JSON.parse(readFileSync(resolve(REPO_ROOT, "wrangler.json"), "utf8"))
   for (const db of base.d1_databases) db.database_id = ids[db.binding] ?? db.database_id
+  if (base.vars) base.vars.ALLOWED_ORIGINS = "https://app.example.test"
   writeFileSync(TEST_CONFIG_PATH, JSON.stringify(base, null, 2), { mode: 0o600 })
   try { fn(TEST_CONFIG_PATH) } finally { rmSync(TEST_CONFIG_PATH, { force: true }) }
 }

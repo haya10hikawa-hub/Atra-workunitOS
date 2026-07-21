@@ -148,6 +148,54 @@ export function validateD1Name(name) {
   return { ok: true }
 }
 
+// ─── CSRF allowed-origins contract (mirror of requestRuntimeConfig) ──
+// Kept semantically aligned with app/lib/runtime/requestRuntimeConfig.ts via the
+// shared test vectors in tests. The synthetic, clearly-non-production origin used
+// by preflight/dry-run generated configs.
+export const ALLOWED_ORIGINS_MAX_RAW_LENGTH = 4096
+export const ALLOWED_ORIGINS_MAX_COUNT = 16
+export const ALLOWED_ORIGIN_MAX_LENGTH = 512
+export const SYNTHETIC_ALLOWED_ORIGIN = "https://app.example.test"
+
+/** Normalize one origin entry to its canonical origin, or null on any violation. */
+function normalizeAllowedOrigin(value) {
+  let url
+  try { url = new URL(value) } catch { return null }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null
+  if (url.username !== "" || url.password !== "") return null
+  if (url.search !== "" || url.hash !== "") return null
+  if (url.pathname !== "" && url.pathname !== "/") return null
+  if (url.origin === "null" || url.origin === "") return null
+  return url.origin
+}
+
+/**
+ * Validate a `vars.ALLOWED_ORIGINS` value for a deploy config. Returns a safe
+ * reason category ("missing" | "placeholder" | "malformed") — never the value.
+ * When `allowPlaceholder` (committed-base structure check), an explicit
+ * placeholder is accepted; full validation rejects it.
+ */
+export function validateAllowedOrigins(raw, { allowPlaceholder = false } = {}) {
+  if (typeof raw !== "string" || raw.trim().length === 0) return { ok: false, reason: "missing" }
+  if (PLACEHOLDER_MARKERS.some((m) => raw.toUpperCase().includes(m))) {
+    return allowPlaceholder ? { ok: true, origins: null } : { ok: false, reason: "placeholder" }
+  }
+  if (raw.length > ALLOWED_ORIGINS_MAX_RAW_LENGTH) return { ok: false, reason: "malformed" }
+  const entries = raw.split(",")
+  if (entries.length > ALLOWED_ORIGINS_MAX_COUNT) return { ok: false, reason: "malformed" }
+  const origins = []
+  const seen = new Set()
+  for (const entry of entries) {
+    const trimmed = entry.trim()
+    if (trimmed === "" || trimmed.length > ALLOWED_ORIGIN_MAX_LENGTH || trimmed === "*") return { ok: false, reason: "malformed" }
+    const normalized = normalizeAllowedOrigin(trimmed)
+    if (normalized === null) return { ok: false, reason: "malformed" }
+    if (!seen.has(normalized)) { seen.add(normalized); origins.push(normalized) }
+  }
+  if (origins.length === 0) return { ok: false, reason: "missing" }
+  return { ok: true, origins }
+}
+
 // ─── Config parsing ──────────────────────────────────────────────
 
 /** Parse strict JSON config text. Fails closed on malformed input. */
@@ -175,10 +223,19 @@ export function loadConfigFile(path) {
 }
 
 /**
- * Produce a deploy config from a base config by injecting real/synthetic D1 IDs.
- * Deep-clones the base so the source is never mutated.
+ * Produce a deploy config from a base config by injecting real/synthetic D1 IDs
+ * and (when provided) the normalized `vars.ALLOWED_ORIGINS`. Deep-clones the base
+ * so the source is never mutated.
+ *
+ * options.allowedOrigins: when set, overwrites `vars.ALLOWED_ORIGINS` with the
+ * given normalized value (preparation injects the REAL deployment origins).
+ *
+ * When building with the SYNTHETIC (non-production) D1 ids and no explicit
+ * origin, the clearly-synthetic origin is injected so preflight/dry-run yield a
+ * fully-valid synthetic config. A synthetic origin is NEVER injected for real
+ * deployment ids — a real-ID config must carry an explicit origin or fail.
  */
-export function buildConfigWithIds(base, ids) {
+export function buildConfigWithIds(base, ids, options = {}) {
   const clone = structuredClone(base)
   const dbs = Array.isArray(clone.d1_databases) ? clone.d1_databases : []
   for (const db of dbs) {
@@ -188,7 +245,21 @@ export function buildConfigWithIds(base, ids) {
       }
     }
   }
+  let allowedOrigins = options.allowedOrigins
+  if (allowedOrigins === undefined && idsAreSynthetic(ids)) {
+    allowedOrigins = SYNTHETIC_ALLOWED_ORIGIN
+  }
+  if (typeof allowedOrigins === "string") {
+    if (!clone.vars || typeof clone.vars !== "object") clone.vars = {}
+    clone.vars.ALLOWED_ORIGINS = allowedOrigins
+  }
   return clone
+}
+
+/** True only when `ids` is exactly the approved synthetic D1 id set. */
+function idsAreSynthetic(ids) {
+  if (!ids || typeof ids !== "object") return false
+  return REQUIRED_D1_BINDINGS.every((b) => ids[b] === SYNTHETIC_D1_IDS[b])
 }
 
 // ─── Config validation ───────────────────────────────────────────
@@ -242,6 +313,13 @@ export function validateDeployConfig(config, options = {}) {
   if (vars.ALLOW_LEGACY_INGEST_FALLBACK !== "false") {
     failures.push("legacy_ingest_not_false")
   }
+
+  // CSRF origins: a real deploy config MUST carry a valid, non-placeholder,
+  // bounded origin allowlist. The committed-base structure check
+  // (allowPlaceholderIds) accepts an explicit placeholder; full validation does
+  // not. Only the safe reason category is reported — never the value.
+  const originsRes = validateAllowedOrigins(vars.ALLOWED_ORIGINS, { allowPlaceholder: allowPlaceholderIds })
+  if (!originsRes.ok) failures.push(`allowed_origins_${originsRes.reason}`)
 
   // D1 bindings: required, unique, EXACTLY the approved set, valid IDs.
   const dbs = Array.isArray(config.d1_databases) ? config.d1_databases : []
