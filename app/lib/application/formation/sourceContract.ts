@@ -229,9 +229,19 @@ export type FormationSourceCandidate = {
 }
 
 /**
- * Builder input: the candidate fields an adapter may supply. Derived fields
+ * Type-level adapter/authoring shape — the candidate fields an adapter may
+ * supply BEFORE the builder derives properties. Derived fields
  * (`extractionConfidence`, `candidateOnly`) are excluded — supplying them is
  * rejected as an unknown field.
+ *
+ * NOT the public runtime input. This is a compile-time authoring/adapter aid
+ * only. The public trust boundary is `buildFormationSourceCandidate`, which
+ * accepts raw JSON TEXT typed as `unknown` and validates it at runtime.
+ * Possessing a TypeScript value that structurally matches
+ * `FormationSourceCandidateInput` does NOT mean it passed runtime validation:
+ * a structurally-typed object never enters `buildFormationSourceCandidate`
+ * (only a string does), and every field is re-checked against this contract
+ * regardless of its static type.
  */
 export type FormationSourceCandidateInput = Omit<
   FormationSourceCandidate,
@@ -1136,7 +1146,14 @@ function validateBoolean(
 //   date-only : YYYY-MM-DD
 //   date-time : YYYY-MM-DDTHH:mm:ss(.<1..9 fractional digits>)?(Z | ±HH:mm)
 //   time      : hour 00..23, minute 00..59, second 00..59 (no leap seconds)
-//   offset    : RFC 3339 bound — hour 00..14, minute 00..59; at hour 14, minute 00
+//   offset    : practical civil-time offset policy (NOT the full RFC 3339
+//               numeric-offset grammar) — offset hours 00 through 14; offset
+//               minutes 00 through 59; when the hour is 14, minutes must be 00.
+//               This is a deliberately restricted product policy: real-world
+//               civil UTC offsets span roughly -12:00 through +14:00, whereas
+//               RFC 3339's numeric-offset grammar permits offset hours 00..23.
+//               `isValidUtcOffset` remains the sole authority; this wording
+//               only describes it and changes no accepted or rejected value.
 const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/
 const ISO_DATE_TIME_PATTERN =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/
