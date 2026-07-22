@@ -591,6 +591,89 @@ test("navigationTarget scheme allowlist is https only", () => {
   assert.ok(reasonsOf(result).includes("url_scheme_forbidden"))
 })
 
+// ─── H3: URL userinfo / empty-host hardening ────────────────────
+// A userinfo authority lets `https://github.com@evil.example/path` LOOK like a
+// github.com link while it actually resolves to evil.example. The shared HTTPS
+// validator rejects any URL carrying userinfo (username or password) or an empty
+// host, reusing the existing `url_invalid` vocabulary and never echoing the value.
+// This is a scheme/shape rule only — there is NO provider-host allowlist, so
+// enterprise/private hosts stay valid.
+
+const refWithUrl = (url: string) => ({
+  source: "github",
+  externalId: "pr-241",
+  url,
+  capturedAt: "2026-07-19T00:00:00Z",
+})
+
+// 36a — username-only userinfo is rejected (sourceRef.url).
+test("H3: HTTPS URL with username-only userinfo is rejected", () => {
+  const result = parseCandidate(validInput({ sourceRef: refWithUrl("https://user@example.com/path") }))
+  assert.ok(reasonsOf(result).includes("url_invalid"))
+})
+
+// 36b — username:password userinfo is rejected (sourceRef.url).
+test("H3: HTTPS URL with username and password userinfo is rejected", () => {
+  const result = parseCandidate(validInput({ sourceRef: refWithUrl("https://user:password@example.com/path") }))
+  assert.ok(reasonsOf(result).includes("url_invalid"))
+})
+
+// 36c — the host-spoofing form is rejected: the real host is evil.example and
+// "github.com" is only the username.
+test("H3: userinfo host-spoofing form (github.com@evil.example) is rejected", () => {
+  const result = parseCandidate(validInput({ sourceRef: refWithUrl("https://github.com@evil.example/path") }))
+  assert.ok(reasonsOf(result).includes("url_invalid"))
+})
+
+// 36d — an empty-host HTTPS authority is rejected (a special-scheme URL with no
+// host fails to parse; the validator refuses it with url_invalid either way).
+test("H3: HTTPS URL with an empty hostname is rejected", () => {
+  const result = parseCandidate(validInput({ sourceRef: refWithUrl("https://:8080/path") }))
+  assert.ok(reasonsOf(result).includes("url_invalid"))
+})
+
+// 36e — a valid public HTTPS host with no userinfo still builds.
+test("H3: valid public HTTPS host is still accepted", () => {
+  const result = parseCandidate(validInput())
+  assert.equal(result.ok, true)
+})
+
+// 36f — enterprise/private HTTPS hosts remain valid: there is NO host allowlist.
+test("H3: enterprise and private HTTPS hosts remain valid", () => {
+  const enterprise = "https://github.enterprise.internal/object/1"
+  const privateJp = "https://git.example.co.jp/object/1"
+  const result = parseCandidate(validInput({
+    sourceRef: refWithUrl(enterprise),
+    sourceLinks: [{ url: enterprise }, { url: privateJp }],
+    navigationTarget: enterprise,
+  }))
+  assert.equal(result.ok, true)
+})
+
+// 36g — navigationTarget carrying userinfo is rejected through the shared validator.
+test("H3: navigationTarget with userinfo is rejected", () => {
+  const result = parseCandidate(validInput({ navigationTarget: "https://user@example.com/path" }))
+  assert.ok(reasonsOf(result).includes("url_invalid"))
+})
+
+// 36h — a source link carrying userinfo is rejected through the shared validator.
+test("H3: source link with userinfo is rejected", () => {
+  const result = parseCandidate(validInput({ sourceLinks: [{ url: "https://user:pass@example.com/x" }] }))
+  assert.ok(reasonsOf(result).includes("url_invalid"))
+})
+
+// 36i — the rejection finding is value-free: neither the userinfo secret nor the
+// spoofed host appears anywhere in the serialized result.
+test("H3: userinfo rejection findings never echo the URL value", () => {
+  const marker = "s3cr3t-userinfo-marker"
+  const result = parseCandidate(validInput({
+    sourceRef: refWithUrl(`https://user:${marker}@evil.example/path`),
+  }))
+  assert.equal(result.ok, false)
+  assert.equal(JSON.stringify(result).includes(marker), false)
+  assert.equal(JSON.stringify(result).includes("evil.example"), false)
+})
+
 // ─── Supersession claims ────────────────────────────────────────
 
 // 37
