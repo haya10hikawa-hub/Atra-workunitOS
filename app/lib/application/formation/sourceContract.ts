@@ -1094,9 +1094,15 @@ function validateIdentifier(
     findings.push({ path, reason: "length_exceeded" })
     return undefined
   }
-  // Provider object identifiers never contain whitespace or control
-  // characters; per-provider shape checks arrive with the extraction slice.
-  if (/[\s\p{Cc}]/u.test(value)) {
+  // Provider object identifiers never contain whitespace, control characters, or
+  // Unicode format characters (General Category Cf: zero-width joiners/spaces,
+  // word joiners, and bidi controls such as U+202E). Cf characters are invisible
+  // yet byte-distinct, so `obj-1` and `obj<ZWSP>-1` would compare as different
+  // identifiers and defeat duplicate/equality checks — reject rather than strip
+  // or normalize. The `\p{Cf}` property escape is evaluated with the `u` flag, so
+  // membership is defined by the Unicode database and is deterministic and
+  // locale-independent. Per-provider shape checks arrive with the extraction slice.
+  if (/[\s\p{Cc}\p{Cf}]/u.test(value)) {
     findings.push({ path, reason: "identifier_malformed" })
     return undefined
   }

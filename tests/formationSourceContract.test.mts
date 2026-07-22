@@ -375,6 +375,126 @@ test("identifier bounds: oversized and whitespace identifiers are rejected", () 
   assert.ok(reasonsOf(malformed).includes("identifier_malformed"))
 })
 
+// ─── H5: identifier Unicode format-character (Cf) rejection ──────
+// Unicode General Category Cf (zero-width joiners/spaces, word joiners, bidi
+// controls) is invisible but byte-distinct: "obj-1" and "obj\u200B-1" are different
+// strings, so a Cf character smuggled into an identifier defeats duplicate/equality
+// checks while looking identical. The shared identifier validator rejects any Cf
+// character as identifier_malformed — it never strips or normalizes. Free-text
+// fields are untouched, and the finding never echoes the identifier value.
+//
+// Cf code points are written as \u escapes so the test source itself stays free of
+// invisible characters and a reviewer can see exactly which code point is exercised.
+const ZWSP = "\u200B" // U+200B ZERO WIDTH SPACE (General Category Cf)
+const CF_IDENTIFIER_CHARS: readonly (readonly [string, string])[] = [
+  ["U+200B ZERO WIDTH SPACE", "\u200B"],
+  ["U+200C ZERO WIDTH NON-JOINER", "\u200C"],
+  ["U+200D ZERO WIDTH JOINER", "\u200D"],
+  ["U+2060 WORD JOINER", "\u2060"],
+  ["U+202E RIGHT-TO-LEFT OVERRIDE", "\u202E"],
+  ["U+2066 LEFT-TO-RIGHT ISOLATE", "\u2066"],
+]
+
+const sourceRefWith = (over: Record<string, unknown>) => ({
+  source: "github",
+  externalId: "pr-241",
+  container: "example-org/example-repo",
+  url: SOURCE_URL,
+  capturedAt: "2026-07-19T00:00:00Z",
+  ...over,
+})
+
+// 24a (proof 1) — every representative Cf character is rejected in an identifier.
+test("H5: Cf format characters are rejected in identifiers", () => {
+  for (const [name, ch] of CF_IDENTIFIER_CHARS) {
+    assert.ok(/\p{Cf}/u.test(ch), `${name} must be Unicode category Cf on this runtime`)
+    const result = parseCandidate(validInput({ sourceObjectId: `obj${ch}1` }))
+    assert.equal(result.ok, false, `${name} must block`)
+    assert.ok(reasonsOf(result).includes("identifier_malformed"), `${name} -> identifier_malformed`)
+  }
+})
+
+// 24b — the rule reaches every identifier field through the one shared validator.
+test("H5: Cf rejection applies to every identifier field", () => {
+  const cases: readonly (readonly [string, Record<string, unknown>])[] = [
+    ["$.sourceObjectId", { sourceObjectId: `obj${ZWSP}1` }],
+    ["$.parentObjectId", { parentObjectId: `par${ZWSP}1` }],
+    ["$.threadId", { threadId: `th${ZWSP}1` }],
+    ["$.sourceRef.externalId", { sourceRef: sourceRefWith({ externalId: `pr${ZWSP}241` }) }],
+    ["$.sourceRef.container", { sourceRef: sourceRefWith({ container: `org${ZWSP}repo` }) }],
+    ["$.referencedObjects[0].sourceObjectId", { referencedObjects: [{ provider: "github", sourceObjectId: `ref${ZWSP}1` }] }],
+    ["$.sourceLinks[0].recognized.sourceObjectId", { sourceLinks: [{ url: SOURCE_URL, recognized: { provider: "github", sourceObjectId: `rec${ZWSP}1` } }] }],
+    ["$.supersedes[0].sourceObjectId", { supersedes: [{ provider: "notion", sourceObjectId: `sup${ZWSP}1`, inferred: false }] }],
+  ]
+  for (const [path, override] of cases) {
+    const result = parseCandidate(validInput(override))
+    assert.equal(result.ok, false, `${path} must block`)
+    if (result.ok) continue
+    assert.ok(
+      result.findings.some((f) => f.reason === "identifier_malformed" && f.path === path),
+      `${path} -> identifier_malformed at that path`,
+    )
+  }
+})
+
+// 24c (proof 2) — ordinary ASCII identifiers remain valid.
+test("H5: ordinary ASCII identifiers remain valid", () => {
+  for (const id of ["obj-1", "example-org/example-repo#241", "PR_241.v2"]) {
+    assert.equal(parseCandidate(validInput({ sourceObjectId: id })).ok, true, `${id} must build`)
+  }
+})
+
+// 24d (proof 3) — non-ASCII provider-native identifiers WITHOUT Cf remain valid.
+test("H5: non-Cf non-ASCII identifiers remain valid", () => {
+  for (const id of ["課題-42", "café-1", "проект-7"]) {
+    assert.equal(parseCandidate(validInput({ sourceObjectId: id })).ok, true, `${id} must build`)
+  }
+})
+
+// 24e (proof 4) — free text with ordinary language Unicode is unaffected.
+test("H5: free text with ordinary language Unicode is unaffected", () => {
+  const result = parseCandidate(validInput({
+    title: "課題 #241 レビュー",
+    sanitizedSummary: "この課題はレビュー待ちです",
+  }))
+  assert.equal(result.ok, true)
+})
+
+// 24f (proof 5) — two identifiers differing only by a zero-width character can no
+// longer both enter duplicate comparison: the Cf variant is rejected outright.
+test("H5: zero-width variants can no longer both enter duplicate comparison", () => {
+  const result = parseCandidate(validInput({
+    referencedObjects: [
+      { provider: "github", sourceObjectId: "obj-1" },
+      { provider: "github", sourceObjectId: `obj${ZWSP}-1` },
+    ],
+  }))
+  assert.equal(result.ok, false)
+  assert.ok(reasonsOf(result).includes("identifier_malformed"))
+})
+
+// 24g (proof 6) — findings never echo the identifier value.
+test("H5: identifier_malformed findings never echo the identifier value", () => {
+  const marker = "s3cr3tmarker"
+  const result = parseCandidate(validInput({ sourceObjectId: `${marker}${ZWSP}id` }))
+  assert.equal(result.ok, false)
+  assert.equal(JSON.stringify(result).includes(marker), false)
+})
+
+// 24h (proof 7) — rejection is deterministic and does not depend on locale.
+test("H5: Cf rejection is deterministic and locale-independent", () => {
+  const rejected = validInput({ sourceObjectId: `obj${ZWSP}1` })
+  // Deterministic: repeated evaluation yields identical findings.
+  assert.deepEqual(reasonsOf(parseCandidate(rejected)), reasonsOf(parseCandidate(rejected)))
+  assert.ok(reasonsOf(parseCandidate(rejected)).includes("identifier_malformed"))
+  // Locale-independent: membership is by Unicode General Category (\p{Cf}), not by
+  // any case/locale operation, so locale-sensitive letters that are NOT Cf (Turkish
+  // dotless i U+0131, German sharp s U+00DF) stay valid regardless of runtime locale.
+  for (const id of ["ıd-1", "straße-1"]) {
+    assert.equal(parseCandidate(validInput({ sourceObjectId: id })).ok, true, `${id} must build`)
+  }
+})
+
 // 25
 test("array bounds are enforced for every bounded array", () => {
   const cases: readonly (readonly [string, unknown])[] = [
