@@ -16,9 +16,13 @@
  *    F1C copies the F1B verdict verbatim and never recomputes it.
  *
  * Authority rules inherited unchanged:
- *  - A member may ONLY come from a successful F1A validation result
- *    (`FormationSourceContractResult` with `ok: true`). A failed result, raw
- *    JSON, or a malformed object is never a member.
+ *  - A member may ONLY come from an ATTESTED successful F1A validation result —
+ *    the exact object a real `buildFormationSourceCandidate` call returned,
+ *    proven by runtime provenance (`snapshotValidatedFormationSourceResult`),
+ *    not by structural shape. A forged look-alike, a clone, a failed result, or
+ *    raw JSON is never a member. Likewise the F1B result must be attested
+ *    (`snapshotFormationGoalDoneConditionCandidate`). Both are bound only as
+ *    fresh detached snapshots, so the aggregate aliases no caller-owned object.
  *  - `SourceRole` is explicit and provider-independent: the provider never
  *    implies a role, and the same validated source may carry a different role
  *    in a different aggregate.
@@ -31,7 +35,9 @@ import type {
   FormationSourceCandidate,
   FormationSourceContractResult,
 } from "./sourceContract.ts"
+import { snapshotValidatedFormationSourceResult } from "./sourceContract.ts"
 import type { FormationGoalDoneConditionCandidate } from "./goalDoneConditionAdapter.ts"
+import { snapshotFormationGoalDoneConditionCandidate } from "./goalDoneConditionAdapter.ts"
 
 /**
  * The exact closed Source Role set. Role is a candidate-scoped association a
@@ -91,6 +97,7 @@ export type WorkUnitFormationRejectionReason =
   | "unknown_source_role"
   | "duplicate_member_identity"
   | "missing_goal_done_condition"
+  | "goal_done_condition_not_validated"
   | "evidence_ref_not_a_member"
   | "primary_source_ref_not_a_member"
 
@@ -151,19 +158,19 @@ export function buildWorkUnitFormationCandidate(
   const memberIdentities = new Set<string>()
 
   for (const entry of rawMembers) {
-    // 1. Member source must be a SUCCESSFUL F1A result. A failed result, raw
-    //    JSON string, or malformed object never becomes a member. F1A's own
-    //    validator is NOT reimplemented here — only its success shape and a
-    //    well-formed canonical identity are required.
-    const result = (entry as { sourceResult?: unknown } | null | undefined)?.sourceResult
-    if (!result || typeof result !== "object" || (result as { ok?: unknown }).ok !== true) {
-      return reject("member_not_validated")
-    }
-    const candidate = (result as { candidate?: unknown }).candidate
-    const identity =
-      candidate && typeof candidate === "object"
-        ? sourceRefIdentity((candidate as { sourceRef?: unknown }).sourceRef)
-        : null
+    // 1. Member source must be an ATTESTED successful F1A result: the exact
+    //    object a real `buildFormationSourceCandidate` call returned. Attestation
+    //    (runtime provenance), NOT structural compatibility, is the gate — a
+    //    forged look-alike, a shallow/deep clone, a serialized copy, a failed
+    //    result, or raw JSON is unregistered and rejected. The attested value is
+    //    a fresh, fully detached snapshot; the aggregate never touches, reads, or
+    //    aliases the caller's own F1A object.
+    const attested = snapshotValidatedFormationSourceResult(
+      (entry as { sourceResult?: unknown } | null | undefined)?.sourceResult,
+    )
+    if (attested === null) return reject("member_not_validated")
+    const candidate = attested.candidate
+    const identity = sourceRefIdentity(candidate.sourceRef)
     if (identity === null) return reject("member_not_validated")
 
     // 2. Role is explicit and provider-independent; unknown roles fail closed.
@@ -175,36 +182,51 @@ export function buildWorkUnitFormationCandidate(
     if (memberIdentities.has(identity)) return reject("duplicate_member_identity")
     memberIdentities.add(identity)
 
-    members.push({ source: candidate as FormationSourceCandidate, role: role as SourceRole })
+    members.push({ source: candidate, role: role as SourceRole })
   }
 
-  // 4. Exactly one existing F1B result, bound read-only.
-  const goalDoneCondition = (input as { goalDoneCondition?: unknown }).goalDoneCondition
-  if (!goalDoneCondition || typeof goalDoneCondition !== "object") {
+  // 4. Exactly one ATTESTED F1B result. A missing/non-object input is
+  //    `missing_goal_done_condition`; a present object that is not the exact
+  //    result of a real `buildFormationGoalDoneConditionCandidate` call (a `{}`,
+  //    a malformed object, a forged `complete` verdict, or a structural/
+  //    serialized clone) is unregistered and rejected as
+  //    `goal_done_condition_not_validated`. The attested value is a fresh,
+  //    detached snapshot carrying the original canonical verdict verbatim; F1C
+  //    never re-evaluates it (no second completion authority).
+  const rawGoalDoneCondition = (input as { goalDoneCondition?: unknown }).goalDoneCondition
+  if (!rawGoalDoneCondition || typeof rawGoalDoneCondition !== "object") {
     return reject("missing_goal_done_condition")
   }
-  const gdc = goalDoneCondition as FormationGoalDoneConditionCandidate
+  const gdc = snapshotFormationGoalDoneConditionCandidate(rawGoalDoneCondition)
+  if (gdc === null) return reject("goal_done_condition_not_validated")
 
-  // 5. F1B-to-member consistency. Every F1B evidence ref and any primary
-  //    Done Condition sourceRef must already be a member. A non-member
-  //    reference rejects the aggregate; it is never removed, and it never adds
-  //    a member. A human-input-only Done Condition (no primary sourceRef) is
-  //    accepted. F1B references are NOT rewritten and the verdict is untouched.
+  // 5. F1B-to-member consistency, over the ATTESTED snapshot. `evidenceRefs`
+  //    must be an actual array (any impossible malformed attested snapshot fails
+  //    closed). Every F1B evidence ref and any primary Done Condition sourceRef
+  //    must already be a member; a non-member reference rejects the aggregate —
+  //    it is never removed and never adds a member. A human-input-only Done
+  //    Condition (no primary sourceRef) is accepted. References are not
+  //    rewritten and the verdict is untouched.
   const evidenceRefs = (gdc as { evidenceRefs?: unknown }).evidenceRefs
-  if (Array.isArray(evidenceRefs)) {
-    for (const ref of evidenceRefs as readonly SourceRef[]) {
-      const id = sourceRefIdentity(ref)
-      if (id === null || !memberIdentities.has(id)) return reject("evidence_ref_not_a_member")
-    }
-  }
+  if (!Array.isArray(evidenceRefs)) return reject("goal_done_condition_not_validated")
+  // The primary Done Condition anchor is checked before the evidence sidecar so
+  // a non-member anchor is reported as such (a real F1B co-locates the primary
+  // anchor into `evidenceRefs`, so the two checks otherwise overlap).
   const primaryRef = (gdc as { doneCondition?: { sourceRef?: unknown } }).doneCondition?.sourceRef
   if (primaryRef !== undefined) {
     const id = sourceRefIdentity(primaryRef)
     if (id === null || !memberIdentities.has(id)) return reject("primary_source_ref_not_a_member")
   }
+  for (const ref of evidenceRefs as readonly SourceRef[]) {
+    const id = sourceRefIdentity(ref)
+    if (id === null || !memberIdentities.has(id)) return reject("evidence_ref_not_a_member")
+  }
 
-  // 6. Force the safety literals; never read them from input. The F1B result is
-  //    passed through unchanged — no second completion status is computed.
+  // 6. Force the safety literals; never read them from input. Members are
+  //    detached F1A source snapshots and the F1B result is a detached snapshot,
+  //    so the returned aggregate aliases no caller input and post-return
+  //    mutation of any original input has no effect. The verdict is passed
+  //    through unchanged — no second completion status is computed.
   return {
     ok: true,
     candidateOnly: true,
