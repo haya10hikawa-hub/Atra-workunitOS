@@ -25,15 +25,24 @@ export function evaluateDoneConditionDraft(
   input: DoneConditionDraft,
   context?: Record<string, unknown>,
 ): DoneConditionStatus {
+  // Completion presence is decided on NORMALIZED values so a malformed runtime
+  // draft cannot satisfy a requirement with blank content. A field is present
+  // only when it carries a nonblank string (outcome, verifier), at least one
+  // nonblank observable criterion, or a canonical evidence anchor (a sourceRef
+  // with nonblank source + externalId, or a nonblank humanInputRef). Whitespace,
+  // empty arrays/strings, and empty/blank runtime objects are all "missing".
+  // Values are never rewritten here — this is presence checking only.
   const missingFields = [
-    input.outcome ? null : "outcome",
-    input.verifier ? null : "verifier",
-    input.acceptanceCriteria.length > 0 ? null : "acceptanceCriteria",
-    input.sourceRef || input.humanInputRef ? null : "sourceRefOrHumanInputRef",
+    isNonBlankString(input.outcome) ? null : "outcome",
+    isNonBlankString(input.verifier) ? null : "verifier",
+    hasUsableAcceptanceCriterion(input.acceptanceCriteria) ? null : "acceptanceCriteria",
+    hasSourceRefAnchor(input.sourceRef) || isNonBlankString(input.humanInputRef)
+      ? null
+      : "sourceRefOrHumanInputRef",
   ].filter((field): field is string => Boolean(field))
 
   const invalidReasons = [
-    isAiVerifier(input.verifier) ? "ai_verifier_forbidden" : null,
+    isNonBlankString(input.verifier) && isAiVerifier(input.verifier) ? "ai_verifier_forbidden" : null,
     containsForbiddenContextField(context) ? "forbidden_context_field_present" : null,
     containsExternalExecutionPayload(context) ? "external_execution_payload_present" : null,
   ].filter((reason): reason is string => Boolean(reason))
@@ -70,6 +79,32 @@ export function containsExternalExecutionPayload(value: unknown): boolean {
 
 export function isAiVerifier(verifier: string): boolean {
   return /^(ai|llm|model|system|assistant)$/i.test(verifier.trim())
+}
+
+// ── Canonical presence predicates ───────────────────────────────────────────
+// Shared by the single completion authority above. Each accepts `unknown` so a
+// runtime-malformed draft (non-string field, non-array criteria, empty/blank
+// object anchor) is classified deterministically as "missing" instead of
+// throwing or being accepted. None of these mutate, filter, or rewrite input.
+
+function isNonBlankString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0
+}
+
+// Present when at least one observable, nonblank criterion exists. The input
+// array is inspected with `.some` only — never mutated, filtered, or replaced.
+function hasUsableAcceptanceCriterion(value: unknown): boolean {
+  return Array.isArray(value) && value.some((item) => isNonBlankString(item))
+}
+
+// A source-reference anchor requires, at minimum, a nonblank `source` and a
+// nonblank `externalId`. No URL parsing/allowlisting is performed here: URL
+// safety stays in the formation layer's separate SourceRef handling, and the
+// decomposition gate must not depend on the later formation layer.
+function hasSourceRefAnchor(ref: unknown): boolean {
+  if (ref === null || typeof ref !== "object") return false
+  const candidate = ref as { readonly source?: unknown; readonly externalId?: unknown }
+  return isNonBlankString(candidate.source) && isNonBlankString(candidate.externalId)
 }
 
 function scan(value: unknown, found: Set<string>): void {

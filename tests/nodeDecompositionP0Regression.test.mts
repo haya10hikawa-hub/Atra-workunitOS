@@ -93,6 +93,151 @@ test("P0: decomposition source has no Tool Pin executable language", async () =>
   assert.equal(source.includes("Send / Post / Execute"), false)
 })
 
+// ── Canonical Done Condition presence hardening (prerequisite for PR #192) ──
+// evaluateDoneConditionDraft is the SOLE completion authority; malformed runtime
+// values must never satisfy completion-presence requirements. Every malformed or
+// partial case must also report validForFormalCandidate === false.
+
+function doneWith(overrides: Partial<DoneConditionDraft>): DoneConditionDraft {
+  return { ...completeDone, ...overrides }
+}
+
+function assertPartialMissing(input: DoneConditionDraft, field: string): void {
+  const status = evaluateDoneConditionDraft(input)
+  assert.equal(status.status, "partial")
+  assert.ok(status.missingFields.includes(field), `missingFields should include ${field}`)
+  assert.equal(status.validForFormalCandidate, false)
+}
+
+// Outcome
+test("presence: valid nonblank outcome can complete", () => {
+  const status = evaluateDoneConditionDraft(completeDone)
+  assert.equal(status.status, "complete")
+  assert.equal(status.validForFormalCandidate, true)
+})
+test("presence: empty outcome is partial", () => {
+  assertPartialMissing(doneWith({ outcome: "" }), "outcome")
+})
+test("presence: whitespace-only outcome is partial", () => {
+  assertPartialMissing(doneWith({ outcome: "   " }), "outcome")
+})
+test("presence: tab/newline-only outcome is partial", () => {
+  assertPartialMissing(doneWith({ outcome: "\t\n" }), "outcome")
+})
+
+// Verifier
+test("presence: empty verifier is partial", () => {
+  assertPartialMissing(doneWith({ verifier: "" }), "verifier")
+})
+test("presence: whitespace-only verifier is partial", () => {
+  assertPartialMissing(doneWith({ verifier: "   " }), "verifier")
+})
+test("presence: AI verifier remains invalid", () => {
+  const status = evaluateDoneConditionDraft(doneWith({ verifier: "AI" }))
+  assert.equal(status.status, "invalid")
+  assert.ok(status.invalidReasons.includes("ai_verifier_forbidden"))
+  assert.equal(status.validForFormalCandidate, false)
+})
+test("presence: whitespace-padded AI verifier remains invalid", () => {
+  const status = evaluateDoneConditionDraft(doneWith({ verifier: "  AI  " }))
+  assert.equal(status.status, "invalid")
+  assert.ok(status.invalidReasons.includes("ai_verifier_forbidden"))
+  assert.equal(status.validForFormalCandidate, false)
+})
+
+// Acceptance criteria
+test("presence: empty acceptance-criteria array is partial", () => {
+  assertPartialMissing(doneWith({ acceptanceCriteria: [] }), "acceptanceCriteria")
+})
+test("presence: single empty-string criterion is partial", () => {
+  assertPartialMissing(doneWith({ acceptanceCriteria: [""] }), "acceptanceCriteria")
+})
+test("presence: single whitespace criterion is partial", () => {
+  assertPartialMissing(doneWith({ acceptanceCriteria: [" "] }), "acceptanceCriteria")
+})
+test("presence: several blank criteria are partial", () => {
+  assertPartialMissing(doneWith({ acceptanceCriteria: ["", "   "] }), "acceptanceCriteria")
+})
+test("presence: at least one nonblank criterion satisfies the requirement", () => {
+  const status = evaluateDoneConditionDraft(
+    doneWith({ acceptanceCriteria: ["", "Reviewer confirms the result", "   "] }),
+  )
+  assert.equal(status.status, "complete")
+  assert.equal(status.missingFields.includes("acceptanceCriteria"), false)
+  assert.equal(status.validForFormalCandidate, true)
+})
+
+// Evidence anchor
+test("presence: missing sourceRef and humanInputRef is partial", () => {
+  assertPartialMissing(doneWith({ sourceRef: undefined, humanInputRef: undefined }), "sourceRefOrHumanInputRef")
+})
+test("presence: empty-object runtime sourceRef is partial", () => {
+  assertPartialMissing(
+    doneWith({ sourceRef: {} as unknown as SourceRef, humanInputRef: undefined }),
+    "sourceRefOrHumanInputRef",
+  )
+})
+test("presence: blank sourceRef.source is partial", () => {
+  assertPartialMissing(
+    doneWith({ sourceRef: { source: "   ", externalId: "id" } as unknown as SourceRef, humanInputRef: undefined }),
+    "sourceRefOrHumanInputRef",
+  )
+})
+test("presence: blank sourceRef.externalId is partial", () => {
+  assertPartialMissing(
+    doneWith({ sourceRef: { source: "github", externalId: "   " } as unknown as SourceRef, humanInputRef: undefined }),
+    "sourceRefOrHumanInputRef",
+  )
+})
+test("presence: blank humanInputRef is not a valid anchor", () => {
+  assertPartialMissing(doneWith({ sourceRef: undefined, humanInputRef: "   " }), "sourceRefOrHumanInputRef")
+})
+test("presence: valid sourceRef satisfies the anchor requirement", () => {
+  const status = evaluateDoneConditionDraft(doneWith({ sourceRef, humanInputRef: undefined }))
+  assert.equal(status.status, "complete")
+  assert.equal(status.missingFields.includes("sourceRefOrHumanInputRef"), false)
+  assert.equal(status.validForFormalCandidate, true)
+})
+test("presence: valid nonblank humanInputRef satisfies the anchor requirement", () => {
+  const status = evaluateDoneConditionDraft(doneWith({ sourceRef: undefined, humanInputRef: "human:approver" }))
+  assert.equal(status.status, "complete")
+  assert.equal(status.missingFields.includes("sourceRefOrHumanInputRef"), false)
+  assert.equal(status.validForFormalCandidate, true)
+})
+
+// Existing security behavior preserved
+test("presence: forbidden context remains invalid", () => {
+  const status = evaluateDoneConditionDraft(completeDone, { approvalId: "approval:1" })
+  assert.equal(status.status, "invalid")
+  assert.ok(status.invalidReasons.includes("forbidden_context_field_present"))
+  assert.equal(status.validForFormalCandidate, false)
+})
+test("presence: external-execution context remains invalid", () => {
+  const status = evaluateDoneConditionDraft(completeDone, { sendableBody: "hello" })
+  assert.equal(status.status, "invalid")
+  assert.ok(status.invalidReasons.includes("external_execution_payload_present"))
+  assert.equal(status.validForFormalCandidate, false)
+})
+test("presence: complete remains candidate-only and cannot promote to done", () => {
+  const status = evaluateDoneConditionDraft(completeDone)
+  assert.equal(status.status, "complete")
+  assert.equal(completeDone.candidateOnly, true)
+  assert.ok(
+    detectForbiddenPromotion({ from: "done_condition", to: "done", doneCondition: completeDone })
+      .includes("done_condition_complete_to_done"),
+  )
+})
+test("presence: evaluator is deterministic", () => {
+  const draft = doneWith({ acceptanceCriteria: ["", "Reviewer confirms the result"] })
+  assert.deepEqual(evaluateDoneConditionDraft(draft), evaluateDoneConditionDraft(draft))
+})
+test("presence: input draft is not mutated", () => {
+  const draft = doneWith({ outcome: "   ", acceptanceCriteria: ["", "  keep  "], humanInputRef: "  h  " })
+  const snapshot = JSON.stringify(draft)
+  evaluateDoneConditionDraft(draft)
+  assert.equal(JSON.stringify(draft), snapshot)
+})
+
 test("P0: decomposition modules do not import UI API D1 provider fetch or live LLM", async () => {
   const files = [
     "types.ts",
