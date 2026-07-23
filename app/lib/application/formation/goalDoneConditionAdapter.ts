@@ -97,6 +97,54 @@ export type FormationGoalDoneConditionInput = {
   readonly context?: Record<string, unknown>
 }
 
+// ─── Attestation (runtime provenance) ──────────────────────────
+//
+// The F1B result carries no forgeable brand. The exact object returned by
+// `buildFormationGoalDoneConditionCandidate` — after the sole authority
+// `evaluateDoneConditionDraft` has produced the verdict — is registered here
+// against a module-private detached inert clone. A `{}`, a malformed object, a
+// forged `complete` verdict, or a structural clone is a different identity, is
+// never a key, and never attests. WeakMap keys are held weakly.
+const attestedGoalDoneResults = new WeakMap<object, FormationGoalDoneConditionCandidate>()
+
+// Deep clone over INTERNALLY-CONSTRUCTED, JSON-safe data only. Never run over an
+// arbitrary caller graph: callers reach only the WeakMap identity lookup.
+function inertResultClone<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value
+  if (Array.isArray(value)) return value.map((item) => inertResultClone(item)) as unknown as T
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(value as Record<string, unknown>)) {
+    out[key] = inertResultClone((value as Record<string, unknown>)[key])
+  }
+  return out as T
+}
+
+function registerAttestedGoalDoneResult(
+  result: FormationGoalDoneConditionCandidate,
+): FormationGoalDoneConditionCandidate {
+  // Snapshot the canonical verdict-bearing result before it is exposed, so a
+  // later mutation of public status/evidenceRefs/literals cannot reach it.
+  attestedGoalDoneResults.set(result, inertResultClone(result))
+  return result
+}
+
+/**
+ * Runtime-provenance attestation for a validated F1B result. Returns a fresh,
+ * fully detached clone of the private canonical snapshot ONLY when `value` is
+ * the exact object a real `buildFormationGoalDoneConditionCandidate` call
+ * returned; otherwise `null`. The original context-dependent canonical verdict
+ * is preserved exactly; a forged verdict, `{}`, malformed shape, or a
+ * structural/serialized clone returns `null`. Repeated snapshots never alias.
+ */
+export function snapshotFormationGoalDoneConditionCandidate(
+  value: unknown,
+): FormationGoalDoneConditionCandidate | null {
+  if (value === null || typeof value !== "object") return null
+  const stored = attestedGoalDoneResults.get(value as object)
+  if (stored === undefined) return null
+  return inertResultClone(stored)
+}
+
 export function buildFormationGoalDoneConditionCandidate(
   input: FormationGoalDoneConditionInput,
 ): FormationGoalDoneConditionCandidate {
@@ -206,7 +254,7 @@ export function buildFormationGoalDoneConditionCandidate(
     adapterIssues.push({ category: "independent_closure_unknown" })
   }
 
-  return {
+  return registerAttestedGoalDoneResult({
     goal,
     doneCondition,
     evidenceRefs,
@@ -214,7 +262,7 @@ export function buildFormationGoalDoneConditionCandidate(
     adapterIssues,
     humanReviewRequired: true,
     candidateOnly: true,
-  }
+  })
 }
 
 function normalizeGoal(goal: GoalHypothesis): GoalHypothesis {

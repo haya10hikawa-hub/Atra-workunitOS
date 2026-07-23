@@ -31,6 +31,7 @@ import {
 } from "../app/lib/application/formation/sourceContract.ts"
 import {
   buildFormationGoalDoneConditionCandidate,
+  snapshotFormationGoalDoneConditionCandidate,
   GOAL_HYPOTHESIS_FIELDS,
   type GoalHypothesis,
   type FormationGoalDoneConditionInput,
@@ -521,4 +522,106 @@ test("returned refs do not change when the validated source ref is mutated after
   ;(src.sourceRef as { externalId: string }).externalId = "mutated"
   assert.equal(JSON.stringify(r.doneCondition.sourceRef), beforeDone)
   assert.equal(JSON.stringify(r.evidenceRefs[0]), beforeEvidence)
+})
+
+// ─── Runtime-provenance attestation (F1B) ───────────────────────
+//
+// `snapshotFormationGoalDoneConditionCandidate` attests the EXACT object a real
+// `buildFormationGoalDoneConditionCandidate` call returned (after the sole
+// authority produced the verdict). A `{}`, a forged verdict, or any clone fails.
+
+// B1 — a real F1B output is attested.
+test("attestation: real F1B output is attested", () => {
+  const r = build({ evidenceRefs: [canonicalGh], validatedSources: [ghSource] })
+  const snap = snapshotFormationGoalDoneConditionCandidate(r)
+  assert.notEqual(snap, null)
+  assert.deepEqual(snap, r)
+})
+
+// B2 — an empty object is rejected.
+test("attestation: {} is rejected", () => {
+  assert.equal(snapshotFormationGoalDoneConditionCandidate({}), null)
+})
+
+// B3 — a malformed structural result is rejected.
+test("attestation: malformed structural F1B result is rejected", () => {
+  const malformed = { goal: "x", doneCondition: 5, evidenceRefs: "nope", candidateOnly: true }
+  assert.equal(snapshotFormationGoalDoneConditionCandidate(malformed), null)
+})
+
+// B4 — a forged complete verdict is rejected.
+test("attestation: forged complete verdict is rejected", () => {
+  const forged = {
+    goal: {},
+    doneCondition: { outcome: "x", verifier: "y", acceptanceCriteria: [], status: "complete", missingFields: [], invalidReasons: [] },
+    evidenceRefs: [],
+    independentClosure: "independent",
+    adapterIssues: [],
+    humanReviewRequired: true,
+    candidateOnly: true,
+  }
+  assert.equal(snapshotFormationGoalDoneConditionCandidate(forged), null)
+})
+
+// B5 — a spread clone is rejected.
+test("attestation: spread clone of a real F1B result is rejected", () => {
+  const r = build({ validatedSources: [ghSource] })
+  assert.equal(snapshotFormationGoalDoneConditionCandidate({ ...r }), null)
+})
+
+// B6 — a JSON clone is rejected.
+test("attestation: JSON clone of a real F1B result is rejected", () => {
+  const r = build({ validatedSources: [ghSource] })
+  assert.equal(snapshotFormationGoalDoneConditionCandidate(JSON.parse(JSON.stringify(r))), null)
+})
+
+// B7 — mutating public status does not change the canonical snapshot.
+test("attestation: public status mutation does not change the snapshot", () => {
+  const r = build({ validatedSources: [ghSource] })
+  const before = snapshotFormationGoalDoneConditionCandidate(r)
+  ;(r.doneCondition as { status: string }).status = "complete-forged"
+  const after = snapshotFormationGoalDoneConditionCandidate(r)
+  assert.deepEqual(after, before)
+  assert.notEqual(after?.doneCondition.status, "complete-forged")
+})
+
+// B8 — mutating public evidenceRefs does not change the snapshot.
+test("attestation: public evidenceRefs mutation does not change the snapshot", () => {
+  const r = build({ evidenceRefs: [canonicalGh], validatedSources: [ghSource] })
+  const before = snapshotFormationGoalDoneConditionCandidate(r)
+  ;(r.evidenceRefs as unknown as SourceRef[]).push({ source: "slack", externalId: "x", capturedAt: "2026-07-19T00:00:00Z" } as SourceRef)
+  const after = snapshotFormationGoalDoneConditionCandidate(r)
+  assert.deepEqual(after, before)
+  assert.equal(after?.evidenceRefs.length, before?.evidenceRefs.length)
+})
+
+// B9 — mutating public Done Condition fields does not change the snapshot.
+test("attestation: public Done Condition mutation does not change the snapshot", () => {
+  const r = build({ validatedSources: [ghSource] })
+  const before = snapshotFormationGoalDoneConditionCandidate(r)
+  ;(r.doneCondition as unknown as Record<string, unknown>).outcome = "MUTATED"
+  ;(r.doneCondition as unknown as Record<string, unknown>).invalidReasons = ["forged"]
+  const after = snapshotFormationGoalDoneConditionCandidate(r)
+  assert.deepEqual(after, before)
+})
+
+// B10 — repeated snapshots do not alias.
+test("attestation: repeated F1B snapshots do not alias", () => {
+  const r = build({ evidenceRefs: [canonicalGh], validatedSources: [ghSource] })
+  const a = snapshotFormationGoalDoneConditionCandidate(r)
+  const b = snapshotFormationGoalDoneConditionCandidate(r)
+  assert.deepEqual(a, b)
+  assert.notEqual(a, b)
+  assert.notEqual(a?.doneCondition, b?.doneCondition)
+  assert.notEqual(a?.evidenceRefs, b?.evidenceRefs)
+})
+
+// B11 — a context-derived invalid verdict is preserved exactly.
+test("attestation: context-derived invalid verdict is preserved exactly", () => {
+  const r = build({ doneCondition: completeDraft({ verifier: "AI" }), validatedSources: [ghSource] })
+  assert.equal(r.doneCondition.status, "invalid") // sole authority verdict
+  const snap = snapshotFormationGoalDoneConditionCandidate(r)
+  assert.notEqual(snap, null)
+  assert.equal(snap?.doneCondition.status, "invalid")
+  assert.deepEqual(snap?.doneCondition.invalidReasons, r.doneCondition.invalidReasons)
 })

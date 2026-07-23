@@ -31,6 +31,7 @@ import * as sourceContractModule from "../app/lib/application/formation/sourceCo
 import * as untrustedTextScanModule from "../app/lib/security/untrustedTextScan.ts"
 import {
   buildFormationSourceCandidate,
+  snapshotValidatedFormationSourceResult,
   deriveExtractionConfidence,
   FORMATION_INPUT_GRAPH_MAX_DEPTH,
   FORMATION_INPUT_GRAPH_MAX_ENTRIES,
@@ -1241,4 +1242,135 @@ test("sanitizeForLlm still flags injection and sensitive metadata after extracti
   const sanitized = sanitizeForLlm(signal)
   assert.ok(sanitized.riskFlags.includes("prompt_injection_detected"))
   assert.ok(sanitized.riskFlags.includes("sensitive_data_detected"))
+})
+
+// ─── Runtime-provenance attestation (F1A) ───────────────────────
+//
+// `snapshotValidatedFormationSourceResult` attests the EXACT success object a
+// real `buildFormationSourceCandidate` call returned. Structural compatibility
+// is not provenance; a forged look-alike or any clone is rejected.
+
+// A1 — a real successful result is attested and yields its candidate by value.
+test("attestation: real successful F1A result is attested", () => {
+  const r = buildFormationSourceCandidate(JSON.stringify(validInput()))
+  assert.equal(r.ok, true)
+  const snap = snapshotValidatedFormationSourceResult(r)
+  assert.notEqual(snap, null)
+  if (snap && r.ok) assert.deepEqual(snap.candidate, r.candidate)
+})
+
+// A2 — a failed result is never attested.
+test("attestation: failed F1A result is not attested", () => {
+  const failed = buildFormationSourceCandidate(JSON.stringify({ provider: "github" }))
+  assert.equal(failed.ok, false)
+  assert.equal(snapshotValidatedFormationSourceResult(failed), null)
+})
+
+// A3 — a minimal forged ok:true object is rejected.
+test("attestation: minimal forged ok:true object is rejected", () => {
+  const forged = { ok: true, candidate: { sourceRef: { source: "github", externalId: "forged" } } }
+  assert.equal(snapshotValidatedFormationSourceResult(forged), null)
+})
+
+// A4 — a full-looking forged candidate is rejected.
+test("attestation: full-looking forged candidate is rejected", () => {
+  const forged = {
+    ok: true,
+    candidateOnly: true,
+    flags: [],
+    candidate: {
+      provider: "github",
+      sourceRef: { source: "github", externalId: "pr-241", url: SOURCE_URL, capturedAt: "2026-07-19T00:00:00Z" },
+      sourceObjectId: "o#1",
+      title: "t",
+      sanitizedSummary: "s",
+      actorAssertions: [],
+      timestamps: { occurredAt: "2026-07-18T10:00:00Z", capturedAt: "2026-07-19T00:00:00Z" },
+      sourceLinks: [],
+      referencedObjects: [],
+      supersedes: [],
+      supersededBy: [],
+      unresolvedMarkers: [],
+      decisionMarkers: [],
+      statusMarkers: [],
+      authoritySignals: [],
+      navigationTarget: SOURCE_URL,
+      extractionConfidence: "high",
+      candidateOnly: true,
+    },
+  }
+  assert.equal(snapshotValidatedFormationSourceResult(forged), null)
+})
+
+// A5 — a spread clone is a different identity and is rejected.
+test("attestation: spread clone of a real result is rejected", () => {
+  const r = buildFormationSourceCandidate(JSON.stringify(validInput()))
+  assert.equal(r.ok, true)
+  assert.equal(snapshotValidatedFormationSourceResult({ ...r }), null)
+  if (r.ok) assert.equal(snapshotValidatedFormationSourceResult({ ...r, candidate: { ...r.candidate } }), null)
+})
+
+// A6 — a JSON round-trip clone is rejected.
+test("attestation: JSON clone of a real result is rejected", () => {
+  const r = buildFormationSourceCandidate(JSON.stringify(validInput()))
+  assert.equal(r.ok, true)
+  assert.equal(snapshotValidatedFormationSourceResult(JSON.parse(JSON.stringify(r))), null)
+})
+
+// A7 — mutating public source fields does not change the canonical snapshot.
+test("attestation: public mutation does not change the canonical snapshot", () => {
+  const r = buildFormationSourceCandidate(JSON.stringify(validInput()))
+  assert.equal(r.ok, true)
+  const before = snapshotValidatedFormationSourceResult(r)
+  if (r.ok) (r.candidate as { sanitizedSummary: string }).sanitizedSummary = "MUTATED after validation"
+  const after = snapshotValidatedFormationSourceResult(r)
+  assert.deepEqual(after, before)
+  assert.notEqual(after?.candidate.sanitizedSummary, "MUTATED after validation")
+})
+
+// A8 — post-validation poison / unknown fields never enter the snapshot.
+test("attestation: rawPayload/providerPayload/tenantId/unknown fields never enter the snapshot", () => {
+  const r = buildFormationSourceCandidate(JSON.stringify(validInput()))
+  assert.equal(r.ok, true)
+  if (r.ok) {
+    ;(r.candidate as Record<string, unknown>).rawPayload = "raw"
+    ;(r as unknown as Record<string, unknown>).providerPayload = "prov"
+    ;(r.candidate as Record<string, unknown>).tenantId = "victim"
+    ;(r.candidate as Record<string, unknown>).unknownField = 1
+  }
+  const snap = snapshotValidatedFormationSourceResult(r)
+  assert.notEqual(snap, null)
+  if (snap) {
+    assert.equal("rawPayload" in snap.candidate, false)
+    assert.equal("providerPayload" in (snap as unknown as Record<string, unknown>), false)
+    assert.equal("tenantId" in snap.candidate, false)
+    assert.equal("unknownField" in snap.candidate, false)
+  }
+})
+
+// A9 — repeated snapshots are deeply equal.
+test("attestation: repeated snapshots are deeply equal", () => {
+  const r = buildFormationSourceCandidate(JSON.stringify(validInput()))
+  const a = snapshotValidatedFormationSourceResult(r)
+  const b = snapshotValidatedFormationSourceResult(r)
+  assert.deepEqual(a, b)
+})
+
+// A10 — repeated snapshots are not object-identical.
+test("attestation: repeated snapshots are not object-identical", () => {
+  const r = buildFormationSourceCandidate(JSON.stringify(validInput()))
+  const a = snapshotValidatedFormationSourceResult(r)
+  const b = snapshotValidatedFormationSourceResult(r)
+  assert.notEqual(a, b)
+  assert.notEqual(a?.candidate, b?.candidate)
+})
+
+// A11 — nested arrays and objects do not alias across snapshots.
+test("attestation: nested arrays and objects do not alias across snapshots", () => {
+  const r = buildFormationSourceCandidate(JSON.stringify(validInput()))
+  const a = snapshotValidatedFormationSourceResult(r)
+  const b = snapshotValidatedFormationSourceResult(r)
+  assert.notEqual(a?.candidate.actorAssertions, b?.candidate.actorAssertions)
+  assert.notEqual(a?.candidate.sourceRef, b?.candidate.sourceRef)
+  assert.notEqual(a?.candidate.referencedObjects, b?.candidate.referencedObjects)
 })

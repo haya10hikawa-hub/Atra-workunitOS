@@ -353,6 +353,60 @@ const AUTHORITY_SIGNAL_KEYS = new Set(["kind", "inferred"])
 type JsonPrimitive = string | number | boolean | null
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
 
+// ─── Validated-result attestation (runtime provenance) ─────────
+//
+// The success result of `buildFormationSourceCandidate` carries no forgeable
+// brand or boolean flag. Instead the exact success object is registered here,
+// keyed against a module-private detached inert clone taken BEFORE the object is
+// exposed. Structural compatibility is not provenance: a hand-built look-alike,
+// a shallow/deep clone, or a serialized/deserialized copy is a different object
+// identity, is never a key, and never attests. WeakMap keys are held weakly, so
+// a dead public result is not retained.
+
+type AttestedSourceResult = Extract<FormationSourceContractResult, { readonly ok: true }>
+
+const attestedSourceResults = new WeakMap<object, AttestedSourceResult>()
+
+// Deep clone over INTERNALLY-CONSTRUCTED, JSON-safe data only (plain objects,
+// arrays, and JSON primitives). It is never run over an arbitrary caller graph:
+// callers only ever reach the WeakMap identity lookup, never this clone. The
+// reconstruction drops any non-plain field, so no accessor, prototype, or
+// unknown post-validation field can travel into or out of a snapshot.
+function inertResultClone<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value
+  if (Array.isArray(value)) return value.map((item) => inertResultClone(item)) as unknown as T
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(value as Record<string, unknown>)) {
+    out[key] = inertResultClone((value as Record<string, unknown>)[key])
+  }
+  return out as T
+}
+
+// Register a freshly-built success result. The snapshot is taken before the
+// public object leaves this module, so a later mutation of the public result or
+// its candidate cannot reach the stored canonical clone.
+function registerAttestedSourceResult(result: AttestedSourceResult): AttestedSourceResult {
+  attestedSourceResults.set(result, inertResultClone(result))
+  return result
+}
+
+/**
+ * Runtime-provenance attestation for a validated F1A result.
+ *
+ * Returns a fresh, fully detached clone of the private canonical snapshot ONLY
+ * when `value` is the exact success object a real `buildFormationSourceCandidate`
+ * call returned; otherwise `null`. A forged look-alike, a shallow/deep clone, or
+ * a serialized/deserialized copy is not registered and returns `null`. A failed
+ * result is never registered. Repeated calls neither alias each other nor the
+ * stored snapshot, and no unknown post-validation field can be present.
+ */
+export function snapshotValidatedFormationSourceResult(value: unknown): AttestedSourceResult | null {
+  if (value === null || typeof value !== "object") return null
+  const stored = attestedSourceResults.get(value as object)
+  if (stored === undefined) return null
+  return inertResultClone(stored)
+}
+
 // ─── Validator / builder ────────────────────────────────────────
 
 /**
@@ -567,7 +621,7 @@ function validateShape(input: Record<string, unknown>): FormationSourceContractR
     candidateOnly: true,
   }
 
-  return { ok: true, candidateOnly: true, candidate, flags }
+  return registerAttestedSourceResult({ ok: true, candidateOnly: true, candidate, flags })
 }
 
 /**
