@@ -159,14 +159,19 @@ export type GroupingComparisonResult =
 // ─── Bounded candidate retrieval ────────────────────────────────
 
 /**
- * Retrieval keys. Strong keys are exact object/link/work-object identity;
- * recall keys only widen the comparison set and never decide a verdict. Provider
- * identity ALONE is deliberately absent — provider overlap never retrieves.
+ * Retrieval keys. Strong keys are exact MEMBER object / member cross-link /
+ * work-object identity; recall keys only widen the comparison set and never
+ * decide a verdict. `shared_referenced_object` (both subjects reference the same
+ * NON-member third-party object) is a pure RECALL key — it widens the set but is
+ * never a comparison hard positive and never called `exact_provider_object`.
+ * Provider identity ALONE is deliberately absent — provider overlap never
+ * retrieves.
  */
 export const RETRIEVAL_KEY_KINDS = [
   "exact_provider_object",
   "explicit_cross_link",
   "same_canonical_work_object",
+  "shared_referenced_object",
   "exact_work_object_text",
   "bounded_lexical_similarity",
 ] as const

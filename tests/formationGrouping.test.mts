@@ -443,6 +443,58 @@ test("retrieval never uses provider identity alone as a match key", () => {
   if (r.ok) assert.equal(r.comparable.length, 0)
 })
 
+// ─── Case F: retrieval-key matrix distinguishes member/member, member/reference,
+//     reference/reference-only, and provider-only (M25/M31 regression) ──────────
+test("retrieval key matrix: member/member, member/reference, reference/reference, provider-only", () => {
+  const subject = buildSubject({ sources: [{ provider: "github", sourceObjectId: "org/repo#M", externalId: "pr-m", occurredAt: "2026-01-01T00:00:00Z", referencedObjects: [{ provider: "github", sourceObjectId: "org/common#999" }] }] })
+  // 0: member/member — shares the member object #M.
+  const memberMember = buildSubject({ sources: [{ provider: "github", sourceObjectId: "org/repo#M", externalId: "pr-m2", occurredAt: "2026-02-01T00:00:00Z" }] })
+  // 1: member/reference — references the subject's member object #M.
+  const memberReference = buildSubject({ sources: [{ provider: "slack", sourceObjectId: "T/C/M", externalId: "msg-m", occurredAt: "2026-02-01T00:00:00Z", referencedObjects: [{ provider: "github", sourceObjectId: "org/repo#M" }] }] })
+  // 2: reference/reference only — shares only the third-party reference #999.
+  const referenceReference = buildSubject({ sources: [{ provider: "github", sourceObjectId: "org/repo#OTHER", externalId: "pr-o", occurredAt: "2026-02-01T00:00:00Z", referencedObjects: [{ provider: "github", sourceObjectId: "org/common#999" }] }] })
+  // 3: provider-only — same provider, disjoint objects, no shared reference.
+  const providerOnly = buildSubject({ sources: [{ provider: "github", sourceObjectId: "org/repo#PX", externalId: "pr-px", occurredAt: "2026-02-01T00:00:00Z" }] })
+
+  const r = retrieveComparableSubjects(subject, [memberMember, memberReference, referenceReference, providerOnly])
+  assert.equal(r.ok, true)
+  if (!r.ok) return
+  // Original stable order preserved; provider-only (index 3) is NOT retrieved.
+  assert.deepEqual(r.comparable, [
+    { index: 0, via: "exact_provider_object" },
+    { index: 1, via: "explicit_cross_link" },
+    { index: 2, via: "shared_referenced_object" },
+  ])
+  // Retrieval returns ONLY index + a closed key — never raw object identity.
+  for (const m of r.comparable) {
+    assert.deepEqual(Object.keys(m).sort(), ["index", "via"])
+    assert.ok(!JSON.stringify(m).includes("999"))
+    assert.ok(!JSON.stringify(m).includes("org/"))
+  }
+})
+
+// ─── Case C: shared third-party reference is recall-only, contributes NO
+//     comparison hard positive, and never echoes the shared object id ───────────
+test("shared third-party reference: no comparison hard positive, recall-only, no echo", () => {
+  const left = buildSubject({ sources: [{ provider: "github", sourceObjectId: "org/repo#C1", externalId: "pr-c1", occurredAt: "2020-01-01T00:00:00Z", referencedObjects: [{ provider: "github", sourceObjectId: "org/common#SHARED999" }] }] })
+  const right = buildSubject({ sources: [{ provider: "github", sourceObjectId: "org/repo#C2", externalId: "pr-c2", occurredAt: "2026-01-01T00:00:00Z", referencedObjects: [{ provider: "github", sourceObjectId: "org/common#SHARED999" }] }] })
+  const cmp = compareGroupingSubjects({ left, right })
+  assert.equal(cmp.ok, true)
+  if (!cmp.ok) return
+  // The shared referenced-only object is NOT a hard positive and NOT strong.
+  assert.equal(cmp.hardPositive.length, 0)
+  assert.notEqual(cmp.verdict, "strong_match")
+  assert.equal(cmp.verdict, "insufficient")
+  // No comparison reason or evidence echoes the shared third-party object id.
+  const strings: string[] = []
+  collectStrings(cmp, strings)
+  for (const s of strings) assert.ok(!s.includes("SHARED999"), `comparison leaked shared reference id: ${s}`)
+  // But the shared reference DOES widen retrieval (recall-only), via the closed key.
+  const retr = retrieveComparableSubjects(left, [right])
+  assert.equal(retr.ok, true)
+  if (retr.ok) assert.deepEqual(retr.comparable, [{ index: 0, via: "shared_referenced_object" }])
+})
+
 // ─── Closed vocabularies are exactly as specified ────────────────────────────
 
 test("verdict / evidence / retrieval vocabularies are the required closed sets", () => {
@@ -460,7 +512,7 @@ test("verdict / evidence / retrieval vocabularies are the required closed sets",
   ])
   assert.deepEqual([...RETRIEVAL_KEY_KINDS], [
     "exact_provider_object", "explicit_cross_link", "same_canonical_work_object",
-    "exact_work_object_text", "bounded_lexical_similarity",
+    "shared_referenced_object", "exact_work_object_text", "bounded_lexical_similarity",
   ])
 })
 

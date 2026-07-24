@@ -73,7 +73,7 @@ const HARD_SPLIT_REASONS: Record<HardSplitKind, string> = {
 }
 
 const HARD_POSITIVE_REASONS: Record<HardPositiveKind, string> = {
-  exact_provider_object: "Both candidates reference the same provider object.",
+  exact_provider_object: "Both candidates contain the same member provider object.",
   explicit_cross_link: "One candidate explicitly cross-links the other's object.",
   same_canonical_work_object: "Both candidates resolve to the same canonical work object.",
   same_outcome: "The candidates share the same corroborated outcome.",
@@ -177,10 +177,16 @@ function computeHardPositive(
 ): GroupingEvidence<HardPositiveKind>[] {
   const out: GroupingEvidence<HardPositiveKind>[] = []
 
-  // A. Exact provider object: universes intersect on an exact canonical tuple.
-  const sharedObjects = intersectionCount(left.objectKeys, right.objectKeys)
-  if (sharedObjects > 0) {
-    push(out, "exact_provider_object", support(left.objectKeys.size, right.objectKeys.size, sharedObjects), HARD_POSITIVE_REASONS)
+  // A. Exact provider object: MEMBER object universes intersect on an exact
+  //    canonical tuple. Only a shared MEMBER object (case A) is a hard positive.
+  //    A shared NON-member referenced object (case C) is deliberately EXCLUDED
+  //    here: two subjects that merely reference the same third-party object are
+  //    not thereby the same Goal, and admitting that produced a false
+  //    strong_match. A shared referenced-only object is recall-only — it can
+  //    widen retrieval (see firstRetrievalKey) but never a comparison positive.
+  const sharedMemberObjects = intersectionCount(left.memberObjectKeys, right.memberObjectKeys)
+  if (sharedMemberObjects > 0) {
+    push(out, "exact_provider_object", support(left.memberObjectKeys.size, right.memberObjectKeys.size, sharedMemberObjects), HARD_POSITIVE_REASONS)
   }
 
   // B. Explicit cross-link: a member object of one side appears in the other's
@@ -330,13 +336,18 @@ export function compareGroupingSubjects(input: GroupingComparisonInput): Groupin
  * prepared subjects share, or `null`. Provider identity ALONE is never a key.
  */
 function firstRetrievalKey(subject: PreparedSubject, candidate: PreparedSubject): RetrievalKeyKind | null {
-  if (intersectionCount(subject.objectKeys, candidate.objectKeys) > 0) return "exact_provider_object"
+  // 1. Exact MEMBER provider object — member ∩ member ONLY, never the merged
+  //    referenced universe (a shared referenced-only object is the weaker recall
+  //    key at step 4, and is never called exact_provider_object).
+  if (intersectionCount(subject.memberObjectKeys, candidate.memberObjectKeys) > 0) return "exact_provider_object"
+  // 2. Explicit member cross-link: one side's member appears in the other's refs.
   if (
     intersectionCount(subject.memberObjectKeys, candidate.referencedObjectKeys) > 0 ||
     intersectionCount(candidate.memberObjectKeys, subject.referencedObjectKeys) > 0
   ) {
     return "explicit_cross_link"
   }
+  // 3. Same admitted canonical Work Object.
   if (
     subject.canonicalWorkObjectKey !== null &&
     candidate.canonicalWorkObjectKey !== null &&
@@ -344,6 +355,13 @@ function firstRetrievalKey(subject: PreparedSubject, candidate: PreparedSubject)
   ) {
     return "same_canonical_work_object"
   }
+  // 4. Shared referenced-only object: both reference the same third-party object.
+  //    RECALL ONLY — widens the comparison set, assigns no verdict, and is never a
+  //    comparison hard positive.
+  if (intersectionCount(subject.referencedObjectKeys, candidate.referencedObjectKeys) > 0) {
+    return "shared_referenced_object"
+  }
+  // 5. Exact workObject text.
   if (
     subject.workObjectText !== null &&
     candidate.workObjectText !== null &&

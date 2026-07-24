@@ -137,6 +137,52 @@
       "expectVerdict": "insufficient",
       "hardPositiveEmpty": true,
       "hardPositiveExcludes": ["exact_provider_object"]
+    },
+    {
+      "name": "23_case_a_shared_member_object",
+      "note": "CASE A — the SAME provider object is a MEMBER of both subjects. Member/member is a hard positive (exact_provider_object) and reaches strong_match with no hard split.",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#200", "externalId": "pr-200a", "occurredAt": "2020-01-01T00:00:00Z" }] },
+      "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#200", "externalId": "pr-200b", "occurredAt": "2026-01-01T00:00:00Z" }] },
+      "expectVerdict": "strong_match",
+      "hardPositiveIncludes": ["exact_provider_object"]
+    },
+    {
+      "name": "24_case_b_member_cross_link_not_exact_object",
+      "note": "CASE B — one subject's MEMBER object appears in the other's referencedObjects. This is explicit_cross_link, NOT exact_provider_object (the shared object is a member of only one side).",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#210", "externalId": "pr-210", "occurredAt": "2020-01-01T00:00:00Z" }] },
+      "right": { "sources": [{ "provider": "slack", "sourceObjectId": "T1/C1/210", "externalId": "msg-210", "occurredAt": "2026-01-01T00:00:00Z", "referencedObjects": [{ "provider": "github", "sourceObjectId": "org/repo#210" }] }] },
+      "expectVerdict": "strong_match",
+      "hardPositiveIncludes": ["explicit_cross_link"],
+      "hardPositiveExcludes": ["exact_provider_object"]
+    },
+    {
+      "name": "25_case_c_shared_third_party_reference_only",
+      "note": "CASE C (the confirmed blocker regression) — different MEMBER objects; neither references the other's member; the ONLY overlap is that both reference the same non-member third-party object org/common#999. This must NOT be exact_provider_object or explicit_cross_link, must NOT be strong_match, and yields insufficient. The shared reference is recall-only (see retrieval matrix test).",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#220", "externalId": "pr-220", "occurredAt": "2020-01-01T00:00:00Z", "referencedObjects": [{ "provider": "github", "sourceObjectId": "org/common#999" }] }] },
+      "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#221", "externalId": "pr-221", "occurredAt": "2026-01-01T00:00:00Z", "referencedObjects": [{ "provider": "github", "sourceObjectId": "org/common#999" }] }] },
+      "expectVerdict": "insufficient",
+      "hardPositiveEmpty": true,
+      "hardPositiveExcludes": ["exact_provider_object", "explicit_cross_link"],
+      "weakKindsEqual": ["provider_overlap"]
+    },
+    {
+      "name": "26_case_d_shared_reference_plus_two_weak_kinds",
+      "note": "CASE D — shared third-party reference plus TWO distinct weak kinds (actor + container; providers differ so no provider_overlap). Fewer than three distinct weak kinds ⇒ insufficient, never strong_match. The shared reference contributes no comparison evidence.",
+      "left": { "sources": [{ "provider": "slack", "sourceObjectId": "T1/C1/230", "externalId": "msg-230", "occurredAt": "2020-01-01T00:00:00Z", "actors": ["Kaneko"], "container": "shared-space", "referencedObjects": [{ "provider": "github", "sourceObjectId": "org/common#999" }] }] },
+      "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#231", "externalId": "pr-231", "occurredAt": "2026-01-01T00:00:00Z", "actors": ["Kaneko"], "container": "shared-space", "referencedObjects": [{ "provider": "github", "sourceObjectId": "org/common#999" }] }] },
+      "expectVerdict": "insufficient",
+      "notStrong": true,
+      "hardPositiveEmpty": true,
+      "weakKindsEqual": ["actor_overlap", "container_overlap"]
+    },
+    {
+      "name": "27_case_e_shared_reference_plus_hard_split",
+      "note": "CASE E — shared third-party reference plus a validated different verifier. Hard split is final ⇒ must_split, and the shared reference is neither exact_provider_object nor explicit_cross_link.",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#240", "externalId": "pr-240", "occurredAt": "2020-01-01T00:00:00Z", "referencedObjects": [{ "provider": "github", "sourceObjectId": "org/common#999" }] }], "goal": { "verifier": "human_reviewer_a" } },
+      "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#241", "externalId": "pr-241", "occurredAt": "2026-01-01T00:00:00Z", "referencedObjects": [{ "provider": "github", "sourceObjectId": "org/common#999" }] }], "goal": { "verifier": "human_reviewer_b" } },
+      "expectVerdict": "must_split",
+      "hardSplitIncludes": ["different_verifier"],
+      "hardPositiveExcludes": ["exact_provider_object", "explicit_cross_link"]
     }
   ]
 }
