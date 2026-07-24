@@ -1,0 +1,142 @@
+{
+  "note": "F3 permanent grouping counterexamples. Each scenario is compiled by tests/formationGrouping.test.mts through the REAL F1A -> F1B -> F1C builders, so every subject is a genuinely attested F1C result (never a clone). Fields not set default to: goal {} , acceptanceCriteria [] , independentClosure 'unknown' , occurredAt distinct-and-far unless overridden. Selectors (canonicalWorkObjectRef) are untrusted and must resolve to a member of that subject's attested object universe.",
+  "scenarios": [
+    {
+      "name": "01_same_topic_different_canonical_work_object",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#1", "externalId": "pr-1", "occurredAt": "2020-01-01T00:00:00Z" }], "goal": { "workObject": "auth" }, "canonicalWorkObjectRef": { "provider": "github", "sourceObjectId": "org/repo#1" } },
+      "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#2", "externalId": "pr-2", "occurredAt": "2026-01-01T00:00:00Z" }], "goal": { "workObject": "auth" }, "canonicalWorkObjectRef": { "provider": "github", "sourceObjectId": "org/repo#2" } },
+      "expectVerdict": "must_split",
+      "hardSplitIncludes": ["different_work_object"]
+    },
+    {
+      "name": "02_same_actor_different_deliverable",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#10", "externalId": "pr-10", "occurredAt": "2020-01-01T00:00:00Z", "actors": ["Hayato"] }], "canonicalWorkObjectRef": { "provider": "github", "sourceObjectId": "org/repo#10" } },
+      "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#11", "externalId": "pr-11", "occurredAt": "2026-01-01T00:00:00Z", "actors": ["Hayato"] }], "canonicalWorkObjectRef": { "provider": "github", "sourceObjectId": "org/repo#11" } },
+      "expectVerdict": "must_split",
+      "hardSplitIncludes": ["different_work_object"]
+    },
+    {
+      "name": "03_same_container_different_decision_boundary",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#20", "externalId": "pr-20", "occurredAt": "2020-01-01T00:00:00Z", "container": "org/repo" }], "goal": { "decisionNeeded": "Ship v1 now?" }, "independentClosure": "independent" },
+      "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#21", "externalId": "pr-21", "occurredAt": "2026-01-01T00:00:00Z", "container": "org/repo" }], "goal": { "decisionNeeded": "Ship v2 later?" }, "independentClosure": "independent" },
+      "expectVerdict": "must_split",
+      "hardSplitIncludes": ["separate_decision_boundary"]
+    },
+    {
+      "name": "04_same_deadline_different_verifier",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#30", "externalId": "pr-30", "occurredAt": "2020-01-01T00:00:00Z", "deadline": "2026-08-01T00:00:00Z" }], "goal": { "verifier": "human_reviewer_a" } },
+      "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#31", "externalId": "pr-31", "occurredAt": "2026-01-01T00:00:00Z", "deadline": "2026-08-01T12:00:00Z" }], "goal": { "verifier": "human_reviewer_b" } },
+      "expectVerdict": "must_split",
+      "hardSplitIncludes": ["different_verifier"]
+    },
+    {
+      "name": "05_same_provider_only",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#40", "externalId": "pr-40", "occurredAt": "2020-01-01T00:00:00Z" }] },
+      "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#41", "externalId": "pr-41", "occurredAt": "2026-01-01T00:00:00Z" }] },
+      "expectVerdict": "insufficient",
+      "weakKindsEqual": ["provider_overlap"]
+    },
+    {
+      "name": "06_actor_and_container_only",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#50", "externalId": "pr-50", "occurredAt": "2020-01-01T00:00:00Z", "actors": ["Kaneko"], "container": "shared-space" }] },
+      "right": { "sources": [{ "provider": "slack", "sourceObjectId": "T1/C1/50", "externalId": "msg-50", "occurredAt": "2026-01-01T00:00:00Z", "actors": ["Kaneko"], "container": "shared-space" }] },
+      "expectVerdict": "insufficient",
+      "weakKindsEqual": ["actor_overlap", "container_overlap"]
+    },
+    {
+      "name": "07_actor_container_deadline_only",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#60", "externalId": "pr-60", "occurredAt": "2020-01-01T00:00:00Z", "actors": ["Kaneko"], "container": "shared-space", "deadline": "2026-08-01T00:00:00Z" }] },
+      "right": { "sources": [{ "provider": "slack", "sourceObjectId": "T1/C1/60", "externalId": "msg-60", "occurredAt": "2026-01-01T00:00:00Z", "actors": ["Kaneko"], "container": "shared-space", "deadline": "2026-08-02T00:00:00Z" }] },
+      "expectVerdict": "possible_match",
+      "hardPositiveEmpty": true,
+      "weakKindsEqual": ["actor_overlap", "container_overlap", "related_deadline"]
+    },
+    {
+      "name": "08_timestamp_proximity_only",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#70", "externalId": "pr-70", "occurredAt": "2026-07-01T10:00:00Z" }] },
+      "right": { "sources": [{ "provider": "slack", "sourceObjectId": "T1/C1/70", "externalId": "msg-70", "occurredAt": "2026-07-01T11:00:00Z" }] },
+      "expectVerdict": "insufficient",
+      "weakKindsEqual": ["timestamp_proximity"]
+    },
+    {
+      "name": "09_exact_shared_provider_object",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#80", "externalId": "pr-80a", "occurredAt": "2020-01-01T00:00:00Z" }] },
+      "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#80", "externalId": "pr-80b", "occurredAt": "2026-01-01T00:00:00Z" }] },
+      "expectVerdict": "strong_match",
+      "hardPositiveIncludes": ["exact_provider_object"]
+    },
+    {
+      "name": "10_verified_explicit_cross_link",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#90", "externalId": "pr-90", "occurredAt": "2020-01-01T00:00:00Z" }] },
+      "right": { "sources": [{ "provider": "slack", "sourceObjectId": "T1/C1/90", "externalId": "msg-90", "occurredAt": "2026-01-01T00:00:00Z", "referencedObjects": [{ "provider": "github", "sourceObjectId": "org/repo#90" }] }] },
+      "expectVerdict": "strong_match",
+      "hardPositiveIncludes": ["explicit_cross_link"]
+    },
+    {
+      "name": "11_same_canonical_work_object",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#100", "externalId": "pr-100a", "occurredAt": "2020-01-01T00:00:00Z" }], "canonicalWorkObjectRef": { "provider": "github", "sourceObjectId": "org/repo#100" } },
+      "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#100", "externalId": "pr-100b", "occurredAt": "2026-01-01T00:00:00Z" }], "canonicalWorkObjectRef": { "provider": "github", "sourceObjectId": "org/repo#100" } },
+      "expectVerdict": "strong_match",
+      "hardPositiveIncludes": ["same_canonical_work_object"]
+    },
+    {
+      "name": "12_exact_outcome_without_corroboration",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#110", "externalId": "pr-110", "occurredAt": "2020-01-01T00:00:00Z" }], "goal": { "outcome": "Ship the payments release" } },
+      "right": { "sources": [{ "provider": "slack", "sourceObjectId": "T1/C1/110", "externalId": "msg-110", "occurredAt": "2026-01-01T00:00:00Z" }], "goal": { "outcome": "Ship the payments release" } },
+      "expectVerdict": "insufficient",
+      "hardPositiveEmpty": true,
+      "hardPositiveExcludes": ["same_outcome"]
+    },
+    {
+      "name": "13_exact_outcome_same_verifier",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#120", "externalId": "pr-120", "occurredAt": "2020-01-01T00:00:00Z" }], "goal": { "outcome": "Ship the release", "verifier": "human_owner" } },
+      "right": { "sources": [{ "provider": "slack", "sourceObjectId": "T1/C1/120", "externalId": "msg-120", "occurredAt": "2026-01-01T00:00:00Z" }], "goal": { "outcome": "Ship the release", "verifier": "human_owner" } },
+      "expectVerdict": "strong_match",
+      "hardPositiveIncludes": ["same_outcome", "same_verifier"]
+    },
+    {
+      "name": "14_exact_acceptance_criteria_set",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#130", "externalId": "pr-130", "occurredAt": "2020-01-01T00:00:00Z" }], "acceptanceCriteria": ["Reviewer signs off", "All tests pass"] },
+      "right": { "sources": [{ "provider": "slack", "sourceObjectId": "T1/C1/130", "externalId": "msg-130", "occurredAt": "2026-01-01T00:00:00Z" }], "acceptanceCriteria": ["All tests pass", "Reviewer signs off"] },
+      "expectVerdict": "strong_match",
+      "hardPositiveIncludes": ["compatible_acceptance_criteria"]
+    },
+    {
+      "name": "15_hard_split_and_hard_positive_both_present",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#140", "externalId": "pr-140a", "occurredAt": "2020-01-01T00:00:00Z" }], "goal": { "verifier": "human_reviewer_a" } },
+      "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#140", "externalId": "pr-140b", "occurredAt": "2026-01-01T00:00:00Z" }], "goal": { "verifier": "human_reviewer_b" } },
+      "expectVerdict": "must_split",
+      "hardSplitIncludes": ["different_verifier"],
+      "hardPositiveIncludes": ["exact_provider_object"]
+    },
+    {
+      "name": "16_similar_wording_no_shared_canonical_object",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#150", "externalId": "pr-150", "occurredAt": "2020-01-01T00:00:00Z" }], "goal": { "outcome": "Improve onboarding funnel conversion" } },
+      "right": { "sources": [{ "provider": "slack", "sourceObjectId": "T1/C1/150", "externalId": "msg-150", "occurredAt": "2026-01-01T00:00:00Z" }], "goal": { "outcome": "Improve onboarding funnel conversion metrics" } },
+      "notStrong": true,
+      "hardPositiveEmpty": true
+    },
+    {
+      "name": "17_same_repo_same_actor_different_verifier",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#160", "externalId": "pr-160", "occurredAt": "2020-01-01T00:00:00Z", "container": "org/repo", "actors": ["Hayato"] }], "goal": { "verifier": "human_reviewer_a" } },
+      "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#161", "externalId": "pr-161", "occurredAt": "2026-01-01T00:00:00Z", "container": "org/repo", "actors": ["Hayato"] }], "goal": { "verifier": "human_reviewer_b" } },
+      "expectVerdict": "must_split",
+      "hardSplitIncludes": ["different_verifier"]
+    },
+    {
+      "name": "19_source_provider_differs_but_explicit_cross_link",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#170", "externalId": "pr-170", "occurredAt": "2020-01-01T00:00:00Z" }] },
+      "right": { "sources": [{ "provider": "gmail", "sourceObjectId": "thread-170", "externalId": "mail-170", "occurredAt": "2026-01-01T00:00:00Z", "referencedObjects": [{ "provider": "github", "sourceObjectId": "org/repo#170" }] }] },
+      "expectVerdict": "strong_match",
+      "hardPositiveIncludes": ["explicit_cross_link"]
+    },
+    {
+      "name": "22_cross_provider_same_id_no_collision",
+      "left": { "sources": [{ "provider": "slack", "sourceObjectId": "COLLIDE-ID", "externalId": "msg-180", "occurredAt": "2020-01-01T00:00:00Z" }] },
+      "right": { "sources": [{ "provider": "github", "sourceObjectId": "COLLIDE-ID", "externalId": "pr-180", "occurredAt": "2026-01-01T00:00:00Z" }] },
+      "expectVerdict": "insufficient",
+      "hardPositiveEmpty": true,
+      "hardPositiveExcludes": ["exact_provider_object"]
+    }
+  ]
+}
