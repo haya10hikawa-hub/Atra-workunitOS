@@ -1,0 +1,32 @@
+{
+  "config": {
+    "calendarHosts": [
+      "calendar.google.com",
+      "www.google.com"
+    ]
+  },
+  "input": {
+    "eventType": "deadline_approaching",
+    "calendarId": "team@group.calendar.google.com",
+    "eventId": "evt6a8b2c9d0e1f",
+    "title": "Please review the launch plan before the deadline",
+    "summary": "The launch plan needs a final review before it is due.",
+    "organizer": "Hayato",
+    "attendees": [
+      "Reviewer A",
+      "Reviewer B"
+    ],
+    "status": "confirmed",
+    "start": {
+      "kind": "date_time",
+      "value": "2026-08-20T17:00:00Z"
+    },
+    "end": {
+      "kind": "date_time",
+      "value": "2026-08-20T18:00:00Z"
+    },
+    "sourceUrl": "https://www.google.com/calendar/event?eid=evt6a8b2c9d0e1f",
+    "updatedAt": "2026-08-01T09:30:00Z",
+    "capturedAt": "2026-08-02T00:00:00Z"
+  }
+}
