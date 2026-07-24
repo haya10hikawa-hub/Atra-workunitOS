@@ -1,0 +1,28 @@
+{
+  "config": {
+    "workspaces": [
+      {
+        "workspaceId": "T012ABCDEF",
+        "host": "example-workspace.slack.com"
+      },
+      {
+        "workspaceId": "T099SECOND",
+        "host": "second-team.slack.com"
+      }
+    ]
+  },
+  "input": {
+    "eventType": "mention_request",
+    "workspaceId": "T099SECOND",
+    "channelId": "C2222222222",
+    "messageTs": "1710000000.000100",
+    "title": "Please take a look at the launcher change",
+    "summary": "A teammate asked for eyes on the launcher ordering change.",
+    "sourceStatus": "open",
+    "sourceUrl": "https://second-team.slack.com/archives/C2222222222/p1710000000000100",
+    "capturedAt": "2026-07-19T00:00:00Z",
+    "messageAt": "2026-07-18T10:00:00Z",
+    "updatedAt": "2026-07-18T10:00:00Z",
+    "actor": "hayato"
+  }
+}
