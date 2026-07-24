@@ -1,0 +1,18 @@
+{
+  "input": {
+    "eventType": "pull_request",
+    "repository": {
+      "owner": "example-org",
+      "name": "example-repo"
+    },
+    "number": 255,
+    "title": "PR #255: bad timestamp",
+    "summary": "Pull request with a malformed updated timestamp",
+    "status": "open",
+    "sourceUrl": "https://github.com/example-org/example-repo/pull/255",
+    "capturedAt": "2026-07-19T00:00:00Z",
+    "updatedAt": "2026-13-40T25:61:00Z",
+    "createdAt": "2026-07-17T09:00:00Z",
+    "actor": "hayato"
+  }
+}

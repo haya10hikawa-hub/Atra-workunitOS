@@ -1,0 +1,15 @@
+{
+  "input": {
+    "eventType": "pull_request",
+    "repository": { "owner": "example-org", "name": "example-repo" },
+    "number": 241,
+    "title": "PR #241: sensitive query in primary URL",
+    "summary": "Primary URL carries a credential in a query parameter",
+    "status": "open",
+    "sourceUrl": "https://github.com/example-org/example-repo/pull/241?access_token=ghp_0123456789abcdefghijABCDEF",
+    "capturedAt": "2026-07-19T00:00:00Z",
+    "updatedAt": "2026-07-18T10:00:00Z",
+    "createdAt": "2026-07-17T09:00:00Z",
+    "actor": "hayato"
+  }
+}
