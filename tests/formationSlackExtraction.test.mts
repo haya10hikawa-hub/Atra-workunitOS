@@ -575,3 +575,104 @@ test("recognizeSlackPermalink parses a canonical permalink and refuses malformed
   assert.equal(recognizeSlackPermalink("https://h/archives/C1234567890/p1710000000000100?foo=bar"), null) // unexpected key
   assert.equal(recognizeSlackPermalink("https://h/archives/C1234567890/p1710000000000100?thread_ts=1&thread_ts=2"), null) // dup key
 })
+
+// ─── Referenced Slack permalink self-coherence (Section 10, blocker fix) ──────
+//
+// A referenced Slack permalink becomes referencedObjects[].provider = "slack" ONLY
+// when its query is internally self-consistent with its path; otherwise the URL is
+// retained as an OPAQUE source link and never recognized. These tests inspect the
+// FINAL F1A candidate, not an intermediate helper. The referenced message path is
+// distinct from the primary (…000100), so it is never the primary self-reference.
+
+const REF_HOST = "https://example-workspace.slack.com"
+const REF_PATH = `${REF_HOST}/archives/C1234567890/p1709999999000300` // → 1709999999.000300
+const REF_SLACK_ID = "slack:T012ABCDEF/C1234567890/1709999999.000300"
+
+function candidateWithRefs(...referencedUrls: string[]) {
+  return candidateOf({ ...baseInput(), referencedUrls })
+}
+/** The referenced object recognized for `url`, or undefined when it stayed opaque. */
+function recognizedRefFor(url: string) {
+  const c = candidateWithRefs(url)
+  const link = c.sourceLinks.find((l) => l.url.includes("1709999999000300"))
+  return { refs: c.referencedObjects, link }
+}
+
+test("referenced top-level Slack permalink (no query) is recognized as a Slack object", () => {
+  const { refs } = recognizedRefFor(REF_PATH)
+  assert.deepEqual(refs, [{ provider: "slack", sourceObjectId: REF_SLACK_ID }])
+})
+
+test("referenced canonical thread reply (earlier thread_ts, matching cid) is recognized", () => {
+  const url = `${REF_PATH}?thread_ts=1709999998.000000&cid=C1234567890`
+  const { refs } = recognizedRefFor(url)
+  assert.deepEqual(refs, [{ provider: "slack", sourceObjectId: REF_SLACK_ID }])
+})
+
+// Each self-inconsistent form: NO recognized Slack object, and the URL is retained
+// as an opaque source link with its query byte-preserved (never silently rewritten).
+for (const [label, url] of [
+  ["wrong cid", `${REF_PATH}?thread_ts=1709999998.000000&cid=C9999999999`],
+  ["thread_ts without cid", `${REF_PATH}?thread_ts=1709999998.000000`],
+  ["cid without thread_ts", `${REF_PATH}?cid=C1234567890`],
+  ["malformed thread_ts", `${REF_PATH}?thread_ts=not-a-ts&cid=C1234567890`],
+  ["thread_ts == messageTs", `${REF_PATH}?thread_ts=1709999999.000300&cid=C1234567890`],
+  ["thread_ts later than messageTs", `${REF_PATH}?thread_ts=1719999999.999999&cid=C1234567890`],
+] as const) {
+  test(`referenced Slack permalink with ${label} stays opaque, not a Slack object`, () => {
+    const { refs, link } = recognizedRefFor(url)
+    assert.deepEqual(refs, [], `${label}: no referenced Slack object`)
+    assert.ok(link, `${label}: URL retained as a source link`)
+    assert.equal(link?.recognized, undefined, `${label}: link is opaque`)
+    // Query is preserved on the retained opaque link (not stripped/rewritten).
+    const q = url.slice(url.indexOf("?"))
+    assert.ok(link?.url.includes(q.slice(1).split("&")[0]), `${label}: query preserved`)
+  })
+}
+
+// Structural refusals already enforced by recognizeSlackPermalink still yield no
+// recognized object (and the coherence gate does not change that).
+for (const [label, url] of [
+  ["duplicated thread_ts", `${REF_PATH}?thread_ts=1709999998.000000&thread_ts=1709999997.000000&cid=C1234567890`],
+  ["duplicated cid", `${REF_PATH}?thread_ts=1709999998.000000&cid=C1234567890&cid=C1234567890`],
+  ["unexpected query key", `${REF_PATH}?foo=bar`],
+  ["fragment", `${REF_PATH}#thread`],
+] as const) {
+  test(`referenced Slack permalink with ${label} yields no recognized object`, () => {
+    const { refs } = recognizedRefFor(url)
+    assert.deepEqual(refs, [])
+  })
+}
+
+test("an unsafe/sensitive referenced Slack URL is dropped from all output", () => {
+  const c = candidateWithRefs(`${REF_PATH}?cid=xoxb-1111111111-abcdefghijklmnop`)
+  assert.deepEqual(c.referencedObjects, [])
+  const { strings } = scan(c)
+  for (const s of strings) assert.ok(!s.includes("xoxb"), "no sensitive value survives")
+})
+
+test("a referenced Slack permalink equal to the primary is never listed as a reference", () => {
+  const c = candidateWithRefs("https://example-workspace.slack.com/archives/C1234567890/p1710000000000100")
+  assert.deepEqual(c.referencedObjects, [])
+})
+
+test("coherence fix keeps the exact attested F1A object and emits no semantic/network field", () => {
+  const url = `${REF_PATH}?thread_ts=1709999998.000000&cid=C9999999999` // incoherent → opaque
+  const result = extract({ ...baseInput(), referencedUrls: [url] })
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.notEqual(snapshotValidatedFormationSourceResult(result.sourceResult), null, "exact F1A object still attests")
+  const { keys } = scan(result.sourceResult.candidate)
+  for (const key of keys) assert.ok(!FORBIDDEN_KEYS.has(key.toLowerCase()), `must not emit ${key}`)
+})
+
+// ─── Provider-host overlap: existing deterministic Slack-first precedence ─────
+// Documentation/assertion only — records the current behavior; no production change.
+test("when a host is configured for both Slack and GitHub, the Slack workspace wins (deterministic)", () => {
+  const overlapConfig: SlackExtractionConfig = {
+    workspaces: [{ workspaceId: "T012ABCDEF", host: "example-workspace.slack.com" }],
+    githubHosts: ["example-workspace.slack.com"],
+  }
+  const c = candidateOf({ ...baseInput(), referencedUrls: [REF_PATH] }, overlapConfig)
+  assert.deepEqual(c.referencedObjects, [{ provider: "slack", sourceObjectId: REF_SLACK_ID }])
+})

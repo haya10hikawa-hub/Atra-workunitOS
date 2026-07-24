@@ -34,7 +34,7 @@
 import { buildFormationSourceCandidate, type FormationSourceStatus } from "../sourceContract.ts"
 import { normalizeHost, parseProviderUrl, recognizeGitHubObjectPath } from "./providerUrl.ts"
 import type { ProviderUrlRejection } from "./providerUrl.ts"
-import { recognizeSlackPermalink } from "./slackUrl.ts"
+import { recognizeSlackPermalink, type RecognizedSlackPermalink } from "./slackUrl.ts"
 import type {
   NormalizedSlackFormationInput,
   NormalizedSlackStatus,
@@ -279,8 +279,12 @@ export function extractSlackFormationSource(
     let recognized: ObjectRef | undefined
     const referencedWorkspace = resolved.hostToWorkspace.get(safe.value.hostname)
     if (referencedWorkspace !== undefined) {
+      // A referenced Slack permalink becomes a provider-native Slack object only
+      // when it is internally self-consistent (Section 10). An incoherent thread
+      // query (e.g. cid ≠ path channel, or a thread_ts that is malformed, equal to,
+      // or later than the message) leaves the URL as an OPAQUE source link only.
       const slackRef = recognizeSlackPermalink(safe.value.url)
-      if (slackRef !== null) {
+      if (slackRef !== null && isCoherentReferencedSlackPermalink(slackRef)) {
         recognized = {
           provider: "slack",
           sourceObjectId: `${PROVIDER}:${referencedWorkspace}/${slackRef.channelId}/${slackRef.messageTs}`,
@@ -347,6 +351,36 @@ export function extractSlackFormationSource(
     return { ok: false, reason: "source_contract_rejected" }
   }
   return { ok: true, sourceResult: result }
+}
+
+/**
+ * A referenced Slack permalink is a provider-native Slack object only when its
+ * query is internally self-consistent with its path (plan Section 10; blocker
+ * REFERENCED_SLACK_PERMALINK_INCOHERENT). Unlike the PRIMARY source — whose thread
+ * query is checked against the normalized event identity — a referenced link has no
+ * external identity to cohere with, so it is validated against ITSELF:
+ *   - top-level reference: `thread_ts` AND `cid` both absent;
+ *   - thread reply reference: `thread_ts` AND `cid` both present, `cid` equal to the
+ *     path channel, and `thread_ts` a valid Slack timestamp strictly earlier than the
+ *     path message.
+ * Any other shape (only one of the pair, `cid` ≠ path channel, malformed / equal /
+ * later `thread_ts`) is self-inconsistent → the caller keeps the URL as an opaque
+ * source link and never records `referencedObjects[].provider = "slack"`. Reuses the
+ * primary thread check’s timestamp grammar and non-floating comparison; adds no new
+ * URL parser and infers no membership beyond the URL’s own provider-native relation.
+ * `recognizeSlackPermalink` has already validated the path `channelId`/`messageTs`
+ * grammar and refused duplicate keys, unexpected keys, and fragments.
+ */
+function isCoherentReferencedSlackPermalink(permalink: RecognizedSlackPermalink): boolean {
+  const hasThreadTs = permalink.threadTs !== undefined
+  const hasCid = permalink.cid !== undefined
+  if (hasThreadTs !== hasCid) return false
+  if (!hasThreadTs) return true
+  return (
+    permalink.cid === permalink.channelId &&
+    SLACK_TIMESTAMP.test(permalink.threadTs as string) &&
+    compareSlackTimestamp(permalink.threadTs as string, permalink.messageTs) < 0
+  )
 }
 
 /**
