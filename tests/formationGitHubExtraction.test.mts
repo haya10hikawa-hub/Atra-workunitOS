@@ -74,6 +74,15 @@ const REJECTIONS: Readonly<Record<string, GitHubExtractionRejection>> = {
   "17-summary-sanitization-failure": "source_contract_rejected",
   "18-malformed-timestamp": "source_contract_rejected",
   "19-oversized-field": "source_contract_rejected",
+  // Remediation B1 — primary-source identity coherence.
+  "21-primary-url-different-repo": "primary_source_identity_mismatch",
+  "22-primary-url-wrong-number": "primary_source_identity_mismatch",
+  "23-primary-url-wrong-kind": "primary_source_identity_mismatch",
+  "24-primary-url-arbitrary-path": "primary_source_identity_mismatch",
+  "25-primary-url-subresource": "primary_source_identity_mismatch",
+  // Remediation B2 — sensitive primary URL.
+  "28-sensitive-primary-query": "source_url_sensitive_value",
+  "29-sensitive-primary-fragment": "source_url_sensitive_value",
 }
 
 function fixtureNames(): string[] {
@@ -484,4 +493,283 @@ test("github.ts imports from formation only the F1A source contract", () => {
     )
   }
   assert.ok(github.includes('from "../sourceContract.ts"'), "github.ts imports the F1A contract")
+})
+
+// ═══════════════════════════════════════════════════════════════════
+// Remediation B1 / B3 / B2 + resource bound
+// ═══════════════════════════════════════════════════════════════════
+
+function extract(input: NormalizedGitHubFormationInput, config?: GitHubExtractionConfig) {
+  return extractGitHubFormationSource(input, config)
+}
+function candidateOf(input: NormalizedGitHubFormationInput, config?: GitHubExtractionConfig) {
+  const r = extract(input, config)
+  assert.equal(r.ok, true)
+  if (!r.ok) throw new Error("unreachable")
+  return r.sourceResult.candidate
+}
+function expectReject(input: NormalizedGitHubFormationInput, reason: GitHubExtractionRejection, msg: string) {
+  const r = extract(input)
+  assert.equal(r.ok, false, msg)
+  if (!r.ok) assert.equal(r.reason, reason, msg)
+}
+
+// ─── B1: primary-source identity coherence (tests 1–10) ──────────
+
+test("B1: different owner/repository in the primary URL rejects", () => {
+  expectReject({ ...baseInput(), repository: { owner: "different-org", name: "example-repo" } },
+    "primary_source_identity_mismatch", "different owner")
+  expectReject({ ...baseInput(), sourceUrl: "https://github.com/attacker-org/other-repo/pull/241" },
+    "primary_source_identity_mismatch", "different repo in URL")
+})
+
+test("B1: wrong object number in the primary URL rejects", () => {
+  expectReject({ ...baseInput(), sourceUrl: "https://github.com/example-org/example-repo/pull/999" },
+    "primary_source_identity_mismatch", "wrong number")
+})
+
+test("B1: pull-request event with an issue URL rejects", () => {
+  expectReject({ ...baseInput(), eventType: "pull_request", sourceUrl: "https://github.com/example-org/example-repo/issues/241" },
+    "primary_source_identity_mismatch", "PR event, issue URL")
+})
+
+test("B1: issue event with a pull URL rejects", () => {
+  expectReject({ ...baseInput(), eventType: "issue", number: 241, sourceUrl: "https://github.com/example-org/example-repo/pull/241" },
+    "primary_source_identity_mismatch", "issue event, pull URL")
+})
+
+test("B1: arbitrary allowed-host path, repo root, and actions path reject", () => {
+  for (const url of [
+    "https://github.com/settings/profile",
+    "https://github.com/example-org/example-repo",
+    "https://github.com/example-org/example-repo/actions",
+  ]) {
+    expectReject({ ...baseInput(), sourceUrl: url }, "primary_source_identity_mismatch", url)
+  }
+})
+
+test("B1: pull files and issue comments subresource paths reject", () => {
+  expectReject({ ...baseInput(), sourceUrl: "https://github.com/example-org/example-repo/pull/241/files" },
+    "primary_source_identity_mismatch", "pull files")
+  expectReject({ ...baseInput(), eventType: "issue", number: 241, sourceUrl: "https://github.com/example-org/example-repo/issues/241/comments" },
+    "primary_source_identity_mismatch", "issue comments")
+})
+
+test("B1: non-sensitive query on the exact object succeeds and is retained verbatim", () => {
+  const c = candidateOf({ ...baseInput(), sourceUrl: "https://github.com/example-org/example-repo/pull/241?diff=split" })
+  assert.equal(c.sourceObjectId, "github:example-org/example-repo#241")
+  assert.equal(c.navigationTarget, "https://github.com/example-org/example-repo/pull/241?diff=split")
+  // Fixture form.
+  assert.equal(successCandidate("26-primary-url-query-ok").navigationTarget, "https://github.com/example-org/example-repo/pull/260?diff=split")
+})
+
+test("B1: non-sensitive fragment on the exact object succeeds and is retained verbatim", () => {
+  const c = candidateOf({ ...baseInput(), sourceUrl: "https://github.com/example-org/example-repo/pull/241#discussion" })
+  assert.equal(c.navigationTarget, "https://github.com/example-org/example-repo/pull/241#discussion")
+  assert.equal(successCandidate("27-primary-url-fragment-ok").navigationTarget, "https://github.com/example-org/example-repo/issues/261#issuecomment-1")
+})
+
+// ─── B3: canonical provider identity (tests 11–15) ───────────────
+
+test("B3: owner/repository case variants produce deeply equal canonical identities", () => {
+  const ids = ["example-org", "Example-Org", "EXAMPLE-ORG"].map((owner) =>
+    candidateOf({
+      ...baseInput(),
+      repository: { owner, name: "Example-Repo" },
+      sourceUrl: `https://github.com/${owner}/Example-Repo/pull/241`,
+      referencedUrls: [],
+    }),
+  )
+  for (const c of ids) {
+    assert.equal(c.sourceObjectId, "github:example-org/example-repo#241")
+    assert.equal(c.parentObjectId, "github:example-org/example-repo")
+    assert.equal(c.sourceRef.externalId, "example-org/example-repo#241")
+    assert.equal(c.sourceRef.container, "example-org/example-repo")
+  }
+})
+
+test("B3: primary path case variants still match the structured identity", () => {
+  // Structured lowercase, URL path upper-case → same object, accepted.
+  const c = candidateOf({ ...baseInput(), sourceUrl: "https://github.com/EXAMPLE-ORG/EXAMPLE-REPO/pull/241", referencedUrls: [] })
+  assert.equal(c.sourceObjectId, "github:example-org/example-repo#241")
+})
+
+test("B3: recognized references canonicalize case and dedupe case-only duplicates to one identity", () => {
+  const c = successCandidate("30-canonical-case-variant")
+  assert.equal(c.sourceObjectId, "github:example-org/example-repo#262")
+  assert.deepEqual(c.referencedObjects, [
+    { provider: "github", sourceObjectId: "github:example-org/example-repo#238" },
+  ])
+})
+
+test("B3: case variants can no longer create distinct member identities solely from casing", () => {
+  // Focused duplicate-identity assertion over canonical output (no F1C call).
+  const a = candidateOf({ ...baseInput(), repository: { owner: "Example-Org", name: "Example-Repo" },
+    sourceUrl: "https://github.com/Example-Org/Example-Repo/pull/241", referencedUrls: [] })
+  const b = candidateOf({ ...baseInput(), repository: { owner: "example-org", name: "example-repo" },
+    sourceUrl: "https://github.com/example-org/example-repo/pull/241", referencedUrls: [] })
+  assert.equal(a.sourceObjectId, b.sourceObjectId)
+  assert.equal(a.parentObjectId, b.parentObjectId)
+  const memberIds = new Set([a.sourceObjectId, b.sourceObjectId])
+  assert.equal(memberIds.size, 1, "casing must not fork the member identity")
+})
+
+// ─── B2: sensitive URL rejection (tests 16–27) ───────────────────
+
+const CREDENTIAL_QUERIES: Readonly<Record<string, string>> = {
+  "ghp_ token": "token=ghp_0123456789abcdefghijABCDEF",
+  "github_pat_": "token=github_pat_11ABCDEFG0abcdefghij",
+  "xoxb-": "q=xoxb-1234567890-abcdefghijkl",
+  "Bearer JWT": "q=Bearer%20eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcDEF12345",
+  "AKIA": "k=AKIAIOSFODNN7EXAMPLE",
+  "access_token key": "access_token=anything123456",
+  "authorization key": "authorization=whatever",
+  "cookie key": "cookie=sessionvalue1234567",
+  "api_key key": "api_key=secret123456789",
+  "percent-encoded ghp": "state=%67hp_0123456789abcdefghij",
+}
+
+test("B2: sensitive primary URL query rejects (fixture + credential families)", () => {
+  const r = run("28-sensitive-primary-query")
+  assert.equal(r.ok, false)
+  if (!r.ok) assert.equal(r.reason, "source_url_sensitive_value")
+  for (const [label, q] of Object.entries(CREDENTIAL_QUERIES)) {
+    expectReject({ ...baseInput(), sourceUrl: `https://github.com/example-org/example-repo/pull/241?${q}`, referencedUrls: [] },
+      "source_url_sensitive_value", label)
+  }
+})
+
+test("B2: sensitive primary URL fragment rejects", () => {
+  const r = run("29-sensitive-primary-fragment")
+  assert.equal(r.ok, false)
+  if (!r.ok) assert.equal(r.reason, "source_url_sensitive_value")
+  expectReject({ ...baseInput(), sourceUrl: "https://github.com/example-org/example-repo/pull/241#access_token=ghp_0123456789abcdefghij", referencedUrls: [] },
+    "source_url_sensitive_value", "fragment ghp")
+})
+
+test("B2: a sensitive referenced URL is absent from every output field and is not echoed", () => {
+  const c = successCandidate("31-sensitive-referenced-dropped")
+  const serialized = JSON.stringify(c)
+  assert.ok(!serialized.includes("ghp_"), "no token substring anywhere")
+  assert.ok(!serialized.includes("access_token"), "no credential param anywhere")
+  // The one benign reference remains; the sensitive one is gone.
+  assert.deepEqual(c.referencedObjects, [
+    { provider: "github", sourceObjectId: "github:example-org/example-repo#239" },
+  ])
+  for (const link of c.sourceLinks) assert.ok(!link.url.includes("access_token"), "no sensitive source link")
+  // The primary navigation target is the clean object URL.
+  assert.equal(c.navigationTarget, "https://github.com/example-org/example-repo/pull/263")
+})
+
+test("B2: a sensitive-URL rejection value never echoes the URL or the secret", () => {
+  const r = extract({ ...baseInput(), sourceUrl: "https://github.com/example-org/example-repo/pull/241?access_token=ghp_0123456789abcdefghijABCDEF", referencedUrls: [] })
+  assert.equal(r.ok, false)
+  const serialized = JSON.stringify(r)
+  assert.ok(!serialized.includes("ghp_"))
+  assert.ok(!serialized.includes("access_token"))
+  assert.ok(!serialized.includes("github.com"))
+  if (!r.ok) assert.deepEqual(Object.keys(r).sort(), ["ok", "reason"])
+})
+
+test("B2: ordinary non-sensitive query and fragment remain accepted", () => {
+  for (const url of [
+    "https://github.com/example-org/example-repo/pull/241?diff=split&w=1",
+    "https://github.com/example-org/example-repo/pull/241#discussion_r123",
+    "https://github.com/example-org/example-repo/pull/241?tab=files",
+  ]) {
+    const r = extract({ ...baseInput(), sourceUrl: url, referencedUrls: [] })
+    assert.equal(r.ok, true, url)
+  }
+})
+
+// ─── Resource bound (tests 28–31) ────────────────────────────────
+
+function repoUrls(n: number): string[] {
+  return Array.from({ length: n }, (_, i) => `https://github.com/example-org/example-repo/pull/${(i % 40) + 1}`)
+}
+
+test("resource bound: 49 referenced URLs are processed deterministically", () => {
+  const c = candidateOf({ ...baseInput(), referencedUrls: repoUrls(49) })
+  assert.ok(c.referencedObjects.length >= 1 && c.referencedObjects.length <= 40)
+})
+
+test("resource bound: 50 referenced URLs reject before iteration", () => {
+  expectReject({ ...baseInput(), referencedUrls: repoUrls(50) }, "referenced_urls_too_many", "50 refs")
+})
+
+test("resource bound: 1,000 / 10,000 / 100,000 arrays reject through the same bounded path", () => {
+  for (const n of [1_000, 10_000, 100_000]) {
+    expectReject({ ...baseInput(), referencedUrls: repoUrls(n) }, "referenced_urls_too_many", `${n} refs`)
+  }
+})
+
+test("resource bound: the input referenced-URL array is not truncated or mutated", () => {
+  const urls = repoUrls(50)
+  const input: NormalizedGitHubFormationInput = { ...baseInput(), referencedUrls: urls }
+  const before = structuredClone(input)
+  extract(input)
+  assert.equal(urls.length, 50)
+  assert.deepEqual(input, before)
+})
+
+// ─── Regression invariants (tests 32–38) ─────────────────────────
+
+test("regression: exact F1A object still attests; clones still do not", () => {
+  const r = run("01-open-pull-request")
+  assert.equal(r.ok, true)
+  if (!r.ok) return
+  assert.notEqual(snapshotValidatedFormationSourceResult(r.sourceResult), null)
+  assert.equal(snapshotValidatedFormationSourceResult({ ...r.sourceResult }), null)
+  assert.equal(snapshotValidatedFormationSourceResult(JSON.parse(JSON.stringify(r.sourceResult))), null)
+  assert.equal(snapshotValidatedFormationSourceResult(structuredClone(r.sourceResult)), null)
+})
+
+test("regression: no Goal/Done Condition/SourceRole/grouping field after remediation", () => {
+  for (const name of fixtureNames()) {
+    if (REJECTIONS[name] !== undefined) continue
+    const c = successCandidate(name)
+    assert.deepEqual(c.authoritySignals, [])
+    assert.deepEqual(c.unresolvedMarkers, [])
+    assert.deepEqual(c.decisionMarkers, [])
+    const { keys } = scan(c)
+    for (const key of keys) assert.ok(!FORBIDDEN_KEYS.has(key.toLowerCase()), `${name} key ${key}`)
+  }
+})
+
+test("regression: host spoof / userinfo / IDN controls remain green", () => {
+  assert.equal(parseProviderUrl("https://github.com.evil.example/o/r/pull/1", ["github.com"]).ok, false)
+  assert.equal(parseProviderUrl("https://github.com@evil.example/o/r/pull/1", ["github.com"]).ok, false)
+  assert.equal(parseProviderUrl("https://gÍthub.com/o/r/pull/1", ["github.com"]).ok, false)
+  assert.equal(parseProviderUrl("https://github.com/o/r/pull/1", ["github.com"]).ok, true)
+})
+
+test("regression: safe external links remain opaque after remediation", () => {
+  const c = successCandidate("11-external-opaque-link")
+  const external = c.sourceLinks.find((l) => l.url === "https://example.com/design/overview")
+  assert.ok(external)
+  assert.equal(external?.recognized, undefined)
+})
+
+test("regression: no network/provider client import appears (incl. new sensitive screen)", () => {
+  for (const src of EXTRACT_SOURCES) {
+    for (const token of ["node:http", "node:https", "undici", "node-fetch", "octokit", "@octokit", "XMLHttpRequest"]) {
+      assert.ok(!src.includes(token), `must not import ${token}`)
+    }
+    assert.ok(!/\bfetch\s*\(/.test(src), "must not call fetch()")
+  }
+})
+
+test("regression: identical input remains deterministic after remediation", () => {
+  const a = extract(baseInput())
+  const b = extract(baseInput())
+  assert.equal(a.ok, true)
+  assert.equal(b.ok, true)
+  if (a.ok && b.ok) assert.deepEqual(a.sourceResult.candidate, b.sourceResult.candidate)
+})
+
+test("B2: providerUrl still exposes containsSensitiveValue-backed screening (authority reuse)", () => {
+  // The screen must reject a bare provider token even under a benign param name,
+  // proving it is not merely a forbidden-key check.
+  assert.equal(parseProviderUrl("https://github.com/o/r/pull/1?ref=ghp_0123456789abcdefghij", ["github.com"]).ok, false)
+  assert.equal(parseProviderUrl("https://github.com/o/r/pull/1?ref=main", ["github.com"]).ok, true)
 })

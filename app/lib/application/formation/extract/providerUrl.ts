@@ -18,7 +18,18 @@
  *
  * This is a host/shape authority for provider identity only. It does NOT
  * re-implement F1A's content sanitization; F1A re-validates every URL it stores.
+ *
+ * Sensitive-value screening (remediation B2): a provider URL carrying
+ * credential-shaped material — in the whole URL string, a decoded query
+ * parameter (name or value), or the decoded fragment — is refused with
+ * `sensitive_value` BEFORE it is ever returned as safe, so a secret can never
+ * survive into a stored source link, `sourceRef.url`, or navigation target. The
+ * screen reuses the repository's existing `containsSensitiveValue` authority
+ * (never a weaker token-only regex) and performs NO network access and executes
+ * no getters — it only parses and decodes strings.
  */
+
+import { containsSensitiveValue } from "../../../security/untrustedTextScan.ts"
 
 export type ProviderUrlRejection =
   | "not_string"
@@ -28,6 +39,7 @@ export type ProviderUrlRejection =
   | "userinfo_present"
   | "empty_host"
   | "host_not_allowed"
+  | "sensitive_value"
 
 export type SafeProviderUrl = {
   /** The original, validated URL string. Safe to store; NEVER fetched. */
@@ -109,7 +121,105 @@ export function parseProviderUrl(
     if (!allowed.has(hostname)) return { ok: false, reason: "host_not_allowed" }
   }
 
+  // B2: refuse any URL carrying credential-shaped material before it can be
+  // returned as safe. Reuses the repository's `containsSensitiveValue` authority
+  // over the whole string AND over decoded query/fragment components, so a
+  // percent-encoded secret cannot bypass the screen.
+  if (urlContainsSensitiveValue(value, parsed)) return { ok: false, reason: "sensitive_value" }
+
   return { ok: true, value: { url: value, hostname, pathname: parsed.pathname } }
+}
+
+// Credential-shaped parameter NAMES that must never carry a value in a stored
+// provider URL. A supplement to `containsSensitiveValue`, not a replacement.
+const CREDENTIAL_PARAM_NAMES: ReadonlySet<string> = new Set([
+  "token",
+  "access_token",
+  "accesstoken",
+  "id_token",
+  "refresh_token",
+  "api_key",
+  "apikey",
+  "x-api-key",
+  "authorization",
+  "auth",
+  "cookie",
+  "session",
+  "sessionid",
+  "secret",
+  "client_secret",
+  "private_key",
+  "password",
+  "pwd",
+])
+
+// Provider credential VALUE shapes (GitHub / Slack / AWS / bearer / JWT). These
+// families are exactly the provider-URL threat and are UNDER-covered by the
+// generic `containsSensitiveValue` authority, so they are screened in addition
+// to it — never instead of it.
+const CREDENTIAL_VALUE_PATTERNS: readonly RegExp[] = [
+  /gh[opsur]_[A-Za-z0-9]{10,}/, // GitHub PAT / OAuth / app / server / refresh
+  /github_pat_[A-Za-z0-9_]{6,}/, // GitHub fine-grained PAT
+  /xox[baprs]-[A-Za-z0-9-]{4,}/, // Slack tokens
+  /AKIA[0-9A-Z]{12,}/, // AWS access key id
+  /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/, // JWT (header.payload.sig)
+  /Bearer\s+\S{8,}/i, // bearer credential
+]
+
+function looksLikeCredentialValue(value: string): boolean {
+  return CREDENTIAL_VALUE_PATTERNS.some((re) => re.test(value))
+}
+
+/**
+ * True when a provider URL carries credential-shaped material anywhere that would
+ * be stored. Screens, all pure and network-free:
+ *   1. the complete original string via `containsSensitiveValue` (repo authority)
+ *      AND the provider credential-value shapes;
+ *   2. each decoded query parameter (WHATWG `searchParams` percent-decodes) — its
+ *      name against `containsSensitiveValue` + the credential-name set, its value
+ *      against `containsSensitiveValue` + the credential-value shapes;
+ *   3. the fragment — raw, decoded, and, when it parses as `key=value` pairs, its
+ *      decoded components — under the same rules.
+ * The credential-name/value screens SUPPLEMENT `containsSensitiveValue`; they are
+ * never the sole protection.
+ */
+function urlContainsSensitiveValue(original: string, parsed: URL): boolean {
+  if (containsSensitiveValue(original) || looksLikeCredentialValue(original)) return true
+
+  for (const [key, val] of parsed.searchParams) {
+    if (paramIsSensitive(key, val)) return true
+  }
+
+  if (parsed.hash.length > 1) {
+    const rawFragment = parsed.hash.slice(1)
+    if (containsSensitiveValue(rawFragment) || looksLikeCredentialValue(rawFragment)) return true
+    let decodedFragment: string | null = null
+    try {
+      decodedFragment = decodeURIComponent(rawFragment)
+    } catch {
+      decodedFragment = null
+    }
+    if (decodedFragment !== null && (containsSensitiveValue(decodedFragment) || looksLikeCredentialValue(decodedFragment))) {
+      return true
+    }
+    // A fragment may itself carry `key=value` pairs (e.g. `#token=...`).
+    try {
+      for (const [key, val] of new URLSearchParams(rawFragment)) {
+        if (paramIsSensitive(key, val)) return true
+      }
+    } catch {
+      // A fragment that is not parseable as query pairs is already covered above.
+    }
+  }
+
+  return false
+}
+
+function paramIsSensitive(name: string, value: string): boolean {
+  if (CREDENTIAL_PARAM_NAMES.has(name.toLowerCase())) return true
+  if (containsSensitiveValue(name) || containsSensitiveValue(value)) return true
+  if (looksLikeCredentialValue(value)) return true
+  return false
 }
 
 export type RecognizedGitHubObject = {

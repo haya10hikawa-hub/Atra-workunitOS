@@ -48,6 +48,26 @@ const DEFAULT_ALLOWED_HOSTS: readonly string[] = ["github.com"]
 // delimiter injection and is free of invisible characters (plan Section 5).
 const GITHUB_NAME_PATTERN = /^[A-Za-z0-9._-]+$/
 
+// Resource bound (remediation): 1 primary source link + at most 49 referenced
+// links == F1A's 50-link boundary. The normalized referenced-URL array is
+// rejected BEFORE iteration when it exceeds this, so oversized input never drives
+// unbounded parse/dedup work that F1A would only reject afterwards. This is a
+// deterministic bound on the normalized contract, not a public-payload validator.
+const MAX_REFERENCED_URLS = 49
+
+/**
+ * Canonical GitHub owner/repository identity: ASCII lowercase. GitHub owner and
+ * repository names are case-insensitive for the same object, so a case variant
+ * must not produce a distinct `sourceObjectId` (which keys F3 hard Goal-identity
+ * matching and cross-link dedup). The caller guarantees the value already matched
+ * `GITHUB_NAME_PATTERN` (ASCII `[A-Za-z0-9._-]`), so `toLowerCase()` is a pure,
+ * locale-independent ASCII fold. Applied to identity only — never to title,
+ * summary, actor, or the stored navigation URL string.
+ */
+function canonicalName(value: string): string {
+  return value.toLowerCase()
+}
+
 // Structured GitHub state → a single SOURCE status marker. This is a source
 // status only; it never becomes a Done Condition status or an authority signal.
 const STATUS_TO_MARKER: Readonly<Record<NormalizedGitHubStatus, FormationSourceStatus>> = {
@@ -76,7 +96,18 @@ function mapUrlRejection(reason: ProviderUrlRejection): GitHubExtractionRejectio
       return "source_url_empty_host"
     case "host_not_allowed":
       return "source_url_host_not_allowed"
+    case "sensitive_value":
+      return "source_url_sensitive_value"
   }
+}
+
+/**
+ * The GitHub object kind a normalized event type must identify in its primary
+ * URL. Pull requests and review requests are pull-request objects; issues are
+ * issue objects. Used by the B1 primary-source identity-coherence check.
+ */
+function expectedObjectKind(eventType: NormalizedGitHubEventType): "pull" | "issues" {
+  return eventType === "issue" ? "issues" : "pull"
 }
 
 /**
@@ -106,13 +137,19 @@ export function extractGitHubFormationSource(
   const allowedHosts = config?.allowedHosts ?? DEFAULT_ALLOWED_HOSTS
 
   // ── Identity: structured owner/name/number ONLY (plan Section 5) ──
-  const { owner, name } = input.repository
-  if (!GITHUB_NAME_PATTERN.test(owner) || !GITHUB_NAME_PATTERN.test(name)) {
+  // Shape is validated on the raw value (still rejecting whitespace/control/
+  // format characters); identity is then composed from the CANONICAL (ASCII
+  // lowercase) owner/name so a case variant of the same GitHub object yields one
+  // stable identity (remediation B3).
+  const { owner: rawOwner, name: rawName } = input.repository
+  if (!GITHUB_NAME_PATTERN.test(rawOwner) || !GITHUB_NAME_PATTERN.test(rawName)) {
     return { ok: false, reason: "identity_unsafe" }
   }
   if (!Number.isSafeInteger(input.number) || input.number <= 0) {
     return { ok: false, reason: "identity_unsafe" }
   }
+  const owner = canonicalName(rawOwner)
+  const name = canonicalName(rawName)
   const sourceObjectId = `${PROVIDER}:${owner}/${name}#${input.number}`
   const parentObjectId = `${PROVIDER}:${owner}/${name}`
   const externalId = `${owner}/${name}#${input.number}`
@@ -122,6 +159,25 @@ export function extractGitHubFormationSource(
   const primary = parseProviderUrl(input.sourceUrl, allowedHosts)
   if (!primary.ok) {
     return { ok: false, reason: mapUrlRejection(primary.reason) }
+  }
+
+  // ── B1: primary-source identity coherence ──
+  // The primary URL must identify the SAME provider-native object as the
+  // structured identity. After host/scheme/userinfo/sensitive screening, its
+  // pathname must be an exact GitHub object path whose canonical owner/name,
+  // number, and kind equal the structured identity. This is F2A's provider
+  // authority — F1A has no GitHub object-path semantics and cannot check it.
+  // A non-sensitive query or fragment may remain (the canonical pathname still
+  // identifies the exact object); the accepted URL is never rewritten to match.
+  const primaryObject = recognizeGitHubObjectPath(primary.value.pathname)
+  if (
+    primaryObject === null ||
+    canonicalName(primaryObject.owner) !== owner ||
+    canonicalName(primaryObject.name) !== name ||
+    primaryObject.number !== input.number ||
+    primaryObject.kind !== expectedObjectKind(input.eventType)
+  ) {
+    return { ok: false, reason: "primary_source_identity_mismatch" }
   }
   const navigationTarget = primary.value.url
 
@@ -151,15 +207,23 @@ export function extractGitHubFormationSource(
     if (normalized !== null) normalizedAllowed.add(normalized)
   }
 
+  // Resource bound (remediation): reject an oversized referenced-URL array
+  // BEFORE any iteration, so unbounded parse/dedup work is never performed.
+  const referencedUrls = input.referencedUrls ?? []
+  if (referencedUrls.length > MAX_REFERENCED_URLS) {
+    return { ok: false, reason: "referenced_urls_too_many" }
+  }
+
   const sourceLinks: SourceLink[] = [{ url: primary.value.url }]
   const seenLinks = new Set<string>([primary.value.url])
   const referencedObjects: ObjectRef[] = []
   const seenRefs = new Set<string>()
 
-  for (const rawUrl of input.referencedUrls ?? []) {
+  for (const rawUrl of referencedUrls) {
     // Any safe https host may be retained as an OPAQUE source link; only
-    // provider-host + object-path matches become recognized references. Unsafe
-    // or unparseable referenced URLs are dropped, never fetched.
+    // provider-host + object-path matches become recognized references. Unsafe,
+    // unparseable, or sensitive-value-bearing referenced URLs are dropped
+    // (parseProviderUrl refuses `sensitive_value`), never fetched.
     const safe = parseProviderUrl(rawUrl)
     if (!safe.ok) continue
 
@@ -167,7 +231,12 @@ export function extractGitHubFormationSource(
     if (normalizedAllowed.has(safe.value.hostname)) {
       const object = recognizeGitHubObjectPath(safe.value.pathname)
       if (object !== null) {
-        recognized = { provider: PROVIDER, sourceObjectId: `${PROVIDER}:${object.owner}/${object.name}#${object.number}` }
+        // Canonical (lowercase) reference identity (B3): a case variant of a
+        // referenced object dedupes to one identity and matches the structured id.
+        recognized = {
+          provider: PROVIDER,
+          sourceObjectId: `${PROVIDER}:${canonicalName(object.owner)}/${canonicalName(object.name)}#${object.number}`,
+        }
       }
     }
 

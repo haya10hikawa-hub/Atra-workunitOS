@@ -74,13 +74,25 @@ export type GitHubExtractionConfig = {
 
 /**
  * Provider-extraction rejection categories. Deliberately carry NO echo of the
- * rejected input value. `source_contract_rejected` is opaque: it means the F1A
- * builder rejected the constructed candidate, without exposing the rejected
- * content or F1A's own finding detail.
+ * rejected input value — every value is a closed discriminator only.
+ * `source_contract_rejected` is opaque: it means the F1A builder rejected the
+ * constructed candidate, without exposing the rejected content or F1A's own
+ * finding detail.
+ *
+ * Remediation additions:
+ *   - `primary_source_identity_mismatch` (B1): the primary URL does not identify
+ *     the same provider-native object as the structured `repository`/`number`/
+ *     `eventType`.
+ *   - `source_url_sensitive_value` (B2): the primary URL carries credential-shaped
+ *     material (the value itself is never echoed).
+ *   - `referenced_urls_too_many` (resource bound): the normalized referenced-URL
+ *     array exceeds the deterministic pre-iteration limit.
  */
 export type GitHubExtractionRejection =
   | "source_contract_rejected"
   | "identity_unsafe"
+  | "primary_source_identity_mismatch"
+  | "referenced_urls_too_many"
   | "source_url_not_string"
   | "source_url_too_long"
   | "source_url_unparseable"
@@ -88,6 +100,7 @@ export type GitHubExtractionRejection =
   | "source_url_userinfo_present"
   | "source_url_empty_host"
   | "source_url_host_not_allowed"
+  | "source_url_sensitive_value"
 
 /**
  * On success, `sourceResult` is the EXACT object returned by
