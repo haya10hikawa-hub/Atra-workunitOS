@@ -76,6 +76,26 @@ export type SuccessfulGroupingComparisonSnapshot = SuccessfulGroupingComparisonR
 // `canonicalWorkObjectRef` is added, removed, or edited). Left and right are
 // compared positionally, so a swap is a mismatch. Caller objects are never
 // frozen or mutated, and none of this is exposed publicly.
+//
+// Pinning the ordered pair is not sufficient on its own: `readonly` is erased at
+// runtime, so every caller-owned property can be an accessor or a Proxy trap
+// that answers differently on each read. If the verdict were computed from one
+// read of `input.left` / `input.right` and the binding captured from a second
+// read, a changing getter could have a result computed over pair A/B registered
+// as belonging to pair C/D. Therefore EVERY security-sensitive caller value is
+// read EXACTLY ONCE, into a single private capture taken at the very start of
+// `compareGroupingSubjects`:
+//
+//   input.left · input.right
+//   left.formationResult · right.formationResult
+//   left.canonicalWorkObjectRef · right.canonicalWorkObjectRef
+//   left selector provider / sourceObjectId · right selector provider / sourceObjectId
+//
+// That one capture supplies BOTH the stable subject values fed to
+// `prepareSubject` (so the verdict is computed from the captured pair) AND the
+// registered binding (so the attestation names the same captured pair). An
+// accessor or Proxy is accepted under one-read semantics — it can never yield a
+// success computed from one pair and registered against another.
 
 /** A detached copy of one side's canonical selector — primitives only. */
 type DetachedSelector = {
@@ -84,6 +104,11 @@ type DetachedSelector = {
   readonly sourceObjectId: unknown
 }
 
+/**
+ * Detach one side's canonical selector. `canonicalWorkObjectRef` is read exactly
+ * once, and `provider` / `sourceObjectId` exactly once each, so a changing
+ * accessor cannot serve a different tuple to a later reader.
+ */
 function detachSelector(subject: unknown): DetachedSelector {
   if (subject === null || typeof subject !== "object") {
     return { present: false, provider: undefined, sourceObjectId: undefined }
@@ -109,48 +134,113 @@ function formationResultOf(subject: unknown): unknown {
   return (subject as { formationResult?: unknown }).formationResult
 }
 
-type GroupingPairBinding = {
-  readonly input: object
-  readonly leftSubject: unknown
-  readonly rightSubject: unknown
-  readonly leftFormationResult: unknown
-  readonly rightFormationResult: unknown
-  readonly leftSelector: DetachedSelector
-  readonly rightSelector: DetachedSelector
+/**
+ * One side of the single private capture: the exact caller wrapper, the exact
+ * attested F1C result read from it, its detached selector tuple, and a STABLE
+ * plain `GroupingSubjectInput` rebuilt from those same values. `stable` is what
+ * `prepareSubject` consumes, so preparation re-reads nothing from the caller.
+ */
+type CapturedSide = {
+  readonly subject: unknown
+  readonly formationResult: unknown
+  readonly selector: DetachedSelector
+  readonly stable: GroupingSubjectInput
 }
 
-function capturePairBinding(input: object): GroupingPairBinding {
+function captureSide(subject: unknown): CapturedSide {
+  const formationResult = formationResultOf(subject)
+  const selector = detachSelector(subject)
+  // Rebuild an inert plain subject from the captured values only. An absent
+  // selector stays absent (`prepareSubject` keys off `!== undefined`); a present
+  // but malformed one degrades to the same undefined/undefined tuple the raw
+  // value would have produced, so admission behaviour is unchanged.
+  const stable = {
+    formationResult,
+    ...(selector.present
+      ? { canonicalWorkObjectRef: { provider: selector.provider, sourceObjectId: selector.sourceObjectId } }
+      : {}),
+  } as unknown as GroupingSubjectInput
+  return { subject, formationResult, selector, stable }
+}
+
+/**
+ * The single private capture of one comparison. Every security-sensitive caller
+ * value in it was read exactly once, and the SAME capture is used both to
+ * compute the verdict and to register the attestation.
+ */
+type GroupingPairCapture = {
+  readonly input: object
+  readonly left: CapturedSide
+  readonly right: CapturedSide
+}
+
+function capturePair(input: object): GroupingPairCapture {
+  // Exactly one read of each side, before anything else touches the caller graph.
   const left = (input as { left?: unknown }).left
   const right = (input as { right?: unknown }).right
-  return {
-    input,
-    leftSubject: left,
-    rightSubject: right,
-    leftFormationResult: formationResultOf(left),
-    rightFormationResult: formationResultOf(right),
-    leftSelector: detachSelector(left),
-    rightSelector: detachSelector(right),
-  }
+  return { input, left: captureSide(left), right: captureSide(right) }
 }
 
 /**
  * True only when the ORDERED pair the caller now presents is still the exact
- * pair that was compared. Positional, so a left/right swap is a mismatch.
+ * pair that was compared. Positional, so a left/right swap is a mismatch. This
+ * is the VERIFICATION read — a caller that has since mutated the pair (or whose
+ * accessors now answer differently) stops attesting.
  */
-function pairBindingIntact(binding: GroupingPairBinding, input: object): boolean {
-  if (binding.input !== input) return false
+function pairCaptureIntact(capture: GroupingPairCapture, input: object): boolean {
+  if (capture.input !== input) return false
   const left = (input as { left?: unknown }).left
   const right = (input as { right?: unknown }).right
-  if (left !== binding.leftSubject || right !== binding.rightSubject) return false
-  if (formationResultOf(left) !== binding.leftFormationResult) return false
-  if (formationResultOf(right) !== binding.rightFormationResult) return false
-  if (!sameSelector(detachSelector(left), binding.leftSelector)) return false
-  if (!sameSelector(detachSelector(right), binding.rightSelector)) return false
+  if (left !== capture.left.subject || right !== capture.right.subject) return false
+  if (formationResultOf(left) !== capture.left.formationResult) return false
+  if (formationResultOf(right) !== capture.right.formationResult) return false
+  if (!sameSelector(detachSelector(left), capture.left.selector)) return false
+  if (!sameSelector(detachSelector(right), capture.right.selector)) return false
   return true
 }
 
+// ─── Opaque F3 pair token (consumed by F4) ──────────────────────
+//
+// A later slice must be able to prove "this outcome belongs to the pair F3
+// actually attested" WITHOUT re-reading the caller graph — a second read is
+// exactly the accessor/Proxy hole above, one layer further out. So a successful
+// attestation also hands back an OPAQUE token: an empty frozen object carrying
+// no pair data at all, tied by module-private WeakMap identity to the exact
+// private capture. It cannot be forged (an arbitrary object is not a key), it
+// cannot be cloned (a spread / JSON / structuredClone copy is a new identity),
+// it is bound to ONE ordered capture (a token for pair A never resolves pair B),
+// and it stops resolving once that pair is mutated. Nothing about the subjects,
+// their `formationResult`s, or their selectors is reachable through its shape.
+
+/** An opaque, unforgeable handle to one attested F3 ordered pair. */
+export type AttestedGroupingPairToken = {
+  readonly __attestedGroupingPair?: never
+}
+
+const attestedPairCaptures = new WeakMap<object, GroupingPairCapture>()
+
+function issuePairToken(capture: GroupingPairCapture): AttestedGroupingPairToken {
+  const token: AttestedGroupingPairToken = Object.freeze({})
+  attestedPairCaptures.set(token as object, capture)
+  return token
+}
+
+/**
+ * True only when `token` is a genuine token this module issued AND the pair it
+ * was issued for is the exact ordered pair `comparisonInput` still carries. A
+ * forged, cloned, or foreign-pair token is false, and no pair data is returned.
+ */
+export function attestedGroupingPairTokenMatches(token: unknown, comparisonInput: unknown): boolean {
+  if (token === null || typeof token !== "object") return false
+  if (comparisonInput === null || typeof comparisonInput !== "object") return false
+  const capture = attestedPairCaptures.get(token as object)
+  if (capture === undefined) return false
+  return pairCaptureIntact(capture, comparisonInput as object)
+}
+
 type AttestedGroupingEntry = {
-  readonly binding: GroupingPairBinding
+  readonly capture: GroupingPairCapture
+  readonly token: AttestedGroupingPairToken
   readonly snapshot: SuccessfulGroupingComparisonSnapshot
 }
 
@@ -195,6 +285,28 @@ export function snapshotValidatedGroupingComparisonResult(
   value: unknown,
   comparisonInput: unknown,
 ): SuccessfulGroupingComparisonSnapshot | null {
+  return attestValidatedGroupingComparison(value, comparisonInput)?.snapshot ?? null
+}
+
+/** A successful F3 attestation: a detached snapshot plus an opaque pair handle. */
+export type AttestedGroupingComparison = {
+  readonly snapshot: SuccessfulGroupingComparisonSnapshot
+  readonly pairToken: AttestedGroupingPairToken
+}
+
+/**
+ * The stronger internal attestation path (F4 consumes this; the public
+ * `snapshotValidatedGroupingComparisonResult` delegates to it).
+ *
+ * Returns `null` under exactly the conditions documented above. On success it
+ * returns BOTH a fresh detached snapshot AND the opaque token for the exact
+ * ordered pair this result was computed from, so a downstream slice can bind its
+ * own output to that pair without ever re-reading the caller graph.
+ */
+export function attestValidatedGroupingComparison(
+  value: unknown,
+  comparisonInput: unknown,
+): AttestedGroupingComparison | null {
   if (value === null || typeof value !== "object") return null
   if (comparisonInput === null || typeof comparisonInput !== "object") return null
   const entry = attestedGroupingResults.get(value as object)
@@ -204,8 +316,8 @@ export function snapshotValidatedGroupingComparisonResult(
   // different, or other-pair input — or the same container whose sides were
   // replaced, swapped, re-pointed at another formationResult, or had a canonical
   // selector added/removed/edited — is a mismatch (identity, not shape).
-  if (!pairBindingIntact(entry.binding, comparisonInput as object)) return null
-  return inertGroupingClone(entry.snapshot)
+  if (!pairCaptureIntact(entry.capture, comparisonInput as object)) return null
+  return { snapshot: inertGroupingClone(entry.snapshot), pairToken: entry.token }
 }
 
 // ─── Documented deterministic thresholds ────────────────────────
@@ -459,9 +571,14 @@ function sortEvidence<K extends string>(
  * selector — and the supplied selector value is never echoed.
  */
 export function compareGroupingSubjects(input: GroupingComparisonInput): GroupingComparisonResult {
-  const leftPrep = prepareSubject((input as { left?: GroupingSubjectInput }).left ?? ({} as GroupingSubjectInput))
+  // ONE read of every security-sensitive caller value, before any other work.
+  // Everything below — preparation, the verdict, and the registered binding —
+  // is derived from this single capture, never from a second caller read.
+  const capture = capturePair(input as object)
+
+  const leftPrep = prepareSubject(capture.left.stable)
   if (!leftPrep.ok) return { ok: false, candidateOnly: true, reason: leftPrep.reason }
-  const rightPrep = prepareSubject((input as { right?: GroupingSubjectInput }).right ?? ({} as GroupingSubjectInput))
+  const rightPrep = prepareSubject(capture.right.stable)
   if (!rightPrep.ok) return { ok: false, candidateOnly: true, reason: rightPrep.reason }
 
   const left = leftPrep.subject
@@ -494,13 +611,14 @@ export function compareGroupingSubjects(input: GroupingComparisonInput): Groupin
     verdict,
     reasons: reasons.slice(0, MAX_GROUPING_REASONS),
   }
-  // Register runtime provenance BEFORE the result leaves this module: bind the
-  // EXACT result object to the EXACT original input object identity and a
-  // detached snapshot, so a later mutation of the public result cannot reach the
-  // stored attestation and a forged/cloned result (or a mismatched input) never
+  // Register runtime provenance BEFORE the result leaves this module, using the
+  // SAME private capture the verdict was computed from — the caller graph is not
+  // read again here. A later mutation of the public result cannot reach the
+  // stored attestation, and a forged/cloned result (or a mismatched input) never
   // attests. The success result object itself is the WeakMap key.
   attestedGroupingResults.set(result, {
-    binding: capturePairBinding(input as object),
+    capture,
+    token: issuePairToken(capture),
     snapshot: inertGroupingClone(result),
   })
   return result

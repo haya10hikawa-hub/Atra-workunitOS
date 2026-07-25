@@ -24,6 +24,8 @@ import {
 import { buildFormationGoalDoneConditionCandidate } from "../app/lib/application/formation/goalDoneConditionAdapter.ts"
 import { buildWorkUnitFormationCandidate } from "../app/lib/application/formation/workUnitFormationAggregate.ts"
 import {
+  attestValidatedGroupingComparison,
+  attestedGroupingPairTokenMatches,
   compareGroupingSubjects,
 } from "../app/lib/application/formation/grouping.ts"
 import type {
@@ -1067,4 +1069,236 @@ test("F4 pair binding: a FRESH wrapper around the same formationResult rejects",
   assert.ok(oRight.ok)
   rightSwap.right = { formationResult: rightSwap.right.formationResult }
   assert.equal(snapshotValidatedFormationGroupingOutcomeResult(oRight, rightSwap), null, "replaced right wrapper must reject")
+})
+
+// ─── F4 single outer-input capture + opaque F3 pair token (T8–T10) ───────────
+//
+// F4 used to re-capture the ordered pair from `comparisonInput` AFTER the F3
+// attestation had already read it. Because `readonly` is erased at runtime, a
+// two-valued getter could serve pair A/B to the attestation and pair C/D to the
+// registration a few statements later: an outcome derived entirely from the A/B
+// verdict was registered as belonging to C/D and REFUSED to attest against the
+// pair it actually came from. F4 now reads its own outer input exactly once and
+// stores the OPAQUE F3 PAIR TOKEN instead of recapturing the caller graph.
+
+/** A property whose reads are counted; `force` pins a value for later phases. */
+function outerProbe<T>(script: readonly T[]) {
+  const state = { reads: 0, observed: [] as T[], forced: undefined as T | undefined, forcing: false }
+  return {
+    state,
+    get(): T {
+      const value = state.forcing ? (state.forced as T) : script[Math.min(state.reads, script.length - 1)]
+      state.reads += 1
+      state.observed.push(value)
+      return value
+    },
+    force(value: T): void {
+      state.forcing = true
+      state.forced = value
+    },
+  }
+}
+
+function defineOuterGetter(target: object, key: string, get: () => unknown): void {
+  Object.defineProperty(target, key, { get, enumerable: true, configurable: true })
+}
+
+test("F4 capture (T8): a changing comparisonInput getter is read ONCE", () => {
+  const inputAB = strongPair("T8AB")
+  const inputCD = strongPair("T8CD") // a genuine pair, but NEVER compared
+  const comparisonResult = compareGroupingSubjects(inputAB)
+  assert.ok(comparisonResult.ok && comparisonResult.verdict === "strong_match")
+
+  const ci = outerProbe([inputAB, inputCD])
+  const outer = { comparisonResult, mergeTargetSide: "left" } as Record<string, unknown>
+  defineOuterGetter(outer, "comparisonInput", ci.get)
+
+  const outcome = mapFormationGroupingOutcome(outer as never)
+  assert.equal(ci.state.reads, 1, "comparisonInput must be read exactly once per mapping")
+  assert.equal(ci.state.observed[0], inputAB, "the single read is the pair the outcome is built from")
+  assert.ok(outcome.ok, "a genuine attested A/B verdict still maps")
+
+  assert.equal(
+    snapshotValidatedFormationGroupingOutcomeResult(outcome, inputCD),
+    null,
+    "an outcome computed from A/B must never attest against the never-compared pair C/D",
+  )
+  assert.notEqual(
+    snapshotValidatedFormationGroupingOutcomeResult(outcome, inputAB),
+    null,
+    "and it must still attest against the pair it WAS computed from",
+  )
+})
+
+test("F4 capture (T9): a changing comparisonResult getter is read ONCE", () => {
+  const inputAB = strongPair("T9AB")
+  const inputCD = strongPair("T9CD")
+  const resultAB = compareGroupingSubjects(inputAB)
+  const resultCD = compareGroupingSubjects(inputCD)
+  assert.ok(resultAB.ok && resultCD.ok)
+
+  const cr = outerProbe([resultAB, resultCD])
+  const outer = { comparisonInput: inputAB, mergeTargetSide: "left" } as Record<string, unknown>
+  defineOuterGetter(outer, "comparisonResult", cr.get)
+
+  const outcome = mapFormationGroupingOutcome(outer as never)
+  assert.equal(cr.state.reads, 1, "comparisonResult must be read exactly once per mapping")
+  assert.equal(cr.state.observed[0], resultAB)
+  assert.ok(outcome.ok)
+  // The outcome belongs to the pair of the ONE result that was read.
+  assert.notEqual(snapshotValidatedFormationGroupingOutcomeResult(outcome, inputAB), null)
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(outcome, inputCD), null)
+})
+
+test("F4 capture (T10): a changing mergeTargetSide getter is read ONCE", () => {
+  const input = strongPair("T10")
+  const comparisonResult = compareGroupingSubjects(input)
+  assert.ok(comparisonResult.ok)
+
+  const side = outerProbe(["left", "right"])
+  const outer = { comparisonInput: input, comparisonResult } as Record<string, unknown>
+  defineOuterGetter(outer, "mergeTargetSide", side.get)
+
+  const outcome = mapFormationGroupingOutcome(outer as never)
+  assert.equal(side.state.reads, 1, "mergeTargetSide must be read exactly once per mapping")
+  assert.equal(side.state.observed[0], "left")
+  assert.ok(outcome.ok && outcome.groupingOutcome === "merge_candidate")
+  if (!outcome.ok || outcome.groupingOutcome !== "merge_candidate") return
+  // Validation and construction used the SAME read: a second read returning
+  // "right" cannot have produced a target/source pair from a different value.
+  assert.equal(outcome.mergeCandidate.targetSide, "left")
+  assert.equal(outcome.mergeCandidate.sourceSide, "right")
+})
+
+test("F4 capture: states.ts does not recapture the pair after F3 attestation", () => {
+  const A = outcomeSubject("NRA", "org/repo#NR")
+  const B = outcomeSubject("NRB", "org/repo#NR")
+  let leftReads = 0
+  let rightReads = 0
+  const container = {} as Record<string, unknown>
+  defineOuterGetter(container, "left", () => {
+    leftReads += 1
+    return A
+  })
+  defineOuterGetter(container, "right", () => {
+    rightReads += 1
+    return B
+  })
+
+  const comparisonResult = compareGroupingSubjects(container as never)
+  assert.ok(comparisonResult.ok)
+  assert.equal(leftReads, 1, "the F3 comparison captures the pair exactly once")
+  assert.equal(rightReads, 1)
+
+  const beforeLeft = leftReads
+  const beforeRight = rightReads
+  const outcome = mapFormationGroupingOutcome({
+    comparisonInput: container,
+    comparisonResult,
+    mergeTargetSide: "left",
+  } as never)
+  assert.ok(outcome.ok)
+
+  // Exactly ONE further read per side: F3's attestation check. F4 adds none —
+  // it stores the opaque F3 pair token instead of recapturing the caller graph.
+  assert.equal(leftReads - beforeLeft, 1, "F4 must not re-read comparisonInput.left after attestation")
+  assert.equal(rightReads - beforeRight, 1, "F4 must not re-read comparisonInput.right after attestation")
+})
+
+test("F4 capture: an A/B outcome cannot be attested as C/D through one phased container", () => {
+  const A = outcomeSubject("PHA", "org/repo#PH")
+  const B = outcomeSubject("PHB", "org/repo#PH")
+  const C = outcomeSubject("PHC", "org/other#PH2")
+  const D = outcomeSubject("PHD", "org/other#PH2")
+  let reads = 0
+  let flipAfter = Number.POSITIVE_INFINITY
+  let forced: "AB" | "CD" | null = null
+  const serveCD = (): boolean => forced === "CD" || (forced === null && reads > flipAfter)
+  const container = {} as Record<string, unknown>
+  defineOuterGetter(container, "left", () => {
+    reads += 1
+    return serveCD() ? C : A
+  })
+  defineOuterGetter(container, "right", () => {
+    reads += 1
+    return serveCD() ? D : B
+  })
+
+  const comparisonResult = compareGroupingSubjects(container as never)
+  assert.ok(comparisonResult.ok && comparisonResult.verdict === "strong_match")
+  // Let F3's attestation read (one per side) still see A/B; anything AFTER that
+  // — i.e. any F4 pair capture — sees C/D.
+  flipAfter = reads + 2
+  const outcome = mapFormationGroupingOutcome({
+    comparisonInput: container,
+    comparisonResult,
+    mergeTargetSide: "left",
+  } as never)
+  assert.ok(outcome.ok)
+
+  forced = "CD"
+  assert.equal(
+    snapshotValidatedFormationGroupingOutcomeResult(outcome, container),
+    null,
+    "an outcome computed over A/B must never attest against C/D",
+  )
+  forced = "AB"
+  assert.notEqual(
+    snapshotValidatedFormationGroupingOutcomeResult(outcome, container),
+    null,
+    "it must still attest against the pair it was computed from",
+  )
+})
+
+test("F4 token: a forged or cloned pair token cannot authorize an outcome", () => {
+  const input = strongPair("TOK")
+  const comparisonResult = compareGroupingSubjects(input)
+  assert.ok(comparisonResult.ok)
+  const attested = attestValidatedGroupingComparison(comparisonResult, input)
+  assert.notEqual(attested, null)
+  const token = attested!.pairToken
+
+  const outcome = mapFormationGroupingOutcome({ comparisonInput: input, comparisonResult, mergeTargetSide: "left" })
+  assert.ok(outcome.ok)
+  assert.notEqual(snapshotValidatedFormationGroupingOutcomeResult(outcome, input), null, "the genuine binding attests")
+
+  // The authorization primitive F4 relies on rejects every forged/cloned token.
+  assert.equal(attestedGroupingPairTokenMatches({}, input), false)
+  assert.equal(attestedGroupingPairTokenMatches({ ...(token as object) }, input), false)
+  assert.equal(attestedGroupingPairTokenMatches(structuredClone(token), input), false)
+  assert.equal(attestedGroupingPairTokenMatches(JSON.parse(JSON.stringify(token)), input), false)
+  assert.equal(attestedGroupingPairTokenMatches(Object.create(token as object), input), false)
+  assert.ok(attestedGroupingPairTokenMatches(token, input), "only the genuine token resolves")
+
+  // A different container never authorizes this outcome, cloned or otherwise.
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(outcome, { ...input }), null)
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(outcome, strongPair("TOK2")), null)
+})
+
+test("F4 token: no pair or token data is reachable from the public outcome", () => {
+  const input = strongPair("LEAK2")
+  const comparisonResult = compareGroupingSubjects(input)
+  assert.ok(comparisonResult.ok)
+  const outcome = mapFormationGroupingOutcome({ comparisonInput: input, comparisonResult, mergeTargetSide: "left" })
+  assert.ok(outcome.ok)
+
+  const keys = new Set<string>()
+  collectKeys(outcome, keys)
+  for (const banned of ["pairToken", "token", "capture", "binding", "comparisonInput", "formationResult", "canonicalWorkObjectRef", "leftSubject", "rightSubject", "stable"]) {
+    assert.ok(!keys.has(banned), `the public F4 outcome must not expose ${banned}`)
+  }
+
+  const reachable = new Set<unknown>()
+  const walkValues = (value: unknown): void => {
+    if (value === null || typeof value !== "object") return
+    if (reachable.has(value)) return
+    reachable.add(value)
+    for (const v of Object.values(value)) walkValues(v)
+  }
+  walkValues(outcome)
+  assert.ok(!reachable.has(input), "the comparison input must not be reachable from the outcome")
+  assert.ok(!reachable.has(input.left), "no subject wrapper may be reachable from the outcome")
+  assert.ok(!reachable.has(input.right))
+  assert.ok(!reachable.has(input.left.formationResult), "no attested F1C result may be reachable")
+  assert.ok(!reachable.has(comparisonResult), "the F3 result object must not be reachable")
 })

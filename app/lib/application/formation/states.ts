@@ -41,7 +41,9 @@ import type {
   SuccessfulWorkUnitFormationResult,
 } from "./groupingTypes.ts"
 import {
-  snapshotValidatedGroupingComparisonResult,
+  attestValidatedGroupingComparison,
+  attestedGroupingPairTokenMatches,
+  type AttestedGroupingPairToken,
   type SuccessfulGroupingComparisonResult,
 } from "./grouping.ts"
 import { snapshotValidatedWorkUnitFormationResult } from "./workUnitFormationAggregate.ts"
@@ -388,91 +390,27 @@ function reject(reason: FormationGroupingOutcomeRejection): FormationGroupingOut
 // or the exact result paired with a cloned/different/other-pair input is a
 // different identity and never attests. No public forgeable brand is added.
 
-// F4 pins the ORDERED pair INDEPENDENTLY of F3 rather than relying on the F3
-// check: `comparisonInput` is a caller-owned mutable object, so binding an
-// outcome to the container identity alone would let a caller replace or swap
-// `left` / `right` after the outcome exists while attestation kept passing —
-// and `targetSide` / `sourceSide` / `pairSides` are meaningful ONLY against the
-// exact ordered pair they were derived from. Both subject wrappers, both
-// attested F1C results, and a detached copy of each canonical selector are
-// captured, and compared positionally so a swap is a mismatch. None of this is
+// The ORDERED pair matters here because `targetSide` / `sourceSide` / `pairSides`
+// are meaningful ONLY against the exact pair they were derived from. F4 used to
+// re-capture that pair from `comparisonInput` itself — but `comparisonInput` is
+// caller-owned, and `readonly` is erased at runtime, so an accessor or Proxy
+// could serve pair A/B to the F3 attestation and pair C/D to F4's capture a few
+// statements later. An outcome computed from A/B was then registered as
+// belonging to C/D and refused to attest against the pair it actually came from.
+//
+// F4 therefore performs NO pair capture of its own. It reads its own outer input
+// exactly once (`comparisonInput`, `comparisonResult`, `mergeTargetSide`), hands
+// those captured values to F3's attestation, and stores the OPAQUE PAIR TOKEN
+// F3 returns. The token is tied by module-private WeakMap identity to F3's own
+// single private capture, so the pair the outcome is registered against is —
+// structurally — the pair the verdict was computed from. Verification re-reads
+// the pair once (so a later mutation still invalidates it), but nothing between
+// computation and registration reads the caller graph twice. None of this is
 // exposed in the output, no side is resolved to a global candidate id, and no
 // caller object is frozen or mutated.
 
-/** A detached copy of one side's canonical selector — primitives only. */
-type DetachedOutcomeSelector = {
-  readonly present: boolean
-  readonly provider: unknown
-  readonly sourceObjectId: unknown
-}
-
-function detachOutcomeSelector(subject: unknown): DetachedOutcomeSelector {
-  if (subject === null || typeof subject !== "object") {
-    return { present: false, provider: undefined, sourceObjectId: undefined }
-  }
-  const ref = (subject as { canonicalWorkObjectRef?: unknown }).canonicalWorkObjectRef
-  if (ref === undefined) return { present: false, provider: undefined, sourceObjectId: undefined }
-  if (ref === null || typeof ref !== "object") {
-    return { present: true, provider: undefined, sourceObjectId: undefined }
-  }
-  return {
-    present: true,
-    provider: (ref as { provider?: unknown }).provider,
-    sourceObjectId: (ref as { sourceObjectId?: unknown }).sourceObjectId,
-  }
-}
-
-function sameOutcomeSelector(a: DetachedOutcomeSelector, b: DetachedOutcomeSelector): boolean {
-  return a.present === b.present && a.provider === b.provider && a.sourceObjectId === b.sourceObjectId
-}
-
-function outcomeFormationResultOf(subject: unknown): unknown {
-  if (subject === null || typeof subject !== "object") return undefined
-  return (subject as { formationResult?: unknown }).formationResult
-}
-
-type OutcomePairBinding = {
-  readonly input: object
-  readonly leftSubject: unknown
-  readonly rightSubject: unknown
-  readonly leftFormationResult: unknown
-  readonly rightFormationResult: unknown
-  readonly leftSelector: DetachedOutcomeSelector
-  readonly rightSelector: DetachedOutcomeSelector
-}
-
-function captureOutcomePairBinding(input: object): OutcomePairBinding {
-  const left = (input as { left?: unknown }).left
-  const right = (input as { right?: unknown }).right
-  return {
-    input,
-    leftSubject: left,
-    rightSubject: right,
-    leftFormationResult: outcomeFormationResultOf(left),
-    rightFormationResult: outcomeFormationResultOf(right),
-    leftSelector: detachOutcomeSelector(left),
-    rightSelector: detachOutcomeSelector(right),
-  }
-}
-
-/**
- * True only when the ORDERED pair the caller now presents is still the exact
- * pair the outcome was derived from. Positional, so a swap is a mismatch.
- */
-function outcomePairBindingIntact(binding: OutcomePairBinding, input: object): boolean {
-  if (binding.input !== input) return false
-  const left = (input as { left?: unknown }).left
-  const right = (input as { right?: unknown }).right
-  if (left !== binding.leftSubject || right !== binding.rightSubject) return false
-  if (outcomeFormationResultOf(left) !== binding.leftFormationResult) return false
-  if (outcomeFormationResultOf(right) !== binding.rightFormationResult) return false
-  if (!sameOutcomeSelector(detachOutcomeSelector(left), binding.leftSelector)) return false
-  if (!sameOutcomeSelector(detachOutcomeSelector(right), binding.rightSelector)) return false
-  return true
-}
-
 type AttestedOutcomeEntry = {
-  readonly binding: OutcomePairBinding
+  readonly pairToken: AttestedGroupingPairToken
   readonly snapshot: SuccessfulFormationGroupingOutcomeSnapshot
 }
 
@@ -492,12 +430,10 @@ function inertOutcomeClone<T>(value: T): T {
 
 function registerOutcome(
   result: SuccessfulFormationGroupingOutcomeResult,
-  comparisonInput: object,
+  pairToken: AttestedGroupingPairToken,
 ): SuccessfulFormationGroupingOutcomeResult {
-  attestedOutcomeResults.set(result, {
-    binding: captureOutcomePairBinding(comparisonInput),
-    snapshot: inertOutcomeClone(result),
-  })
+  // The pair is taken from F3's attestation token, NOT re-read from the caller.
+  attestedOutcomeResults.set(result, { pairToken, snapshot: inertOutcomeClone(result) })
   return result
 }
 
@@ -523,7 +459,9 @@ export function snapshotValidatedFormationGroupingOutcomeResult(
   if (comparisonInput === null || typeof comparisonInput !== "object") return null
   const entry = attestedOutcomeResults.get(value as object)
   if (entry === undefined) return null
-  if (!outcomePairBindingIntact(entry.binding, comparisonInput as object)) return null
+  // The opaque F3 token resolves the ordered pair; a forged or cloned token, a
+  // different container, or a pair that has since changed does not match.
+  if (!attestedGroupingPairTokenMatches(entry.pairToken, comparisonInput)) return null
   return inertOutcomeClone(entry.snapshot)
 }
 
@@ -551,19 +489,29 @@ export function mapFormationGroupingOutcome(
   // 1. Legacy unbound candidate ids fail CLOSED (Section 6) — their presence
   //    alone rejects, so a stale caller cannot believe they still bind the
   //    output. The supplied value is never read beyond presence, never echoed.
+  //    This is an own-property probe; it reads no value and triggers no accessor.
   if (hasLegacyUnboundField(raw)) return reject("unbound_candidate_reference_supplied")
 
-  // 2. Pair-side validation (value-free). An unknown/empty/id-shaped side is
-  //    rejected without echoing it.
+  // 2. ONE read of each security-sensitive field of F4's own outer input. Every
+  //    step below uses these captured values — `raw.comparisonInput`,
+  //    `raw.comparisonResult` and `raw.mergeTargetSide` are never read again, so
+  //    a changing accessor or Proxy cannot attest one pair and register another.
+  const comparisonInput = raw?.comparisonInput
+  const comparisonResult = raw?.comparisonResult
   const mergeTargetSide = raw?.mergeTargetSide
+
+  // 3. Pair-side validation (value-free). An unknown/empty/id-shaped side is
+  //    rejected without echoing it.
   if (mergeTargetSide !== undefined && !isPairSide(mergeTargetSide)) {
     return reject("merge_target_side_invalid")
   }
 
-  // 3. F3 runtime-provenance attestation — the sole source of the verdict.
-  const snapshot = snapshotValidatedGroupingComparisonResult(raw?.comparisonResult, raw?.comparisonInput)
-  if (snapshot === null) return reject("grouping_not_validated")
+  // 4. F3 runtime-provenance attestation — the sole source of the verdict, and
+  //    the sole source of the ordered pair this outcome may be bound to.
+  const attested = attestValidatedGroupingComparison(comparisonResult, comparisonInput)
+  if (attested === null) return reject("grouping_not_validated")
 
+  const snapshot = attested.snapshot
   const reasons = boundReasons(snapshot.reasons)
 
   let result: FormationGroupingOutcomeResult
@@ -594,10 +542,18 @@ export function mapFormationGroupingOutcome(
   }
 
   if (!result.ok) return result
-  // 4. Bind the successful outcome to the EXACT comparison input identity, so a
-  //    proposal derived from pair A never attests against pair B. Attestation
-  //    above guarantees `comparisonInput` is an object.
-  return registerOutcome(result, raw?.comparisonInput as object)
+  // 5. Bind the successful outcome to the opaque token for the EXACT ordered
+  //    pair F3 computed this verdict from, so a proposal derived from pair A
+  //    never attests against pair B. The caller graph is NOT re-read here.
+  //
+  //    CONTRACT FOR FUTURE CONSUMERS: a downstream slice must NOT resolve
+  //    `targetSide` / `sourceSide` / `pairSides` by reading the raw mutable
+  //    `comparisonInput` after attestation — that read is a fresh TOCTOU window
+  //    and may answer with a different pair. It must consume an opaque validated
+  //    pair handle (this token, via `attestedGroupingPairTokenMatches`) or
+  //    another immutable trusted resolution boundary. The actual pair is
+  //    deliberately NOT exposed through the candidate output to solve this.
+  return registerOutcome(result, attested.pairToken)
 }
 
 function buildSplitOutcome(reasons: readonly string[]): FormationGroupingOutcomeResult {
