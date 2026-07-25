@@ -22,8 +22,11 @@
  * comparison pair, the source side is the deterministic opposite, and any
  * legacy `leftCandidateId` / `rightCandidateId` / `mergeTargetCandidateId`
  * field fails closed. Every successful outcome is additionally bound by runtime
- * provenance to the exact `GroupingComparisonInput` that produced it, so a
- * proposal derived from one pair never attests against another.
+ * provenance to the exact ORDERED PAIR that produced it — not merely to the
+ * `GroupingComparisonInput` container identity — so a proposal derived from one
+ * pair never attests against another, and the same container fails to attest
+ * once its sides are replaced, swapped, re-pointed at a different
+ * `formationResult`, or have a canonical selector added, removed, or edited.
  *
  * The `conflict` state is part of the shared formation-state vocabulary but is
  * RESERVED — general conflict detection belongs to F6 and F4 NEVER emits it.
@@ -385,8 +388,91 @@ function reject(reason: FormationGroupingOutcomeRejection): FormationGroupingOut
 // or the exact result paired with a cloned/different/other-pair input is a
 // different identity and never attests. No public forgeable brand is added.
 
-type AttestedOutcomeEntry = {
+// F4 pins the ORDERED pair INDEPENDENTLY of F3 rather than relying on the F3
+// check: `comparisonInput` is a caller-owned mutable object, so binding an
+// outcome to the container identity alone would let a caller replace or swap
+// `left` / `right` after the outcome exists while attestation kept passing —
+// and `targetSide` / `sourceSide` / `pairSides` are meaningful ONLY against the
+// exact ordered pair they were derived from. Both subject wrappers, both
+// attested F1C results, and a detached copy of each canonical selector are
+// captured, and compared positionally so a swap is a mismatch. None of this is
+// exposed in the output, no side is resolved to a global candidate id, and no
+// caller object is frozen or mutated.
+
+/** A detached copy of one side's canonical selector — primitives only. */
+type DetachedOutcomeSelector = {
+  readonly present: boolean
+  readonly provider: unknown
+  readonly sourceObjectId: unknown
+}
+
+function detachOutcomeSelector(subject: unknown): DetachedOutcomeSelector {
+  if (subject === null || typeof subject !== "object") {
+    return { present: false, provider: undefined, sourceObjectId: undefined }
+  }
+  const ref = (subject as { canonicalWorkObjectRef?: unknown }).canonicalWorkObjectRef
+  if (ref === undefined) return { present: false, provider: undefined, sourceObjectId: undefined }
+  if (ref === null || typeof ref !== "object") {
+    return { present: true, provider: undefined, sourceObjectId: undefined }
+  }
+  return {
+    present: true,
+    provider: (ref as { provider?: unknown }).provider,
+    sourceObjectId: (ref as { sourceObjectId?: unknown }).sourceObjectId,
+  }
+}
+
+function sameOutcomeSelector(a: DetachedOutcomeSelector, b: DetachedOutcomeSelector): boolean {
+  return a.present === b.present && a.provider === b.provider && a.sourceObjectId === b.sourceObjectId
+}
+
+function outcomeFormationResultOf(subject: unknown): unknown {
+  if (subject === null || typeof subject !== "object") return undefined
+  return (subject as { formationResult?: unknown }).formationResult
+}
+
+type OutcomePairBinding = {
   readonly input: object
+  readonly leftSubject: unknown
+  readonly rightSubject: unknown
+  readonly leftFormationResult: unknown
+  readonly rightFormationResult: unknown
+  readonly leftSelector: DetachedOutcomeSelector
+  readonly rightSelector: DetachedOutcomeSelector
+}
+
+function captureOutcomePairBinding(input: object): OutcomePairBinding {
+  const left = (input as { left?: unknown }).left
+  const right = (input as { right?: unknown }).right
+  return {
+    input,
+    leftSubject: left,
+    rightSubject: right,
+    leftFormationResult: outcomeFormationResultOf(left),
+    rightFormationResult: outcomeFormationResultOf(right),
+    leftSelector: detachOutcomeSelector(left),
+    rightSelector: detachOutcomeSelector(right),
+  }
+}
+
+/**
+ * True only when the ORDERED pair the caller now presents is still the exact
+ * pair the outcome was derived from. Positional, so a swap is a mismatch.
+ */
+function outcomePairBindingIntact(binding: OutcomePairBinding, input: object): boolean {
+  if (binding.input !== input) return false
+  const left = (input as { left?: unknown }).left
+  const right = (input as { right?: unknown }).right
+  if (left !== binding.leftSubject || right !== binding.rightSubject) return false
+  if (outcomeFormationResultOf(left) !== binding.leftFormationResult) return false
+  if (outcomeFormationResultOf(right) !== binding.rightFormationResult) return false
+  if (!sameOutcomeSelector(detachOutcomeSelector(left), binding.leftSelector)) return false
+  if (!sameOutcomeSelector(detachOutcomeSelector(right), binding.rightSelector)) return false
+  return true
+}
+
+type AttestedOutcomeEntry = {
+  readonly binding: OutcomePairBinding
   readonly snapshot: SuccessfulFormationGroupingOutcomeSnapshot
 }
 
@@ -409,7 +495,7 @@ function registerOutcome(
   comparisonInput: object,
 ): SuccessfulFormationGroupingOutcomeResult {
   attestedOutcomeResults.set(result, {
-    input: comparisonInput,
+    binding: captureOutcomePairBinding(comparisonInput),
     snapshot: inertOutcomeClone(result),
   })
   return result
@@ -420,11 +506,14 @@ function registerOutcome(
  *
  * Returns a fresh, fully detached inert snapshot ONLY when `value` is the EXACT
  * successful object a real `mapFormationGroupingOutcome` call returned AND
- * `comparisonInput` is the EXACT original comparison input that produced it;
- * otherwise `null`. This is what distinguishes two otherwise-identical split
- * proposals: a proposal derived from pair A does not attest against pair B.
- * Repeated snapshots neither alias each other nor the stored snapshot, and a
- * later mutation of the public result cannot alter it.
+ * `comparisonInput` is the EXACT original comparison input that produced it,
+ * STILL CARRYING the exact ordered pair it carried then; otherwise `null`. This
+ * is what distinguishes two otherwise-identical split proposals: a proposal
+ * derived from pair A does not attest against pair B, and it stops attesting
+ * against its own container once that container's ordered pair changes — which
+ * is what keeps `targetSide` / `sourceSide` / `pairSides` meaningful. Repeated
+ * snapshots neither alias each other nor the stored snapshot, and a later
+ * mutation of the public result cannot alter it.
  */
 export function snapshotValidatedFormationGroupingOutcomeResult(
   value: unknown,
@@ -434,7 +523,7 @@ export function snapshotValidatedFormationGroupingOutcomeResult(
   if (comparisonInput === null || typeof comparisonInput !== "object") return null
   const entry = attestedOutcomeResults.get(value as object)
   if (entry === undefined) return null
-  if (entry.input !== (comparisonInput as object)) return null
+  if (!outcomePairBindingIntact(entry.binding, comparisonInput as object)) return null
   return inertOutcomeClone(entry.snapshot)
 }
 

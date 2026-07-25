@@ -812,3 +812,259 @@ test("states.ts imports no LLM / network / provider-extraction / persistence sur
     assert.ok(!src.includes(banned), `states.ts must not reference ${banned}`)
   }
 })
+
+// ─── F4 ordered-pair binding (Section 7) ─────────────────────────────────────
+//
+// `comparisonInput` is a caller-owned MUTABLE object. Binding an outcome to its
+// container identity alone let a caller replace or swap the pair after the
+// outcome existed while attestation kept passing — which would silently
+// re-point `targetSide` / `sourceSide` / `pairSides` at different candidates.
+// F4 pins the ordered pair INDEPENDENTLY of F3.
+
+type MutableOutcomePair = { left: GroupingSubjectInput; right: GroupingSubjectInput }
+
+function outcomeSubject(tag: string, objectId: string, ref?: { provider: string; sourceObjectId: string }): GroupingSubjectInput {
+  return buildGroupingSubject({
+    sources: [{ provider: "github", sourceObjectId: objectId, externalId: `pr-${tag}`, occurredAt: "2026-01-01T00:00:00Z", ...(ref ? { referencedObjects: [ref] } : {}) }],
+    goal: { outcome: `${tag} outcome`, workObject: `${tag} wa` },
+    ...(ref ? { canonicalWorkObjectRef: ref } : {}),
+  })
+}
+
+function strongPair(tag: string): MutableOutcomePair {
+  return {
+    left: outcomeSubject(`${tag}L`, `org/repo#${tag}`),
+    right: outcomeSubject(`${tag}R`, `org/repo#${tag}`),
+  }
+}
+
+test("F4 pair binding (R16): pair replaced BEFORE mapping → grouping_not_validated", () => {
+  const input = strongPair("R16")
+  const comparisonResult = compareGroupingSubjects(input)
+  assert.ok(comparisonResult.ok && comparisonResult.verdict === "strong_match")
+
+  // Same container identity, entirely different pair.
+  input.left = outcomeSubject("R16C", "org/other#R16C")
+  input.right = outcomeSubject("R16D", "org/other#R16D")
+
+  const out = mapFormationGroupingOutcome({ comparisonInput: input, comparisonResult, mergeTargetSide: "left" })
+  assert.equal(out.ok, false, "an A/B verdict must not map over a C/D-populated container")
+  if (out.ok) return
+  assert.equal(out.reason, "grouping_not_validated")
+  assert.equal(out.candidateOnly, true)
+})
+
+test("F4 pair binding (R17): pair replaced AFTER mapping → outcome attestation null", () => {
+  const input = strongPair("R17")
+  const comparisonResult = compareGroupingSubjects(input)
+  assert.ok(comparisonResult.ok)
+  const outcome = mapFormationGroupingOutcome({ comparisonInput: input, comparisonResult, mergeTargetSide: "left" })
+  assert.ok(outcome.ok)
+  assert.notEqual(snapshotValidatedFormationGroupingOutcomeResult(outcome, input), null, "attests before mutation")
+
+  input.left = outcomeSubject("R17C", "org/other#R17C")
+  input.right = outcomeSubject("R17D", "org/other#R17D")
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(outcome, input), null)
+})
+
+test("F4 pair binding (R18): left/right swap → outcome attestation null", () => {
+  const input = strongPair("R18")
+  const comparisonResult = compareGroupingSubjects(input)
+  assert.ok(comparisonResult.ok)
+  const outcome = mapFormationGroupingOutcome({ comparisonInput: input, comparisonResult, mergeTargetSide: "left" })
+  assert.ok(outcome.ok && outcome.groupingOutcome === "merge_candidate")
+  if (!outcome.ok || outcome.groupingOutcome !== "merge_candidate") return
+  assert.equal(outcome.mergeCandidate.targetSide, "left")
+
+  const tmp = input.left
+  input.left = input.right
+  input.right = tmp
+  assert.equal(
+    snapshotValidatedFormationGroupingOutcomeResult(outcome, input),
+    null,
+    "targetSide would otherwise silently denote the other candidate",
+  )
+})
+
+test("F4 pair binding: replacing only the left formationResult → outcome attestation null", () => {
+  const input = strongPair("FRL")
+  const comparisonResult = compareGroupingSubjects(input)
+  assert.ok(comparisonResult.ok)
+  const outcome = mapFormationGroupingOutcome({ comparisonInput: input, comparisonResult, mergeTargetSide: "left" })
+  assert.ok(outcome.ok)
+
+  const other = outcomeSubject("FRLZ", "org/other#FRLZ")
+  ;(input.left as { formationResult: unknown }).formationResult = other.formationResult
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(outcome, input), null)
+})
+
+test("F4 pair binding: replacing only the right formationResult → outcome attestation null", () => {
+  const input = strongPair("FRR")
+  const comparisonResult = compareGroupingSubjects(input)
+  assert.ok(comparisonResult.ok)
+  const outcome = mapFormationGroupingOutcome({ comparisonInput: input, comparisonResult, mergeTargetSide: "left" })
+  assert.ok(outcome.ok)
+
+  const other = outcomeSubject("FRRZ", "org/other#FRRZ")
+  ;(input.right as { formationResult: unknown }).formationResult = other.formationResult
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(outcome, input), null)
+})
+
+test("F4 pair binding: canonical selector added, removed, or edited → outcome attestation null", () => {
+  const REF = { provider: "github", sourceObjectId: "org/wa#F4SEL" }
+
+  // Added after the outcome exists.
+  const added = strongPair("SELA")
+  const rAdded = compareGroupingSubjects(added)
+  assert.ok(rAdded.ok)
+  const oAdded = mapFormationGroupingOutcome({ comparisonInput: added, comparisonResult: rAdded, mergeTargetSide: "left" })
+  assert.ok(oAdded.ok)
+  ;(added.left as { canonicalWorkObjectRef?: unknown }).canonicalWorkObjectRef = { ...REF }
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(oAdded, added), null, "selector added must reject")
+
+  // Present, then removed / edited.
+  const withRef = {
+    left: outcomeSubject("SELB", "org/repo#SELB", REF),
+    right: outcomeSubject("SELC", "org/repo#SELB", REF),
+  } as MutableOutcomePair
+  const rRef = compareGroupingSubjects(withRef)
+  assert.ok(rRef.ok)
+  const oRef = mapFormationGroupingOutcome({ comparisonInput: withRef, comparisonResult: rRef, mergeTargetSide: "left" })
+  assert.ok(oRef.ok)
+  assert.notEqual(snapshotValidatedFormationGroupingOutcomeResult(oRef, withRef), null, "attests untouched")
+  ;(withRef.left as { canonicalWorkObjectRef: { sourceObjectId: string } }).canonicalWorkObjectRef.sourceObjectId = "org/wa#OTHER"
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(oRef, withRef), null, "selector edit must reject")
+
+  const removedRef = {
+    left: outcomeSubject("SELD", "org/repo#SELD", REF),
+    right: outcomeSubject("SELE", "org/repo#SELD", REF),
+  } as MutableOutcomePair
+  const rRem = compareGroupingSubjects(removedRef)
+  assert.ok(rRem.ok)
+  const oRem = mapFormationGroupingOutcome({ comparisonInput: removedRef, comparisonResult: rRem, mergeTargetSide: "left" })
+  assert.ok(oRem.ok)
+  delete (removedRef.left as { canonicalWorkObjectRef?: unknown }).canonicalWorkObjectRef
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(oRem, removedRef), null, "selector removed must reject")
+})
+
+test("F4 pair binding: an untouched exact ordered pair still attests, and cross-substitution still rejects", () => {
+  const a = strongPair("OKA")
+  const ra = compareGroupingSubjects(a)
+  assert.ok(ra.ok)
+  const oa = mapFormationGroupingOutcome({ comparisonInput: a, comparisonResult: ra, mergeTargetSide: "left" })
+  assert.ok(oa.ok)
+
+  const b = strongPair("OKB")
+  const rb = compareGroupingSubjects(b)
+  assert.ok(rb.ok)
+  const ob = mapFormationGroupingOutcome({ comparisonInput: b, comparisonResult: rb, mergeTargetSide: "right" })
+  assert.ok(ob.ok)
+
+  // Self-applied attests; cross-applied rejects; cloned container rejects.
+  assert.notEqual(snapshotValidatedFormationGroupingOutcomeResult(oa, a), null)
+  assert.notEqual(snapshotValidatedFormationGroupingOutcomeResult(ob, b), null)
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(oa, b), null)
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(ob, a), null)
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(oa, { ...a }), null)
+
+  // A public mutation of the outcome cannot reach the private snapshot.
+  ;(oa as { state?: string }).state = "conflict"
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(oa, a)?.state, "merge_candidate")
+})
+
+test("F4 pair binding: split outcomes are pair-bound and legacy id attacks stay closed", () => {
+  // Two genuine must_split pairs produce structurally identical proposals; only
+  // the ordered-pair binding separates them.
+  const mkSplit = (tag: string) => {
+    const pair = {
+      left: buildGroupingSubject({
+        sources: [{ provider: "github", sourceObjectId: `org/repo#${tag}`, externalId: `pr-${tag}L`, occurredAt: "2020-01-01T00:00:00Z", referencedObjects: [{ provider: "github", sourceObjectId: `org/wa#${tag}-A` }] }],
+        goal: { outcome: `${tag} left outcome`, workObject: `${tag} left wa` },
+        canonicalWorkObjectRef: { provider: "github", sourceObjectId: `org/wa#${tag}-A` },
+        independentClosure: "independent",
+      }),
+      right: buildGroupingSubject({
+        sources: [{ provider: "github", sourceObjectId: `org/repo#${tag}`, externalId: `pr-${tag}R`, occurredAt: "2026-01-01T00:00:00Z", referencedObjects: [{ provider: "github", sourceObjectId: `org/wa#${tag}-B` }] }],
+        goal: { outcome: `${tag} right outcome`, workObject: `${tag} right wa` },
+        canonicalWorkObjectRef: { provider: "github", sourceObjectId: `org/wa#${tag}-B` },
+        independentClosure: "independent",
+      }),
+    } as MutableOutcomePair
+    const r = compareGroupingSubjects(pair)
+    assert.ok(r.ok && r.verdict === "must_split", `precondition must_split for ${tag}`)
+    const o = mapFormationGroupingOutcome({ comparisonInput: pair, comparisonResult: r })
+    assert.ok(o.ok && o.groupingOutcome === "split_candidate")
+    return { pair, outcome: o }
+  }
+
+  const s1 = mkSplit("SP1")
+  const s2 = mkSplit("SP2")
+  assert.notEqual(snapshotValidatedFormationGroupingOutcomeResult(s1.outcome, s1.pair), null)
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(s1.outcome, s2.pair), null, "split A must not attest against pair B")
+
+  // Swapping the split pair's sides also breaks attestation.
+  const tmp = s1.pair.left
+  s1.pair.left = s1.pair.right
+  s1.pair.right = tmp
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(s1.outcome, s1.pair), null)
+
+  // The prior remediation stays closed: legacy global ids still fail closed.
+  const legacy = strongPair("LEG")
+  const rLegacy = compareGroupingSubjects(legacy)
+  assert.ok(rLegacy.ok)
+  for (const attempt of [
+    { leftCandidateId: "cand-1" },
+    { rightCandidateId: "cand-2" },
+    { mergeTargetCandidateId: "cand-3" },
+  ]) {
+    const r = mapFormationGroupingOutcome({ comparisonInput: legacy, comparisonResult: rLegacy, mergeTargetSide: "left", ...attempt } as never)
+    assert.equal(r.ok, false)
+    if (r.ok) continue
+    assert.equal(r.reason, "unbound_candidate_reference_supplied")
+  }
+})
+
+test("F4 pair binding: no pair-binding or raw subject identity is exposed publicly", () => {
+  const input = {
+    left: outcomeSubject("PUBL", "org/repo#PUB", { provider: "github", sourceObjectId: "org/wa#PUB" }),
+    right: outcomeSubject("PUBR", "org/repo#PUB", { provider: "github", sourceObjectId: "org/wa#PUB" }),
+  } as MutableOutcomePair
+  const comparisonResult = compareGroupingSubjects(input)
+  assert.ok(comparisonResult.ok)
+  const outcome = mapFormationGroupingOutcome({ comparisonInput: input, comparisonResult, mergeTargetSide: "left" })
+  assert.ok(outcome.ok)
+
+  for (const value of [outcome, snapshotValidatedFormationGroupingOutcomeResult(outcome, input)]) {
+    const serialized = JSON.stringify(value)
+    for (const banned of ["binding", "leftSubject", "rightSubject", "formationResult", "canonicalWorkObjectRef", "sourceObjectId", "PUBL", "PUBR", "org/repo#PUB", "org/wa#PUB", "targetNodeCandidateId", "sourceCandidateId"]) {
+      assert.ok(!serialized.includes(banned), `public F4 output must not expose ${banned}`)
+    }
+    // Top-level surface is exactly the documented closed set.
+    assert.deepEqual(
+      Object.keys(value as object).sort(),
+      ["basisVerdict", "candidateOnly", "defaultGrouped", "forbiddenPromotionReasons", "groupingOutcome", "humanReviewRequired", "mergeCandidate", "ok", "proposalStrength", "state"],
+    )
+  }
+})
+
+test("F4 pair binding: a FRESH wrapper around the same formationResult rejects", () => {
+  // Isolates the subject-wrapper identity check independently of F3.
+  const mk = () => strongPair("WRP")
+
+  const leftSwap = mk()
+  const rLeft = compareGroupingSubjects(leftSwap)
+  assert.ok(rLeft.ok)
+  const oLeft = mapFormationGroupingOutcome({ comparisonInput: leftSwap, comparisonResult: rLeft, mergeTargetSide: "left" })
+  assert.ok(oLeft.ok)
+  assert.notEqual(snapshotValidatedFormationGroupingOutcomeResult(oLeft, leftSwap), null)
+  leftSwap.left = { formationResult: leftSwap.left.formationResult }
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(oLeft, leftSwap), null, "replaced left wrapper must reject")
+
+  const rightSwap = mk()
+  const rRight = compareGroupingSubjects(rightSwap)
+  assert.ok(rRight.ok)
+  const oRight = mapFormationGroupingOutcome({ comparisonInput: rightSwap, comparisonResult: rRight, mergeTargetSide: "left" })
+  assert.ok(oRight.ok)
+  rightSwap.right = { formationResult: rightSwap.right.formationResult }
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(oRight, rightSwap), null, "replaced right wrapper must reject")
+})

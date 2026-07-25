@@ -66,8 +66,91 @@ export type SuccessfulGroupingComparisonResult = Extract<
 /** A fresh, fully detached inert snapshot of a validated F3 success result. */
 export type SuccessfulGroupingComparisonSnapshot = SuccessfulGroupingComparisonResult
 
-type AttestedGroupingEntry = {
+// The container identity alone is NOT the pair. `GroupingComparisonInput` is a
+// caller-owned mutable object, so `input.left` / `input.right` can be replaced,
+// or swapped, in place after registration while the container identity check
+// still passes. The ORDERED pair semantics are therefore pinned explicitly:
+// both subject wrappers, both attested F1C results (a wrapper can be kept while
+// its `formationResult` is swapped), and a detached copy of each side's
+// canonical selector (the same wrapper can keep its identity while its
+// `canonicalWorkObjectRef` is added, removed, or edited). Left and right are
+// compared positionally, so a swap is a mismatch. Caller objects are never
+// frozen or mutated, and none of this is exposed publicly.
+
+/** A detached copy of one side's canonical selector — primitives only. */
+type DetachedSelector = {
+  readonly present: boolean
+  readonly provider: unknown
+  readonly sourceObjectId: unknown
+}
+
+function detachSelector(subject: unknown): DetachedSelector {
+  if (subject === null || typeof subject !== "object") {
+    return { present: false, provider: undefined, sourceObjectId: undefined }
+  }
+  const ref = (subject as { canonicalWorkObjectRef?: unknown }).canonicalWorkObjectRef
+  if (ref === undefined) return { present: false, provider: undefined, sourceObjectId: undefined }
+  if (ref === null || typeof ref !== "object") {
+    return { present: true, provider: undefined, sourceObjectId: undefined }
+  }
+  return {
+    present: true,
+    provider: (ref as { provider?: unknown }).provider,
+    sourceObjectId: (ref as { sourceObjectId?: unknown }).sourceObjectId,
+  }
+}
+
+function sameSelector(a: DetachedSelector, b: DetachedSelector): boolean {
+  return a.present === b.present && a.provider === b.provider && a.sourceObjectId === b.sourceObjectId
+}
+
+function formationResultOf(subject: unknown): unknown {
+  if (subject === null || typeof subject !== "object") return undefined
+  return (subject as { formationResult?: unknown }).formationResult
+}
+
+type GroupingPairBinding = {
   readonly input: object
+  readonly leftSubject: unknown
+  readonly rightSubject: unknown
+  readonly leftFormationResult: unknown
+  readonly rightFormationResult: unknown
+  readonly leftSelector: DetachedSelector
+  readonly rightSelector: DetachedSelector
+}
+
+function capturePairBinding(input: object): GroupingPairBinding {
+  const left = (input as { left?: unknown }).left
+  const right = (input as { right?: unknown }).right
+  return {
+    input,
+    leftSubject: left,
+    rightSubject: right,
+    leftFormationResult: formationResultOf(left),
+    rightFormationResult: formationResultOf(right),
+    leftSelector: detachSelector(left),
+    rightSelector: detachSelector(right),
+  }
+}
+
+/**
+ * True only when the ORDERED pair the caller now presents is still the exact
+ * pair that was compared. Positional, so a left/right swap is a mismatch.
+ */
+function pairBindingIntact(binding: GroupingPairBinding, input: object): boolean {
+  if (binding.input !== input) return false
+  const left = (input as { left?: unknown }).left
+  const right = (input as { right?: unknown }).right
+  if (left !== binding.leftSubject || right !== binding.rightSubject) return false
+  if (formationResultOf(left) !== binding.leftFormationResult) return false
+  if (formationResultOf(right) !== binding.rightFormationResult) return false
+  if (!sameSelector(detachSelector(left), binding.leftSelector)) return false
+  if (!sameSelector(detachSelector(right), binding.rightSelector)) return false
+  return true
+}
+
+type AttestedGroupingEntry = {
+  readonly binding: GroupingPairBinding
   readonly snapshot: SuccessfulGroupingComparisonSnapshot
 }
 
@@ -98,9 +181,15 @@ function inertGroupingClone<T>(value: T): T {
  * with a cloned or different input, or a pair-A result applied to a pair-B
  * input is unregistered/mismatched and returns `null`. Repeated snapshots
  * neither alias each other nor the stored snapshot, and a later mutation of the
- * public result or the public input cannot alter it. After attestation
- * `comparisonInput` is an IDENTITY TOKEN only — no possibly-mutated field of it
- * is ever read; all verdict/reason data comes from the detached snapshot.
+ * public result cannot alter it.
+ *
+ * `comparisonInput` is NOT merely an identity token: the ORDERED pair it
+ * carried at comparison time is pinned, so the same container also fails to
+ * attest once either side is replaced, the two sides are swapped, a subject
+ * wrapper is re-pointed at a different `formationResult`, or a canonical
+ * selector is added, removed, or edited. Only the ordered pair is re-checked —
+ * all verdict/reason data still comes solely from the detached snapshot, and no
+ * caller object is ever frozen or mutated.
  */
 export function snapshotValidatedGroupingComparisonResult(
   value: unknown,
@@ -110,9 +199,12 @@ export function snapshotValidatedGroupingComparisonResult(
   if (comparisonInput === null || typeof comparisonInput !== "object") return null
   const entry = attestedGroupingResults.get(value as object)
   if (entry === undefined) return null
-  // The result attests ONLY when bound to its EXACT original input object; a
-  // cloned, different, or other-pair input is a mismatch (identity, not shape).
-  if (entry.input !== (comparisonInput as object)) return null
+  // The result attests ONLY when bound to its EXACT original input object AND
+  // that input still carries the EXACT ordered pair that was compared; a cloned,
+  // different, or other-pair input — or the same container whose sides were
+  // replaced, swapped, re-pointed at another formationResult, or had a canonical
+  // selector added/removed/edited — is a mismatch (identity, not shape).
+  if (!pairBindingIntact(entry.binding, comparisonInput as object)) return null
   return inertGroupingClone(entry.snapshot)
 }
 
@@ -408,7 +500,7 @@ export function compareGroupingSubjects(input: GroupingComparisonInput): Groupin
   // stored attestation and a forged/cloned result (or a mismatched input) never
   // attests. The success result object itself is the WeakMap key.
   attestedGroupingResults.set(result, {
-    input: input as object,
+    binding: capturePairBinding(input as object),
     snapshot: inertGroupingClone(result),
   })
   return result

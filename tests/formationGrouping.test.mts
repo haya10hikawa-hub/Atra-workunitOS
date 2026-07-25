@@ -582,3 +582,159 @@ test("F3 modules import no LLM / network / provider-extraction surface", () => {
     }
   }
 })
+
+// ─── F3 ordered-pair binding (Section 6) ─────────────────────────────────────
+//
+// The attested `comparisonInput` is a caller-owned MUTABLE object. Binding to
+// its container identity alone let a caller replace or swap the compared pair
+// in place while attestation kept passing, so a genuine pair-A verdict could be
+// carried on a container now holding pair C/D. These pin the ordered pair.
+
+type MutablePair = { left: GroupingSubjectInput; right: GroupingSubjectInput }
+
+function pairSubject(tag: string, objectId: string): GroupingSubjectInput {
+  return buildSubject({
+    sources: [{ provider: "github", sourceObjectId: objectId, externalId: `pr-${tag}`, occurredAt: "2026-01-01T00:00:00Z" }],
+    goal: { outcome: `${tag} outcome`, workObject: `${tag} wa` },
+  })
+}
+
+test("F3 pair binding: replacing both sides of the SAME input object rejects", () => {
+  const input = { left: pairSubject("pbA", "org/repo#PB"), right: pairSubject("pbB", "org/repo#PB") } as MutablePair
+  const result = compareGroupingSubjects(input)
+  assert.ok(result.ok && result.verdict === "strong_match")
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(result, input), null, "attests before mutation")
+
+  input.left = pairSubject("pbC", "org/other#PC")
+  input.right = pairSubject("pbD", "org/other#PD")
+  assert.equal(
+    snapshotValidatedGroupingComparisonResult(result, input),
+    null,
+    "a pair-A verdict must not survive the container being repopulated with C/D",
+  )
+})
+
+test("F3 pair binding: replacing only one side of the SAME input object rejects", () => {
+  const mkInput = () => ({ left: pairSubject("p1A", "org/repo#P1"), right: pairSubject("p1B", "org/repo#P1") }) as MutablePair
+
+  const onlyLeft = mkInput()
+  const rLeft = compareGroupingSubjects(onlyLeft)
+  assert.ok(rLeft.ok)
+  onlyLeft.left = pairSubject("p1X", "org/other#PX")
+  assert.equal(snapshotValidatedGroupingComparisonResult(rLeft, onlyLeft), null, "replaced left must reject")
+
+  const onlyRight = mkInput()
+  const rRight = compareGroupingSubjects(onlyRight)
+  assert.ok(rRight.ok)
+  onlyRight.right = pairSubject("p1Y", "org/other#PY")
+  assert.equal(snapshotValidatedGroupingComparisonResult(rRight, onlyRight), null, "replaced right must reject")
+})
+
+test("F3 pair binding: swapping left/right on the SAME input object rejects (ordered)", () => {
+  const input = { left: pairSubject("swA", "org/repo#SW"), right: pairSubject("swB", "org/repo#SW") } as MutablePair
+  const result = compareGroupingSubjects(input)
+  assert.ok(result.ok)
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(result, input), null)
+
+  const tmp = input.left
+  input.left = input.right
+  input.right = tmp
+  assert.equal(
+    snapshotValidatedGroupingComparisonResult(result, input),
+    null,
+    "left/right orientation is part of the binding; a swap must reject",
+  )
+})
+
+test("F3 pair binding: same subject wrapper with a replaced formationResult rejects", () => {
+  const input = { left: pairSubject("frA", "org/repo#FR"), right: pairSubject("frB", "org/repo#FR") } as MutablePair
+  const result = compareGroupingSubjects(input)
+  assert.ok(result.ok)
+
+  // The wrapper object identity is UNCHANGED; only the attested F1C result inside
+  // it is swapped for another genuine one.
+  const other = pairSubject("frZ", "org/other#FZ")
+  ;(input.left as { formationResult: unknown }).formationResult = other.formationResult
+  assert.equal(
+    snapshotValidatedGroupingComparisonResult(result, input),
+    null,
+    "a re-pointed formationResult inside the same wrapper must reject",
+  )
+})
+
+test("F3 pair binding: canonical selector added, removed, or edited rejects", () => {
+  const REF = { provider: "github", sourceObjectId: "org/wa#SEL" }
+  const withRef = () =>
+    buildSubject({
+      sources: [{ provider: "github", sourceObjectId: "org/repo#SEL", externalId: "pr-sel", occurredAt: "2026-01-01T00:00:00Z", referencedObjects: [REF] }],
+      goal: { outcome: "sel outcome", workObject: "sel wa" },
+      canonicalWorkObjectRef: REF,
+    })
+  const plain = () =>
+    buildSubject({
+      sources: [{ provider: "github", sourceObjectId: "org/repo#SEL", externalId: "pr-sel2", occurredAt: "2026-01-01T00:00:00Z", referencedObjects: [REF] }],
+      goal: { outcome: "sel2 outcome", workObject: "sel2 wa" },
+    })
+
+  // Added after comparison.
+  const added = { left: plain(), right: plain() } as MutablePair
+  const rAdded = compareGroupingSubjects(added)
+  assert.ok(rAdded.ok)
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(rAdded, added), null)
+  ;(added.left as { canonicalWorkObjectRef?: unknown }).canonicalWorkObjectRef = { ...REF }
+  assert.equal(snapshotValidatedGroupingComparisonResult(rAdded, added), null, "selector added must reject")
+
+  // Removed after comparison.
+  const removed = { left: withRef(), right: plain() } as MutablePair
+  const rRemoved = compareGroupingSubjects(removed)
+  assert.ok(rRemoved.ok)
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(rRemoved, removed), null)
+  delete (removed.left as { canonicalWorkObjectRef?: unknown }).canonicalWorkObjectRef
+  assert.equal(snapshotValidatedGroupingComparisonResult(rRemoved, removed), null, "selector removed must reject")
+
+  // provider edited in place.
+  const editedProvider = { left: withRef(), right: plain() } as MutablePair
+  const rProv = compareGroupingSubjects(editedProvider)
+  assert.ok(rProv.ok)
+  ;(editedProvider.left as { canonicalWorkObjectRef: { provider: string } }).canonicalWorkObjectRef.provider = "slack"
+  assert.equal(snapshotValidatedGroupingComparisonResult(rProv, editedProvider), null, "selector provider change must reject")
+
+  // sourceObjectId edited in place.
+  const editedId = { left: withRef(), right: plain() } as MutablePair
+  const rId = compareGroupingSubjects(editedId)
+  assert.ok(rId.ok)
+  ;(editedId.left as { canonicalWorkObjectRef: { sourceObjectId: string } }).canonicalWorkObjectRef.sourceObjectId = "org/wa#OTHER"
+  assert.equal(snapshotValidatedGroupingComparisonResult(rId, editedId), null, "selector sourceObjectId change must reject")
+})
+
+test("F3 pair binding: an untouched exact ordered pair still attests", () => {
+  const input = { left: pairSubject("okA", "org/repo#OK"), right: pairSubject("okB", "org/repo#OK") } as MutablePair
+  const result = compareGroupingSubjects(input)
+  assert.ok(result.ok)
+  const snap = snapshotValidatedGroupingComparisonResult(result, input)
+  assert.notEqual(snap, null)
+  assert.equal(snap?.verdict, "strong_match")
+  // Still attests on repeat, and a structural clone of the container still rejects.
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(result, input), null)
+  assert.equal(snapshotValidatedGroupingComparisonResult(result, { ...input }), null)
+})
+
+test("F3 pair binding: a FRESH wrapper around the same formationResult rejects", () => {
+  // Isolates the subject-wrapper identity check: the replacement carries the
+  // identical attested formationResult and an identically-absent selector, so
+  // only the wrapper object identity differs.
+  const mk = () => ({ left: pairSubject("wrA", "org/repo#WR"), right: pairSubject("wrB", "org/repo#WR") }) as MutablePair
+
+  const leftSwap = mk()
+  const rLeft = compareGroupingSubjects(leftSwap)
+  assert.ok(rLeft.ok)
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(rLeft, leftSwap), null)
+  leftSwap.left = { formationResult: leftSwap.left.formationResult }
+  assert.equal(snapshotValidatedGroupingComparisonResult(rLeft, leftSwap), null, "replaced left wrapper must reject")
+
+  const rightSwap = mk()
+  const rRight = compareGroupingSubjects(rightSwap)
+  assert.ok(rRight.ok)
+  rightSwap.right = { formationResult: rightSwap.right.formationResult }
+  assert.equal(snapshotValidatedGroupingComparisonResult(rRight, rightSwap), null, "replaced right wrapper must reject")
+})
