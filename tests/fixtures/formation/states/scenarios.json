@@ -1,0 +1,128 @@
+{
+  "_note": "F4 permanent counterexamples. subjectScenarios drive deterministic F1B/F1C subject-state mapping; groupingScenarios drive attested-F3-verdict-to-candidate mapping. Every subject is compiled through the REAL public boundaries so each formationResult / comparisonResult is a genuinely ATTESTED object, never a clone.",
+  "subjectScenarios": [
+    {
+      "name": "01_complete_independent_no_issues",
+      "goalFields": "all",
+      "doneCondition": "complete",
+      "independentClosure": "independent",
+      "expectState": "formal_candidate",
+      "expectReasonKinds": ["complete_independent_formal_candidate"]
+    },
+    {
+      "name": "02_partial_independent",
+      "goalFields": "all",
+      "doneCondition": "partial",
+      "independentClosure": "independent",
+      "expectState": "clarification_needed",
+      "expectReasonKinds": ["done_condition_status_partial"]
+    },
+    {
+      "name": "03_invalid_independent",
+      "goalFields": "all",
+      "doneCondition": "invalid",
+      "independentClosure": "independent",
+      "expectState": "clarification_needed",
+      "expectReasonKinds": ["done_condition_status_invalid"]
+    },
+    {
+      "name": "04_complete_missing_goal_field",
+      "goalFields": "missing_timeHorizon",
+      "doneCondition": "complete",
+      "independentClosure": "independent",
+      "expectState": "clarification_needed",
+      "expectReasonKinds": ["adapter_issue_present"]
+    },
+    {
+      "name": "05_complete_evidence_membership_mismatch",
+      "goalFields": "all",
+      "doneCondition": "complete",
+      "independentClosure": "independent",
+      "nonMemberEvidenceRef": true,
+      "expectState": "clarification_needed",
+      "expectReasonKinds": ["adapter_issue_present"]
+    },
+    {
+      "name": "06_complete_closure_unknown",
+      "goalFields": "all",
+      "doneCondition": "complete",
+      "independentClosure": "unknown",
+      "expectState": "clarification_needed",
+      "expectReasonKinds": ["adapter_issue_present", "independent_closure_unknown"]
+    },
+    {
+      "name": "07_complete_parent_bounded_no_issue",
+      "goalFields": "all",
+      "doneCondition": "complete",
+      "independentClosure": "parent_bounded",
+      "expectState": "context_only",
+      "expectReasonKinds": ["parent_bounded_context_only"]
+    },
+    {
+      "name": "08_partial_parent_bounded",
+      "goalFields": "all",
+      "doneCondition": "partial",
+      "independentClosure": "parent_bounded",
+      "expectState": "clarification_needed",
+      "expectReasonKinds": ["done_condition_status_partial"]
+    }
+  ],
+  "groupingScenarios": [
+    {
+      "name": "10_strong_match_exact_shared_object",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#80", "externalId": "pr-80a", "occurredAt": "2020-01-01T00:00:00Z" }] },
+      "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#80", "externalId": "pr-80b", "occurredAt": "2026-01-01T00:00:00Z" }] },
+      "leftCandidateId": "cand-left",
+      "rightCandidateId": "cand-right",
+      "mergeTargetCandidateId": "cand-left",
+      "expectVerdict": "strong_match",
+      "expectGroupingOutcome": "merge_candidate",
+      "expectState": "merge_candidate",
+      "expectProposalStrength": "strong",
+      "expectSourceCandidateId": "cand-right"
+    },
+    {
+      "name": "11_possible_match_three_weak_kinds",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#60", "externalId": "pr-60", "occurredAt": "2020-01-01T00:00:00Z", "actors": ["Kaneko"], "container": "shared-space", "deadline": "2026-08-01T00:00:00Z" }] },
+      "right": { "sources": [{ "provider": "slack", "sourceObjectId": "T1/C1/60", "externalId": "msg-60", "occurredAt": "2026-01-01T00:00:00Z", "actors": ["Kaneko"], "container": "shared-space", "deadline": "2026-08-02T00:00:00Z" }] },
+      "leftCandidateId": "cand-left",
+      "rightCandidateId": "cand-right",
+      "mergeTargetCandidateId": "cand-right",
+      "expectVerdict": "possible_match",
+      "expectGroupingOutcome": "merge_candidate",
+      "expectState": "merge_candidate",
+      "expectProposalStrength": "possible",
+      "expectSourceCandidateId": "cand-left"
+    },
+    {
+      "name": "12_insufficient_provider_only",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#40", "externalId": "pr-40", "occurredAt": "2020-01-01T00:00:00Z" }] },
+      "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#41", "externalId": "pr-41", "occurredAt": "2026-01-01T00:00:00Z" }] },
+      "leftCandidateId": "cand-left",
+      "rightCandidateId": "cand-right",
+      "expectVerdict": "insufficient",
+      "expectGroupingOutcome": "none",
+      "expectState": null
+    },
+    {
+      "name": "13_must_split_different_canonical_work_object",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#1", "externalId": "pr-1", "occurredAt": "2020-01-01T00:00:00Z" }], "goal": { "workObject": "auth" }, "canonicalWorkObjectRef": { "provider": "github", "sourceObjectId": "org/repo#1" } },
+      "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#2", "externalId": "pr-2", "occurredAt": "2026-01-01T00:00:00Z" }], "goal": { "workObject": "auth" }, "canonicalWorkObjectRef": { "provider": "github", "sourceObjectId": "org/repo#2" } },
+      "leftCandidateId": "cand-left",
+      "rightCandidateId": "cand-right",
+      "expectVerdict": "must_split",
+      "expectGroupingOutcome": "split_candidate",
+      "expectState": "split_candidate"
+    },
+    {
+      "name": "14_hard_split_and_hard_positive_both_present",
+      "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#SS", "externalId": "pr-ssa", "occurredAt": "2020-01-01T00:00:00Z", "referencedObjects": [{ "provider": "github", "sourceObjectId": "org/wa#L" }] }], "canonicalWorkObjectRef": { "provider": "github", "sourceObjectId": "org/wa#L" } },
+      "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#SS", "externalId": "pr-ssb", "occurredAt": "2026-01-01T00:00:00Z", "referencedObjects": [{ "provider": "github", "sourceObjectId": "org/wa#R" }] }], "canonicalWorkObjectRef": { "provider": "github", "sourceObjectId": "org/wa#R" } },
+      "leftCandidateId": "cand-left",
+      "rightCandidateId": "cand-right",
+      "expectVerdict": "must_split",
+      "expectGroupingOutcome": "split_candidate",
+      "expectState": "split_candidate"
+    }
+  ]
+}

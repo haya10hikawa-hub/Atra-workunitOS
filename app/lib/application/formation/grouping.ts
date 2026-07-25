@@ -41,6 +41,81 @@ import {
   type RetrievalKeyKind,
 } from "./groupingTypes.ts"
 
+// ─── F3 runtime-provenance attestation (consumed by F4) ─────────
+//
+// F3 publishes NO forgeable brand. A later slice (F4 state / grouping-outcome
+// mapping) must never accept a structural or serialized clone of an F3 success
+// as a real grouping verdict, and must never apply a real pair-A result to a
+// different pair-B input. So the EXACT success result object returned by
+// `compareGroupingSubjects` is registered here, keyed by its own object
+// identity, against BOTH (a) the EXACT original `GroupingComparisonInput` object
+// identity and (b) a module-private detached inert snapshot of the success
+// result taken BEFORE it is exposed. A spread/JSON/structuredClone copy, a
+// forged look-alike, a failed comparison, the bare payload, or the exact result
+// paired with a cloned/different/other-pair input is a different identity and
+// never attests. WeakMap keys are held weakly, so a dead public result and its
+// input are not retained. The public `GroupingComparisonResult` shape is
+// unchanged — this adds no field to it.
+
+/** A successful F3 comparison result — the ONLY attestable grouping verdict. */
+export type SuccessfulGroupingComparisonResult = Extract<
+  GroupingComparisonResult,
+  { readonly ok: true }
+>
+
+/** A fresh, fully detached inert snapshot of a validated F3 success result. */
+export type SuccessfulGroupingComparisonSnapshot = SuccessfulGroupingComparisonResult
+
+type AttestedGroupingEntry = {
+  readonly input: object
+  readonly snapshot: SuccessfulGroupingComparisonSnapshot
+}
+
+const attestedGroupingResults = new WeakMap<object, AttestedGroupingEntry>()
+
+// Deep clone over INTERNALLY-CONSTRUCTED, JSON-safe data only. Never run over an
+// arbitrary caller graph: callers reach only the WeakMap identity lookup. The
+// reconstruction drops any non-plain field, so no accessor, prototype, or
+// unknown post-validation field can travel into or out of a snapshot.
+function inertGroupingClone<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value
+  if (Array.isArray(value)) return value.map((item) => inertGroupingClone(item)) as unknown as T
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(value as Record<string, unknown>)) {
+    out[key] = inertGroupingClone((value as Record<string, unknown>)[key])
+  }
+  return out as T
+}
+
+/**
+ * Runtime-provenance attestation for a validated F3 comparison result.
+ *
+ * Returns a fresh, fully detached inert snapshot of the success result ONLY
+ * when `value` is the EXACT success object a real `compareGroupingSubjects`
+ * call returned AND `comparisonInput` is the EXACT original input object that
+ * produced it; otherwise `null`. A spread/JSON/structuredClone copy, a forged
+ * look-alike, a failed comparison, the bare payload, the exact result paired
+ * with a cloned or different input, or a pair-A result applied to a pair-B
+ * input is unregistered/mismatched and returns `null`. Repeated snapshots
+ * neither alias each other nor the stored snapshot, and a later mutation of the
+ * public result or the public input cannot alter it. After attestation
+ * `comparisonInput` is an IDENTITY TOKEN only — no possibly-mutated field of it
+ * is ever read; all verdict/reason data comes from the detached snapshot.
+ */
+export function snapshotValidatedGroupingComparisonResult(
+  value: unknown,
+  comparisonInput: unknown,
+): SuccessfulGroupingComparisonSnapshot | null {
+  if (value === null || typeof value !== "object") return null
+  if (comparisonInput === null || typeof comparisonInput !== "object") return null
+  const entry = attestedGroupingResults.get(value as object)
+  if (entry === undefined) return null
+  // The result attests ONLY when bound to its EXACT original input object; a
+  // cloned, different, or other-pair input is a mismatch (identity, not shape).
+  if (entry.input !== (comparisonInput as object)) return null
+  return inertGroupingClone(entry.snapshot)
+}
+
 // ─── Documented deterministic thresholds ────────────────────────
 
 /** DISTINCT weak kinds required for `possible_match`. Instances of one kind = 1. */
@@ -317,7 +392,7 @@ export function compareGroupingSubjects(input: GroupingComparisonInput): Groupin
   for (const record of hardPositive) reasons.push(record.reason)
   for (const record of weakSupport) reasons.push(record.reason)
 
-  return {
+  const result: SuccessfulGroupingComparisonResult = {
     ok: true,
     candidateOnly: true,
     humanReviewRequired: true,
@@ -327,6 +402,16 @@ export function compareGroupingSubjects(input: GroupingComparisonInput): Groupin
     verdict,
     reasons: reasons.slice(0, MAX_GROUPING_REASONS),
   }
+  // Register runtime provenance BEFORE the result leaves this module: bind the
+  // EXACT result object to the EXACT original input object identity and a
+  // detached snapshot, so a later mutation of the public result cannot reach the
+  // stored attestation and a forged/cloned result (or a mismatched input) never
+  // attests. The success result object itself is the WeakMap key.
+  attestedGroupingResults.set(result, {
+    input: input as object,
+    snapshot: inertGroupingClone(result),
+  })
+  return result
 }
 
 // ─── Bounded candidate retrieval (Section 15) ───────────────────

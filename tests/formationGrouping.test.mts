@@ -32,6 +32,7 @@ import {
 import {
   compareGroupingSubjects,
   retrieveComparableSubjects,
+  snapshotValidatedGroupingComparisonResult,
   WEAK_MIN_DISTINCT_KINDS,
 } from "../app/lib/application/formation/grouping.ts"
 import {
@@ -514,6 +515,59 @@ test("verdict / evidence / retrieval vocabularies are the required closed sets",
     "exact_provider_object", "explicit_cross_link", "same_canonical_work_object",
     "shared_referenced_object", "exact_work_object_text", "bounded_lexical_similarity",
   ])
+})
+
+// ─── F3 runtime-provenance attestation (consumed by F4; Section 6) ───────────
+
+test("F3 attestation: exact result + exact input attests; clones/forgeries/mismatched inputs do not", () => {
+  const left = buildSubject({ sources: [{ provider: "github", sourceObjectId: "org/repo#A80", externalId: "pr-a80", occurredAt: "2020-01-01T00:00:00Z" }] })
+  const right = buildSubject({ sources: [{ provider: "github", sourceObjectId: "org/repo#A80", externalId: "pr-b80", occurredAt: "2026-01-01T00:00:00Z" }] })
+  const input = { left, right }
+  const result = compareGroupingSubjects(input)
+  assert.equal(result.ok, true)
+
+  // Exact success result + exact original input attests.
+  const snap = snapshotValidatedGroupingComparisonResult(result, input)
+  assert.notEqual(snap, null)
+  assert.equal(snap?.verdict, "strong_match")
+
+  // Failed comparison does not attest.
+  const failed = compareGroupingSubjects({ left: { formationResult: {} as never }, right })
+  assert.equal(failed.ok, false)
+  assert.equal(snapshotValidatedGroupingComparisonResult(failed, { left: { formationResult: {} }, right }), null)
+
+  // Spread / JSON / structuredClone / forged result does not attest.
+  assert.equal(snapshotValidatedGroupingComparisonResult({ ...result }, input), null)
+  assert.equal(snapshotValidatedGroupingComparisonResult(JSON.parse(JSON.stringify(result)), input), null)
+  assert.equal(snapshotValidatedGroupingComparisonResult(structuredClone(result), input), null)
+  assert.equal(snapshotValidatedGroupingComparisonResult({ ok: true, candidateOnly: true, humanReviewRequired: true, hardSplit: [], hardPositive: [], weakSupport: [], verdict: "strong_match", reasons: [] }, input), null)
+
+  // Exact result + cloned / different input does not attest (identity, not shape).
+  assert.equal(snapshotValidatedGroupingComparisonResult(result, { ...input }), null)
+  assert.equal(snapshotValidatedGroupingComparisonResult(result, { left, right }), null)
+  assert.equal(snapshotValidatedGroupingComparisonResult(result, structuredClone(input)), null)
+
+  // Repeated snapshots do not alias but are deeply equal; a later mutation of the
+  // public result cannot change a fresh snapshot.
+  const s1 = snapshotValidatedGroupingComparisonResult(result, input)
+  const s2 = snapshotValidatedGroupingComparisonResult(result, input)
+  assert.notEqual(s1, s2)
+  assert.deepEqual(s1, s2)
+  ;(result as { verdict?: string }).verdict = "must_split"
+  assert.equal(snapshotValidatedGroupingComparisonResult(result, input)?.verdict, "strong_match")
+})
+
+test("F3 attestation: a pair-A result cannot be applied to a pair-B input", () => {
+  const a = { left: buildSubject({ sources: [{ provider: "github", sourceObjectId: "org/repo#PA", externalId: "pr-pa1", occurredAt: "2020-01-01T00:00:00Z" }] }), right: buildSubject({ sources: [{ provider: "github", sourceObjectId: "org/repo#PA", externalId: "pr-pa2", occurredAt: "2026-01-01T00:00:00Z" }] }) }
+  const b = { left: buildSubject({ sources: [{ provider: "slack", sourceObjectId: "T/C/PB", externalId: "msg-pb1", occurredAt: "2020-01-01T00:00:00Z" }] }), right: buildSubject({ sources: [{ provider: "slack", sourceObjectId: "T/C/PB", externalId: "msg-pb2", occurredAt: "2026-01-01T00:00:00Z" }] }) }
+  const ra = compareGroupingSubjects(a)
+  const rb = compareGroupingSubjects(b)
+  assert.ok(ra.ok && rb.ok)
+  // Cross-applied → null; self-applied → attests.
+  assert.equal(snapshotValidatedGroupingComparisonResult(ra, b), null)
+  assert.equal(snapshotValidatedGroupingComparisonResult(rb, a), null)
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(ra, a), null)
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(rb, b), null)
 })
 
 // ─── No LLM / network / provider-extraction surface in F3 modules ────────────
