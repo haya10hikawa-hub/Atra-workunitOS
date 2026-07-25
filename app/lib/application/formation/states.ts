@@ -17,6 +17,14 @@
  *    bound to its EXACT original comparison input; the detached snapshot is the
  *    only source of verdict/reason data.
  *
+ * Candidate references are PAIR-RELATIVE only. F4 accepts no global candidate
+ * identifier: a merge target is named `left` / `right` against the attested
+ * comparison pair, the source side is the deterministic opposite, and any
+ * legacy `leftCandidateId` / `rightCandidateId` / `mergeTargetCandidateId`
+ * field fails closed. Every successful outcome is additionally bound by runtime
+ * provenance to the exact `GroupingComparisonInput` that produced it, so a
+ * proposal derived from one pair never attests against another.
+ *
  * The `conflict` state is part of the shared formation-state vocabulary but is
  * RESERVED — general conflict detection belongs to F6 and F4 NEVER emits it.
  * `formal_candidate` here is a STATE LABEL only: F4 builds no `FormalNodeCandidate`
@@ -191,15 +199,54 @@ export function mapFormationSubjectState(
   }
 }
 
-// ─── Candidate references (Section 10) ──────────────────────────
+// ─── Pair-relative candidate references (Sections 5–8) ──────────
 //
-// Candidate IDs are INTERNAL references only — never tenant/user/source/provider
-// ids. Each must be a 1–128 char string matching a closed safe pattern.
+// F4 previously accepted free-form `leftCandidateId` / `rightCandidateId` /
+// `mergeTargetCandidateId` strings and copied them verbatim into the emitted
+// proposal. Those labels were NEVER bound to the attested subjects carried by
+// `comparisonInput`, so a genuine A/B verdict could be relabeled to name
+// unrelated candidates C/D. Validating their SHAPE (a safe-id regex) and
+// checking that the merge target was one of the SUPPLIED ids did not help: the
+// supplied ids themselves were unproven.
+//
+// F4 has no trusted global candidate registry to resolve such an id against,
+// and adding a public arbitrary-id binding builder here would only move the
+// same unbound trust one call earlier. So F4 now accepts NO global candidate
+// identifier at all. A merge target is named only RELATIVE to the attested
+// comparison pair — `left` or `right` — which is meaningful ONLY together with
+// the exact `comparisonInput` the F3 result is already attested against.
+// Resolving a side back to a durable candidate id belongs to a later,
+// separately reviewed trusted boundary.
 
-const SAFE_CANDIDATE_ID = /^[A-Za-z0-9_.:-]{1,128}$/
+export const FORMATION_PAIR_SIDES = ["left", "right"] as const
 
-function isValidCandidateId(value: unknown): value is string {
-  return typeof value === "string" && SAFE_CANDIDATE_ID.test(value)
+export type FormationPairSide = (typeof FORMATION_PAIR_SIDES)[number]
+
+const PAIR_SIDE_SET: ReadonlySet<string> = new Set(FORMATION_PAIR_SIDES)
+
+function isPairSide(value: unknown): value is FormationPairSide {
+  return typeof value === "string" && PAIR_SIDE_SET.has(value)
+}
+
+function oppositePairSide(side: FormationPairSide): FormationPairSide {
+  return side === "left" ? "right" : "left"
+}
+
+// Legacy unbound fields (Section 6). Their mere PRESENCE fails closed, so a
+// stale caller can never believe its old candidate ids still control the
+// output. The supplied value is never read beyond presence and never echoed.
+const LEGACY_UNBOUND_FIELDS = [
+  "leftCandidateId",
+  "rightCandidateId",
+  "mergeTargetCandidateId",
+] as const
+
+function hasLegacyUnboundField(input: unknown): boolean {
+  if (input === null || typeof input !== "object") return false
+  for (const field of LEGACY_UNBOUND_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(input, field)) return true
+  }
+  return false
 }
 
 // ─── Grouping-outcome input & result (Sections 11, 12) ──────────
@@ -207,28 +254,45 @@ function isValidCandidateId(value: unknown): value is string {
 /**
  * The closed grouping-outcome input. `comparisonResult` must be the EXACT F3
  * success object bound to the EXACT `comparisonInput` that produced it (runtime
- * provenance, not shape). `mergeTargetCandidateId`, when present, must equal one
- * of the compared candidate ids.
+ * provenance, not shape). `mergeTargetSide` names the merge target only
+ * RELATIVE to that attested pair; no global candidate identifier is accepted.
  */
 export type FormationGroupingOutcomeInput = {
   readonly comparisonInput: GroupingComparisonInput
   readonly comparisonResult: SuccessfulGroupingComparisonResult
-  readonly leftCandidateId: string
-  readonly rightCandidateId: string
-  readonly mergeTargetCandidateId?: string
+  readonly mergeTargetSide?: FormationPairSide
 }
 
 export const FORMATION_GROUPING_OUTCOME_REJECTIONS = [
   "grouping_not_validated",
-  "candidate_id_invalid",
-  "candidate_ids_not_distinct",
-  "merge_target_not_a_compared_candidate",
-  "merge_target_required",
+  "unbound_candidate_reference_supplied",
+  "merge_target_side_required",
+  "merge_target_side_invalid",
   "forbidden_promotion_proof_missing",
 ] as const
 
 export type FormationGroupingOutcomeRejection =
   (typeof FORMATION_GROUPING_OUTCOME_REJECTIONS)[number]
+
+/**
+ * A merge candidate carrying PAIR-RELATIVE identity only (Section 7). The
+ * existing candidate semantics are preserved except that the unbound global
+ * `targetNodeCandidateId` is replaced by `targetSide` / `sourceSide`, which are
+ * meaningful only against the attested `comparisonInput`.
+ */
+export type PairBoundMergeCandidate = Omit<MergeCandidate, "targetNodeCandidateId"> & {
+  readonly targetSide: FormationPairSide
+  readonly sourceSide: FormationPairSide
+}
+
+/**
+ * A split candidate bound to the compared pair (Section 8). `pairSides` records
+ * that the proposal concerns exactly the two attested sides; the proposal is
+ * further tied to its exact comparison input by runtime provenance.
+ */
+export type PairBoundSplitCandidate = SplitCandidate & {
+  readonly pairSides: readonly ["left", "right"]
+}
 
 export type FormationGroupingOutcomeResult =
   | {
@@ -246,8 +310,7 @@ export type FormationGroupingOutcomeResult =
     readonly basisVerdict: "strong_match" | "possible_match"
     readonly proposalStrength: "strong" | "possible"
     readonly defaultGrouped: false
-    readonly mergeCandidate: MergeCandidate
-    readonly sourceCandidateId: string
+    readonly mergeCandidate: PairBoundMergeCandidate
     readonly forbiddenPromotionReasons: readonly ForbiddenPromotionReason[]
   }
   | {
@@ -258,7 +321,7 @@ export type FormationGroupingOutcomeResult =
     readonly state: "split_candidate"
     readonly groupingOutcome: "split_candidate"
     readonly basisVerdict: "must_split"
-    readonly splitCandidate: SplitCandidate
+    readonly splitCandidate: PairBoundSplitCandidate
     readonly forbiddenPromotionReasons: readonly ForbiddenPromotionReason[]
   }
   | {
@@ -270,6 +333,15 @@ export type FormationGroupingOutcomeResult =
     readonly groupingOutcome: "none"
     readonly basisVerdict: "insufficient"
   }
+
+/** A successful F4 grouping-outcome result — the only attestable outcome. */
+export type SuccessfulFormationGroupingOutcomeResult = Extract<
+  FormationGroupingOutcomeResult,
+  { readonly ok: true }
+>
+
+/** A fresh, fully detached inert snapshot of a validated F4 outcome result. */
+export type SuccessfulFormationGroupingOutcomeSnapshot = SuccessfulFormationGroupingOutcomeResult
 
 // Closed split-part text (Section 12.A). No raw Goal text is ever copied in.
 const SPLIT_PART_A_TITLE = "Goal candidate A"
@@ -300,13 +372,81 @@ function reject(reason: FormationGroupingOutcomeRejection): FormationGroupingOut
   return { ok: false, candidateOnly: true, reason }
 }
 
+// ─── F4 grouping-outcome runtime provenance (Sections 9, 10) ────
+//
+// Two different genuine `must_split` comparisons produce structurally identical
+// closed proposals (the titles and reasons are constants, and no raw Goal text,
+// source id, or global candidate id may be exposed). Pair traceability is
+// therefore established by IDENTITY, not by payload: the EXACT successful result
+// object is registered here against (a) the EXACT original
+// `GroupingComparisonInput` identity and (b) a detached inert snapshot taken
+// before the result is exposed. A spread/JSON/structuredClone copy, a forged
+// look-alike, a Proxy wrapper, an `Object.create` descendant, a failed result,
+// or the exact result paired with a cloned/different/other-pair input is a
+// different identity and never attests. No public forgeable brand is added.
+
+type AttestedOutcomeEntry = {
+  readonly input: object
+  readonly snapshot: SuccessfulFormationGroupingOutcomeSnapshot
+}
+
+const attestedOutcomeResults = new WeakMap<object, AttestedOutcomeEntry>()
+
+// Deep clone over INTERNALLY-CONSTRUCTED, JSON-safe data only. Never run over an
+// arbitrary caller graph: callers reach only the WeakMap identity lookup.
+function inertOutcomeClone<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value
+  if (Array.isArray(value)) return value.map((item) => inertOutcomeClone(item)) as unknown as T
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(value as Record<string, unknown>)) {
+    out[key] = inertOutcomeClone((value as Record<string, unknown>)[key])
+  }
+  return out as T
+}
+
+function registerOutcome(
+  result: SuccessfulFormationGroupingOutcomeResult,
+  comparisonInput: object,
+): SuccessfulFormationGroupingOutcomeResult {
+  attestedOutcomeResults.set(result, {
+    input: comparisonInput,
+    snapshot: inertOutcomeClone(result),
+  })
+  return result
+}
+
+/**
+ * Runtime-provenance attestation for a validated F4 grouping outcome.
+ *
+ * Returns a fresh, fully detached inert snapshot ONLY when `value` is the EXACT
+ * successful object a real `mapFormationGroupingOutcome` call returned AND
+ * `comparisonInput` is the EXACT original comparison input that produced it;
+ * otherwise `null`. This is what distinguishes two otherwise-identical split
+ * proposals: a proposal derived from pair A does not attest against pair B.
+ * Repeated snapshots neither alias each other nor the stored snapshot, and a
+ * later mutation of the public result cannot alter it.
+ */
+export function snapshotValidatedFormationGroupingOutcomeResult(
+  value: unknown,
+  comparisonInput: unknown,
+): SuccessfulFormationGroupingOutcomeSnapshot | null {
+  if (value === null || typeof value !== "object") return null
+  if (comparisonInput === null || typeof comparisonInput !== "object") return null
+  const entry = attestedOutcomeResults.get(value as object)
+  if (entry === undefined) return null
+  if (entry.input !== (comparisonInput as object)) return null
+  return inertOutcomeClone(entry.snapshot)
+}
+
 /**
  * Deterministically map an ATTESTED F3 verdict to a candidate-only grouping
  * outcome. The F3 success must be the exact object bound to its exact original
  * comparison input; a forged/cloned result, a cloned/different/other-pair input,
- * or a failed result rejects. Candidate ids are validated value-free. F4 uses
- * `comparisonInput` ONLY as an identity token; all verdict/reason data comes
- * from the detached snapshot.
+ * or a failed result rejects. No global candidate identifier is accepted: a
+ * merge target is named only as `left` / `right` relative to that attested pair,
+ * and any legacy unbound id field fails closed. F4 uses `comparisonInput` ONLY
+ * as an identity token; all verdict/reason data comes from the detached
+ * snapshot. The successful result is registered for pair-bound provenance.
  *
  *   must_split      → split_candidate       (2 parts, forbidden-promotion proof)
  *   strong_match    → merge_candidate/strong,   defaultGrouped false
@@ -318,37 +458,39 @@ export function mapFormationGroupingOutcome(
   input: FormationGroupingOutcomeInput,
 ): FormationGroupingOutcomeResult {
   const raw = input as Partial<FormationGroupingOutcomeInput> | null | undefined
-  const leftId = raw?.leftCandidateId
-  const rightId = raw?.rightCandidateId
-  const mergeTarget = raw?.mergeTargetCandidateId
 
-  // 1. Candidate-reference validation (value-free), before any mapping.
-  if (!isValidCandidateId(leftId) || !isValidCandidateId(rightId)) return reject("candidate_id_invalid")
-  if (leftId === rightId) return reject("candidate_ids_not_distinct")
-  if (mergeTarget !== undefined) {
-    if (!isValidCandidateId(mergeTarget)) return reject("candidate_id_invalid")
-    // A merge target may not introduce a THIRD candidate.
-    if (mergeTarget !== leftId && mergeTarget !== rightId) {
-      return reject("merge_target_not_a_compared_candidate")
-    }
+  // 1. Legacy unbound candidate ids fail CLOSED (Section 6) — their presence
+  //    alone rejects, so a stale caller cannot believe they still bind the
+  //    output. The supplied value is never read beyond presence, never echoed.
+  if (hasLegacyUnboundField(raw)) return reject("unbound_candidate_reference_supplied")
+
+  // 2. Pair-side validation (value-free). An unknown/empty/id-shaped side is
+  //    rejected without echoing it.
+  const mergeTargetSide = raw?.mergeTargetSide
+  if (mergeTargetSide !== undefined && !isPairSide(mergeTargetSide)) {
+    return reject("merge_target_side_invalid")
   }
 
-  // 2. F3 runtime-provenance attestation — the sole source of the verdict.
+  // 3. F3 runtime-provenance attestation — the sole source of the verdict.
   const snapshot = snapshotValidatedGroupingComparisonResult(raw?.comparisonResult, raw?.comparisonInput)
   if (snapshot === null) return reject("grouping_not_validated")
 
   const reasons = boundReasons(snapshot.reasons)
 
+  let result: FormationGroupingOutcomeResult
   switch (snapshot.verdict) {
     case "must_split":
-      return buildSplitOutcome(reasons)
+      result = buildSplitOutcome(reasons)
+      break
     case "strong_match":
-      return buildMergeOutcome("strong", leftId, rightId, mergeTarget, reasons)
+      result = buildMergeOutcome("strong", mergeTargetSide, reasons)
+      break
     case "possible_match":
-      return buildMergeOutcome("possible", leftId, rightId, mergeTarget, reasons)
+      result = buildMergeOutcome("possible", mergeTargetSide, reasons)
+      break
     case "insufficient":
       // No merge_candidate, no split_candidate, and NOT context_only.
-      return {
+      result = {
         ok: true,
         candidateOnly: true,
         humanReviewRequired: true,
@@ -356,20 +498,30 @@ export function mapFormationGroupingOutcome(
         groupingOutcome: "none",
         basisVerdict: "insufficient",
       }
+      break
     default:
       // Unreachable: the F3 verdict vocabulary is closed and excludes conflict.
       return reject("grouping_not_validated")
   }
+
+  if (!result.ok) return result
+  // 4. Bind the successful outcome to the EXACT comparison input identity, so a
+  //    proposal derived from pair A never attests against pair B. Attestation
+  //    above guarantees `comparisonInput` is an object.
+  return registerOutcome(result, raw?.comparisonInput as object)
 }
 
 function buildSplitOutcome(reasons: readonly string[]): FormationGroupingOutcomeResult {
-  const splitCandidate: SplitCandidate = {
+  const splitCandidate: PairBoundSplitCandidate = {
     target: "split_candidate",
     proposedParts: [
       { title: SPLIT_PART_A_TITLE, reason: SPLIT_PART_REASON },
       { title: SPLIT_PART_B_TITLE, reason: SPLIT_PART_REASON },
     ],
     splitReasons: reasons.length > 0 ? reasons : [SPLIT_REASON_FALLBACK],
+    // The proposal concerns exactly the two attested sides. It carries no global
+    // candidate id; pair traceability comes from runtime provenance.
+    pairSides: ["left", "right"],
     humanReviewRequired: true,
     candidateOnly: true,
   }
@@ -399,19 +551,19 @@ function buildSplitOutcome(reasons: readonly string[]): FormationGroupingOutcome
 
 function buildMergeOutcome(
   strength: "strong" | "possible",
-  leftId: string,
-  rightId: string,
-  mergeTarget: string | undefined,
+  mergeTargetSide: FormationPairSide | undefined,
   reasons: readonly string[],
 ): FormationGroupingOutcomeResult {
-  if (mergeTarget === undefined) return reject("merge_target_required")
-  // Already validated to equal leftId or rightId; the OTHER compared candidate
-  // is the source. A merge never introduces a third candidate.
-  const sourceCandidateId = mergeTarget === leftId ? rightId : leftId
+  // A merge proposal must name its target side; it is never defaulted.
+  if (mergeTargetSide === undefined) return reject("merge_target_side_required")
+  // The source is deterministically the OPPOSITE side of the attested pair, so
+  // a merge can never introduce a third candidate — there is no id to inject.
+  const sourceSide = oppositePairSide(mergeTargetSide)
 
-  const mergeCandidate: MergeCandidate = {
+  const mergeCandidate: PairBoundMergeCandidate = {
     target: "merge_candidate",
-    targetNodeCandidateId: mergeTarget,
+    targetSide: mergeTargetSide,
+    sourceSide,
     sameDoneConditionReason: reasons.length > 0 ? reasons[0] : MERGE_REASON_FALLBACK,
     // A possible match carries the closed uncertainty flag; a strong match carries none.
     riskFlags: strength === "possible" ? ["possible_match_uncertain"] : [],
@@ -439,7 +591,6 @@ function buildMergeOutcome(
     // still requires an explicit human grouping decision.
     defaultGrouped: false,
     mergeCandidate,
-    sourceCandidateId,
     forbiddenPromotionReasons,
   }
 }

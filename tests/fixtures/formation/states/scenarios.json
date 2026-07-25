@@ -72,34 +72,30 @@
       "name": "10_strong_match_exact_shared_object",
       "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#80", "externalId": "pr-80a", "occurredAt": "2020-01-01T00:00:00Z" }] },
       "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#80", "externalId": "pr-80b", "occurredAt": "2026-01-01T00:00:00Z" }] },
-      "leftCandidateId": "cand-left",
-      "rightCandidateId": "cand-right",
-      "mergeTargetCandidateId": "cand-left",
+      "mergeTargetSide": "left",
       "expectVerdict": "strong_match",
       "expectGroupingOutcome": "merge_candidate",
       "expectState": "merge_candidate",
       "expectProposalStrength": "strong",
-      "expectSourceCandidateId": "cand-right"
+      "expectTargetSide": "left",
+      "expectSourceSide": "right"
     },
     {
       "name": "11_possible_match_three_weak_kinds",
       "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#60", "externalId": "pr-60", "occurredAt": "2020-01-01T00:00:00Z", "actors": ["Kaneko"], "container": "shared-space", "deadline": "2026-08-01T00:00:00Z" }] },
       "right": { "sources": [{ "provider": "slack", "sourceObjectId": "T1/C1/60", "externalId": "msg-60", "occurredAt": "2026-01-01T00:00:00Z", "actors": ["Kaneko"], "container": "shared-space", "deadline": "2026-08-02T00:00:00Z" }] },
-      "leftCandidateId": "cand-left",
-      "rightCandidateId": "cand-right",
-      "mergeTargetCandidateId": "cand-right",
+      "mergeTargetSide": "right",
       "expectVerdict": "possible_match",
       "expectGroupingOutcome": "merge_candidate",
       "expectState": "merge_candidate",
       "expectProposalStrength": "possible",
-      "expectSourceCandidateId": "cand-left"
+      "expectTargetSide": "right",
+      "expectSourceSide": "left"
     },
     {
       "name": "12_insufficient_provider_only",
       "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#40", "externalId": "pr-40", "occurredAt": "2020-01-01T00:00:00Z" }] },
       "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#41", "externalId": "pr-41", "occurredAt": "2026-01-01T00:00:00Z" }] },
-      "leftCandidateId": "cand-left",
-      "rightCandidateId": "cand-right",
       "expectVerdict": "insufficient",
       "expectGroupingOutcome": "none",
       "expectState": null
@@ -108,8 +104,6 @@
       "name": "13_must_split_different_canonical_work_object",
       "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#1", "externalId": "pr-1", "occurredAt": "2020-01-01T00:00:00Z" }], "goal": { "workObject": "auth" }, "canonicalWorkObjectRef": { "provider": "github", "sourceObjectId": "org/repo#1" } },
       "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#2", "externalId": "pr-2", "occurredAt": "2026-01-01T00:00:00Z" }], "goal": { "workObject": "auth" }, "canonicalWorkObjectRef": { "provider": "github", "sourceObjectId": "org/repo#2" } },
-      "leftCandidateId": "cand-left",
-      "rightCandidateId": "cand-right",
       "expectVerdict": "must_split",
       "expectGroupingOutcome": "split_candidate",
       "expectState": "split_candidate"
@@ -118,8 +112,6 @@
       "name": "14_hard_split_and_hard_positive_both_present",
       "left": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#SS", "externalId": "pr-ssa", "occurredAt": "2020-01-01T00:00:00Z", "referencedObjects": [{ "provider": "github", "sourceObjectId": "org/wa#L" }] }], "canonicalWorkObjectRef": { "provider": "github", "sourceObjectId": "org/wa#L" } },
       "right": { "sources": [{ "provider": "github", "sourceObjectId": "org/repo#SS", "externalId": "pr-ssb", "occurredAt": "2026-01-01T00:00:00Z", "referencedObjects": [{ "provider": "github", "sourceObjectId": "org/wa#R" }] }], "canonicalWorkObjectRef": { "provider": "github", "sourceObjectId": "org/wa#R" } },
-      "leftCandidateId": "cand-left",
-      "rightCandidateId": "cand-right",
       "expectVerdict": "must_split",
       "expectGroupingOutcome": "split_candidate",
       "expectState": "split_candidate"

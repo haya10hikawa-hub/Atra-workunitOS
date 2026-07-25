@@ -35,8 +35,10 @@ import {
   FORMATION_STATES,
   RESERVED_FORMATION_STATES,
   F4_EMITTABLE_STATES,
+  FORMATION_PAIR_SIDES,
   mapFormationSubjectState,
   mapFormationGroupingOutcome,
+  snapshotValidatedFormationGroupingOutcomeResult,
   type FormationGroupingOutcomeResult,
 } from "../app/lib/application/formation/states.ts"
 
@@ -197,6 +199,12 @@ function collectStrings(value: unknown, into: string[]): void {
   else if (value && typeof value === "object") for (const v of Object.values(value)) collectStrings(v, into)
 }
 
+function collectStringsOf(value: unknown): string[] {
+  const out: string[] = []
+  collectStrings(value, out)
+  return out
+}
+
 function collectKeys(value: unknown, into: Set<string>): void {
   if (Array.isArray(value)) for (const v of value) collectKeys(v, into)
   else if (value && typeof value === "object") {
@@ -213,6 +221,9 @@ const FORBIDDEN_OUTPUT_KEYS = [
   "finalizedSplit", "formalized", "approved", "executed", "approval", "execution",
   "persistence", "statePrediction", "ranking", "roi", "whyNow", "primarySource",
   "sourceRole", "SourceRole", "conflict", "formalNodeCandidate", "FormalNodeCandidate",
+  // Unbound global candidate references — removed by the pair-binding remediation.
+  "leftCandidateId", "rightCandidateId", "mergeTargetCandidateId",
+  "targetNodeCandidateId", "sourceCandidateId", "candidateId",
 ]
 
 function assertNoForbiddenSurface(result: unknown): void {
@@ -252,14 +263,13 @@ const scenarioDoc = JSON.parse(readFileSync(scenariosPath, "utf8")) as {
     name: string
     left: SubjectSpec
     right: SubjectSpec
-    leftCandidateId: string
-    rightCandidateId: string
-    mergeTargetCandidateId?: string
+    mergeTargetSide?: "left" | "right"
     expectVerdict: string
     expectGroupingOutcome: string
     expectState: string | null
     expectProposalStrength?: string
-    expectSourceCandidateId?: string
+    expectTargetSide?: "left" | "right"
+    expectSourceSide?: "left" | "right"
   })[]
 }
 
@@ -353,9 +363,7 @@ for (const scenario of scenarioDoc.groupingScenarios) {
     const r = mapFormationGroupingOutcome({
       comparisonInput,
       comparisonResult,
-      leftCandidateId: scenario.leftCandidateId,
-      rightCandidateId: scenario.rightCandidateId,
-      ...(scenario.mergeTargetCandidateId !== undefined ? { mergeTargetCandidateId: scenario.mergeTargetCandidateId } : {}),
+      ...(scenario.mergeTargetSide !== undefined ? { mergeTargetSide: scenario.mergeTargetSide } : {}),
     })
     assert.equal(r.ok, true, `expected ok for ${scenario.name}`)
     if (!r.ok) return
@@ -371,8 +379,11 @@ for (const scenario of scenarioDoc.groupingScenarios) {
       // A merge candidate (strong OR possible) is NEVER default-grouped.
       assert.equal(r.defaultGrouped, false)
       assert.equal(r.mergeCandidate.target, "merge_candidate")
-      assert.equal(r.mergeCandidate.targetNodeCandidateId, scenario.mergeTargetCandidateId)
-      assert.equal(r.sourceCandidateId, scenario.expectSourceCandidateId)
+      // Pair-relative identity only: target side is what was asked for, source
+      // side is the deterministic opposite. No global candidate id exists.
+      assert.equal(r.mergeCandidate.targetSide, scenario.expectTargetSide)
+      assert.equal(r.mergeCandidate.sourceSide, scenario.expectSourceSide)
+      assert.notEqual(r.mergeCandidate.targetSide, r.mergeCandidate.sourceSide)
       assert.equal(r.mergeCandidate.humanReviewRequired, true)
       assert.equal(r.mergeCandidate.candidateOnly, true)
       // possible → carries the closed uncertainty flag; strong → none.
@@ -383,6 +394,8 @@ for (const scenario of scenarioDoc.groupingScenarios) {
       assert.ok(r.forbiddenPromotionReasons.length > 0)
     } else if (r.groupingOutcome === "split_candidate") {
       assert.equal(r.splitCandidate.target, "split_candidate")
+      // The proposal is bound to exactly the two attested sides.
+      assert.deepEqual([...r.splitCandidate.pairSides], ["left", "right"])
       assert.equal(r.splitCandidate.proposedParts.length, 2)
       assert.deepEqual(r.splitCandidate.proposedParts.map((p) => p.title), ["Goal candidate A", "Goal candidate B"])
       assert.equal(r.splitCandidate.humanReviewRequired, true)
@@ -432,7 +445,7 @@ test("counterexample 8: one source object → two independently-closable Goals, 
   if (!comparisonResult.ok) return
   assert.equal(comparisonResult.verdict, "must_split")
 
-  const r = mapFormationGroupingOutcome({ comparisonInput, comparisonResult, leftCandidateId: "cand-left", rightCandidateId: "cand-right" })
+  const r = mapFormationGroupingOutcome({ comparisonInput, comparisonResult })
   assert.ok(r.ok && r.groupingOutcome === "split_candidate")
   if (!r.ok || r.groupingOutcome !== "split_candidate") return
   assert.equal(r.state, "split_candidate")
@@ -460,7 +473,7 @@ test("grouping-outcome rejects forged / cloned F3 results and cloned inputs (fix
     { sources: [{ provider: "github", sourceObjectId: "org/repo#80", externalId: "pr-80b", occurredAt: "2026-01-01T00:00:00Z" }] },
   )
   assert.ok(comparisonResult.ok)
-  const base = { leftCandidateId: "cand-left", rightCandidateId: "cand-right", mergeTargetCandidateId: "cand-left" as string }
+  const base = { mergeTargetSide: "left" as const }
 
   // Exact result + exact input attests (control).
   const ok = mapFormationGroupingOutcome({ comparisonInput, comparisonResult, ...base })
@@ -491,7 +504,7 @@ test("grouping-outcome rejects a failed F3 comparison result (fixtures 18)", () 
   // A comparison over an unattested subject fails closed.
   const failed = compareGroupingSubjects({ left: { formationResult: {} as never }, right: buildGroupingSubject({ sources: [{ provider: "github", sourceObjectId: "org/repo#f", externalId: "pr-f", occurredAt: "2026-01-01T00:00:00Z" }] }) })
   assert.equal(failed.ok, false)
-  const r = mapFormationGroupingOutcome({ comparisonInput: {} as never, comparisonResult: failed as never, leftCandidateId: "cand-left", rightCandidateId: "cand-right" })
+  const r = mapFormationGroupingOutcome({ comparisonInput: {} as never, comparisonResult: failed as never })
   assert.equal(r.ok, false)
   if (!r.ok) assert.equal(r.reason, "grouping_not_validated")
 })
@@ -507,15 +520,15 @@ test("pair-A result cannot be applied to pair-B input (fixture 21)", () => {
   )
   assert.ok(a.comparisonResult.ok && b.comparisonResult.ok)
   // Real pair-A result with pair-B input → rejected.
-  const r1 = mapFormationGroupingOutcome({ comparisonInput: b.comparisonInput, comparisonResult: a.comparisonResult, leftCandidateId: "cand-left", rightCandidateId: "cand-right", mergeTargetCandidateId: "cand-left" })
+  const r1 = mapFormationGroupingOutcome({ comparisonInput: b.comparisonInput, comparisonResult: a.comparisonResult, mergeTargetSide: "left" })
   assert.equal(r1.ok, false)
   if (!r1.ok) assert.equal(r1.reason, "grouping_not_validated")
   // Real pair-B result with pair-A input → rejected.
-  const r2 = mapFormationGroupingOutcome({ comparisonInput: a.comparisonInput, comparisonResult: b.comparisonResult, leftCandidateId: "cand-left", rightCandidateId: "cand-right", mergeTargetCandidateId: "cand-left" })
+  const r2 = mapFormationGroupingOutcome({ comparisonInput: a.comparisonInput, comparisonResult: b.comparisonResult, mergeTargetSide: "left" })
   assert.equal(r2.ok, false)
   if (!r2.ok) assert.equal(r2.reason, "grouping_not_validated")
   // Each result still attests with its OWN input (control).
-  assert.ok(mapFormationGroupingOutcome({ comparisonInput: a.comparisonInput, comparisonResult: a.comparisonResult, leftCandidateId: "cand-left", rightCandidateId: "cand-right", mergeTargetCandidateId: "cand-left" }).ok)
+  assert.ok(mapFormationGroupingOutcome({ comparisonInput: a.comparisonInput, comparisonResult: a.comparisonResult, mergeTargetSide: "left" }).ok)
 })
 
 test("mutating the public F3 result or input after attestation does not change the detached snapshot", () => {
@@ -525,7 +538,7 @@ test("mutating the public F3 result or input after attestation does not change t
   )
   assert.ok(comparisonResult.ok)
   if (!comparisonResult.ok) return
-  const base = { comparisonInput, comparisonResult, leftCandidateId: "cand-left", rightCandidateId: "cand-right", mergeTargetCandidateId: "cand-left" }
+  const base = { comparisonInput, comparisonResult, mergeTargetSide: "left" as const }
   const first = mapFormationGroupingOutcome(base)
   assert.ok(first.ok && first.groupingOutcome === "merge_candidate")
   // Forge the public verdict post-attestation.
@@ -534,31 +547,116 @@ test("mutating the public F3 result or input after attestation does not change t
   assert.ok(second.ok && second.groupingOutcome === "merge_candidate", "verdict must come from the detached snapshot, not the mutated public result")
 })
 
-// ─── Candidate-id validation (fixtures 22, 23, 24; Section 10) ────────────────
+// ─── Pair-side vocabulary and validation (Sections 5, 6) ─────────────────────
 
-test("candidate-id validation: invalid, equal, and out-of-pair merge target are rejected value-free", () => {
+test("pair-side vocabulary is the exact closed set", () => {
+  assert.deepEqual([...FORMATION_PAIR_SIDES], ["left", "right"])
+})
+
+test("legacy unbound candidate ids fail CLOSED and are never honored (regression 1, 10)", () => {
+  // THE REMEDIATED BLOCKER. A genuine attested A/B strong_match must never be
+  // relabeled through free-form ids to target unrelated candidates C/D.
+  const { comparisonInput, comparisonResult } = attestedComparison(
+    { sources: [{ provider: "github", sourceObjectId: "org/repo#80", externalId: "pr-80a", occurredAt: "2020-01-01T00:00:00Z" }] },
+    { sources: [{ provider: "github", sourceObjectId: "org/repo#80", externalId: "pr-80b", occurredAt: "2026-01-01T00:00:00Z" }] },
+  )
+  assert.ok(comparisonResult.ok && comparisonResult.verdict === "strong_match")
+
+  const legacyAttempts: Record<string, unknown>[] = [
+    // The exact historical relabel attack.
+    { leftCandidateId: "candidate-C", rightCandidateId: "candidate-D", mergeTargetCandidateId: "candidate-C" },
+    // Any single legacy field is enough to fail closed.
+    { leftCandidateId: "candidate-C" },
+    { rightCandidateId: "candidate-D" },
+    { mergeTargetCandidateId: "candidate-C" },
+    // Legacy ids alongside a valid side must NOT be silently honored or ignored.
+    { mergeTargetSide: "left", leftCandidateId: "candidate-C", rightCandidateId: "candidate-D" },
+    // Tenant / provider / URL-shaped values are equally refused.
+    { leftCandidateId: "tenant-42:user-7", rightCandidateId: "github:org:repo" },
+    // Even an explicitly undefined legacy key is a stale-caller signal.
+    { leftCandidateId: undefined },
+  ]
+  for (const attempt of legacyAttempts) {
+    const r = mapFormationGroupingOutcome({ comparisonInput, comparisonResult, ...attempt } as never)
+    assert.equal(r.ok, false, `legacy attempt must reject: ${JSON.stringify(Object.keys(attempt))}`)
+    if (!r.ok) assert.equal(r.reason, "unbound_candidate_reference_supplied")
+    // The rejection is value-free — no supplied id is echoed back.
+    assert.ok(!JSON.stringify(r).includes("candidate-C"))
+    assert.ok(!JSON.stringify(r).includes("candidate-D"))
+    assert.ok(!JSON.stringify(r).includes("tenant-42"))
+  }
+})
+
+test("merge target side: required for strong/possible, and closed to the pair (regressions 7, 8)", () => {
   const { comparisonInput, comparisonResult } = attestedComparison(
     { sources: [{ provider: "github", sourceObjectId: "org/repo#80", externalId: "pr-80a", occurredAt: "2020-01-01T00:00:00Z" }] },
     { sources: [{ provider: "github", sourceObjectId: "org/repo#80", externalId: "pr-80b", occurredAt: "2026-01-01T00:00:00Z" }] },
   )
   assert.ok(comparisonResult.ok)
   const call = (over: Record<string, unknown>): FormationGroupingOutcomeResult =>
-    mapFormationGroupingOutcome({ comparisonInput, comparisonResult, leftCandidateId: "cand-left", rightCandidateId: "cand-right", mergeTargetCandidateId: "cand-left", ...over } as never)
+    mapFormationGroupingOutcome({ comparisonInput, comparisonResult, ...over } as never)
 
-  // Invalid ids (fixture 22).
-  for (const bad of ["", " ", "a".repeat(129), "has space", "has/slash", 5 as never, null as never]) {
-    const r = call({ leftCandidateId: bad })
-    assert.equal(r.ok, false)
-    if (!r.ok) assert.equal(r.reason, "candidate_id_invalid")
+  // Missing target side for a merge verdict (regression 8).
+  const missing = call({})
+  assert.equal(missing.ok, false)
+  if (!missing.ok) assert.equal(missing.reason, "merge_target_side_required")
+
+  // Unknown / empty / id-shaped / provider-shaped / tenant-shaped sides (regression 7).
+  for (const bad of ["", " ", "middle", "LEFT", "candidate-C", "github:org/repo", "tenant-42", 0 as never, null as never, {} as never]) {
+    const r = call({ mergeTargetSide: bad })
+    assert.equal(r.ok, false, `side ${JSON.stringify(bad)} must reject`)
+    if (!r.ok) assert.equal(r.reason, "merge_target_side_invalid")
+    assert.ok(!JSON.stringify(r).includes("candidate-C"))
   }
-  // Equal ids (fixture 23).
-  const eq = call({ leftCandidateId: "same", rightCandidateId: "same", mergeTargetCandidateId: "same" })
-  assert.equal(eq.ok, false)
-  if (!eq.ok) assert.equal(eq.reason, "candidate_ids_not_distinct")
-  // Merge target introduces a THIRD candidate (fixture 24).
-  const outside = call({ mergeTargetCandidateId: "cand-third" })
-  assert.equal(outside.ok, false)
-  if (!outside.ok) assert.equal(outside.reason, "merge_target_not_a_compared_candidate")
+})
+
+test("merge target side maps deterministically to target/source sides (regressions 2, 3)", () => {
+  const { comparisonInput, comparisonResult } = attestedComparison(
+    { sources: [{ provider: "github", sourceObjectId: "org/repo#80", externalId: "pr-80a", occurredAt: "2020-01-01T00:00:00Z" }] },
+    { sources: [{ provider: "github", sourceObjectId: "org/repo#80", externalId: "pr-80b", occurredAt: "2026-01-01T00:00:00Z" }] },
+  )
+  assert.ok(comparisonResult.ok)
+  const left = mapFormationGroupingOutcome({ comparisonInput, comparisonResult, mergeTargetSide: "left" })
+  assert.ok(left.ok && left.groupingOutcome === "merge_candidate")
+  if (left.ok && left.groupingOutcome === "merge_candidate") {
+    assert.equal(left.mergeCandidate.targetSide, "left")
+    assert.equal(left.mergeCandidate.sourceSide, "right")
+  }
+  const right = mapFormationGroupingOutcome({ comparisonInput, comparisonResult, mergeTargetSide: "right" })
+  assert.ok(right.ok && right.groupingOutcome === "merge_candidate")
+  if (right.ok && right.groupingOutcome === "merge_candidate") {
+    assert.equal(right.mergeCandidate.targetSide, "right")
+    assert.equal(right.mergeCandidate.sourceSide, "left")
+  }
+})
+
+test("no global candidate identifier appears anywhere in any F4 output (regression 9)", () => {
+  const strong = attestedComparison(
+    { sources: [{ provider: "github", sourceObjectId: "org/repo#80", externalId: "pr-80a", occurredAt: "2020-01-01T00:00:00Z" }] },
+    { sources: [{ provider: "github", sourceObjectId: "org/repo#80", externalId: "pr-80b", occurredAt: "2026-01-01T00:00:00Z" }] },
+  )
+  const split = attestedComparison(
+    { sources: [{ provider: "github", sourceObjectId: "org/repo#1", externalId: "pr-1", occurredAt: "2020-01-01T00:00:00Z" }], goal: { workObject: "auth" }, canonicalWorkObjectRef: { provider: "github", sourceObjectId: "org/repo#1" } },
+    { sources: [{ provider: "github", sourceObjectId: "org/repo#2", externalId: "pr-2", occurredAt: "2026-01-01T00:00:00Z" }], goal: { workObject: "auth" }, canonicalWorkObjectRef: { provider: "github", sourceObjectId: "org/repo#2" } },
+  )
+  const insufficient = attestedComparison(
+    { sources: [{ provider: "github", sourceObjectId: "org/repo#40", externalId: "pr-40", occurredAt: "2020-01-01T00:00:00Z" }] },
+    { sources: [{ provider: "github", sourceObjectId: "org/repo#41", externalId: "pr-41", occurredAt: "2026-01-01T00:00:00Z" }] },
+  )
+  assert.ok(strong.comparisonResult.ok && split.comparisonResult.ok && insufficient.comparisonResult.ok)
+  const outputs = [
+    mapFormationGroupingOutcome({ comparisonInput: strong.comparisonInput, comparisonResult: strong.comparisonResult as never, mergeTargetSide: "left" }),
+    mapFormationGroupingOutcome({ comparisonInput: split.comparisonInput, comparisonResult: split.comparisonResult as never }),
+    mapFormationGroupingOutcome({ comparisonInput: insufficient.comparisonInput, comparisonResult: insufficient.comparisonResult as never }),
+  ]
+  for (const out of outputs) {
+    assert.ok(out.ok)
+    assertNoForbiddenSurface(out)
+    // Every string in the output is a closed template or a pair side — never an id.
+    for (const s of collectStringsOf(out)) {
+      assert.ok(!/^cand|candidate-[A-Z]|tenant|^gh:|^github:/.test(s), `output carries an id-shaped value: ${s}`)
+    }
+  }
 })
 
 // ─── possible_match cannot auto-group (fixture 27; Section 12.C) ──────────────
@@ -569,7 +667,7 @@ test("possible_match maps to a NON-default-grouped possible proposal (never stro
     { sources: [{ provider: "slack", sourceObjectId: "T1/C1/60", externalId: "msg-60", occurredAt: "2026-01-01T00:00:00Z", actors: ["Kaneko"], container: "shared-space", deadline: "2026-08-02T00:00:00Z" }] },
   )
   assert.ok(comparisonResult.ok && comparisonResult.verdict === "possible_match")
-  const r = mapFormationGroupingOutcome({ comparisonInput, comparisonResult, leftCandidateId: "cand-left", rightCandidateId: "cand-right", mergeTargetCandidateId: "cand-right" })
+  const r = mapFormationGroupingOutcome({ comparisonInput, comparisonResult, mergeTargetSide: "right" })
   assert.ok(r.ok && r.groupingOutcome === "merge_candidate")
   if (!r.ok || r.groupingOutcome !== "merge_candidate") return
   assert.equal(r.proposalStrength, "possible")
@@ -586,7 +684,7 @@ test("merge and split candidates each carry a non-empty forbidden-promotion proo
     { sources: [{ provider: "github", sourceObjectId: "org/repo#80", externalId: "pr-80b", occurredAt: "2026-01-01T00:00:00Z" }] },
   )
   assert.ok(strong.comparisonResult.ok)
-  const merge = mapFormationGroupingOutcome({ comparisonInput: strong.comparisonInput, comparisonResult: strong.comparisonResult, leftCandidateId: "cand-left", rightCandidateId: "cand-right", mergeTargetCandidateId: "cand-left" })
+  const merge = mapFormationGroupingOutcome({ comparisonInput: strong.comparisonInput, comparisonResult: strong.comparisonResult, mergeTargetSide: "left" })
   assert.ok(merge.ok && merge.groupingOutcome === "merge_candidate")
   if (merge.ok && merge.groupingOutcome === "merge_candidate") {
     assert.ok(merge.forbiddenPromotionReasons.length > 0)
@@ -598,7 +696,7 @@ test("merge and split candidates each carry a non-empty forbidden-promotion proo
     { sources: [{ provider: "github", sourceObjectId: "org/repo#2", externalId: "pr-2", occurredAt: "2026-01-01T00:00:00Z" }], goal: { workObject: "auth" }, canonicalWorkObjectRef: { provider: "github", sourceObjectId: "org/repo#2" } },
   )
   assert.ok(split.comparisonResult.ok)
-  const splitOut = mapFormationGroupingOutcome({ comparisonInput: split.comparisonInput, comparisonResult: split.comparisonResult, leftCandidateId: "cand-left", rightCandidateId: "cand-right" })
+  const splitOut = mapFormationGroupingOutcome({ comparisonInput: split.comparisonInput, comparisonResult: split.comparisonResult })
   assert.ok(splitOut.ok && splitOut.groupingOutcome === "split_candidate")
   if (splitOut.ok && splitOut.groupingOutcome === "split_candidate") {
     assert.ok(splitOut.forbiddenPromotionReasons.length > 0)
@@ -609,15 +707,15 @@ test("merge and split candidates each carry a non-empty forbidden-promotion proo
 // ─── conflict is never emitted by F4 (fixture 9; Section 12.E) ────────────────
 
 test("no F4 mapping over any verdict ever emits the reserved conflict state", () => {
-  const specs: [SubjectSpec, SubjectSpec, string | undefined][] = [
-    [{ sources: [{ provider: "github", sourceObjectId: "org/repo#80", externalId: "pr-80a", occurredAt: "2020-01-01T00:00:00Z" }] }, { sources: [{ provider: "github", sourceObjectId: "org/repo#80", externalId: "pr-80b", occurredAt: "2026-01-01T00:00:00Z" }] }, "cand-left"],
+  const specs: [SubjectSpec, SubjectSpec, "left" | "right" | undefined][] = [
+    [{ sources: [{ provider: "github", sourceObjectId: "org/repo#80", externalId: "pr-80a", occurredAt: "2020-01-01T00:00:00Z" }] }, { sources: [{ provider: "github", sourceObjectId: "org/repo#80", externalId: "pr-80b", occurredAt: "2026-01-01T00:00:00Z" }] }, "left"],
     [{ sources: [{ provider: "github", sourceObjectId: "org/repo#40", externalId: "pr-40", occurredAt: "2020-01-01T00:00:00Z" }] }, { sources: [{ provider: "github", sourceObjectId: "org/repo#41", externalId: "pr-41", occurredAt: "2026-01-01T00:00:00Z" }] }, undefined],
     [{ sources: [{ provider: "github", sourceObjectId: "org/repo#1", externalId: "pr-1", occurredAt: "2020-01-01T00:00:00Z" }], goal: { workObject: "auth" }, canonicalWorkObjectRef: { provider: "github", sourceObjectId: "org/repo#1" } }, { sources: [{ provider: "github", sourceObjectId: "org/repo#2", externalId: "pr-2", occurredAt: "2026-01-01T00:00:00Z" }], goal: { workObject: "auth" }, canonicalWorkObjectRef: { provider: "github", sourceObjectId: "org/repo#2" } }, undefined],
   ]
   for (const [left, right, target] of specs) {
     const { comparisonInput, comparisonResult } = attestedComparison(left, right)
     assert.ok(comparisonResult.ok)
-    const r = mapFormationGroupingOutcome({ comparisonInput, comparisonResult, leftCandidateId: "cand-left", rightCandidateId: "cand-right", ...(target ? { mergeTargetCandidateId: target } : {}) })
+    const r = mapFormationGroupingOutcome({ comparisonInput, comparisonResult, ...(target ? { mergeTargetSide: target } : {}) })
     assert.ok(r.ok)
     if (!r.ok) continue
     assert.notEqual(r.state, "conflict")
@@ -625,6 +723,84 @@ test("no F4 mapping over any verdict ever emits the reserved conflict state", ()
     collectStrings(r, strings)
     assert.ok(!strings.includes("conflict"), "F4 output must not carry a conflict finding")
   }
+})
+
+// ─── F4 outcome runtime provenance (Section 9; regressions 11, 12, 13) ───────
+
+test("F4 outcome attestation: exact result + exact input attests; clones/forgeries/wrappers do not", () => {
+  const { comparisonInput, comparisonResult } = attestedComparison(
+    { sources: [{ provider: "github", sourceObjectId: "org/repo#80", externalId: "pr-80a", occurredAt: "2020-01-01T00:00:00Z" }] },
+    { sources: [{ provider: "github", sourceObjectId: "org/repo#80", externalId: "pr-80b", occurredAt: "2026-01-01T00:00:00Z" }] },
+  )
+  assert.ok(comparisonResult.ok)
+  const outcome = mapFormationGroupingOutcome({ comparisonInput, comparisonResult, mergeTargetSide: "left" })
+  assert.ok(outcome.ok)
+
+  // Exact result + exact original comparison input attests.
+  const snap = snapshotValidatedFormationGroupingOutcomeResult(outcome, comparisonInput)
+  assert.notEqual(snap, null)
+  assert.equal(snap?.groupingOutcome, "merge_candidate")
+
+  // Failed F4 result does not attest.
+  const failed = mapFormationGroupingOutcome({ comparisonInput, comparisonResult, mergeTargetSide: "middle" as never })
+  assert.equal(failed.ok, false)
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(failed, comparisonInput), null)
+
+  // Bare payload / spread / JSON / structuredClone / forged / Proxy / Object.create.
+  const bads: unknown[] = [
+    outcome.ok && outcome.groupingOutcome === "merge_candidate" ? outcome.mergeCandidate : {},
+    { ...outcome },
+    JSON.parse(JSON.stringify(outcome)),
+    structuredClone(outcome),
+    { ok: true, candidateOnly: true, humanReviewRequired: true, state: "merge_candidate", groupingOutcome: "merge_candidate", basisVerdict: "strong_match", proposalStrength: "strong", defaultGrouped: false, mergeCandidate: {}, forbiddenPromotionReasons: [] },
+    new Proxy(outcome as object, {}),
+    Object.create(outcome as object),
+  ]
+  for (const bad of bads) {
+    assert.equal(snapshotValidatedFormationGroupingOutcomeResult(bad, comparisonInput), null)
+  }
+
+  // Exact result + cloned / different input does not attest (identity, not shape).
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(outcome, { ...comparisonInput }), null)
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(outcome, structuredClone(comparisonInput)), null)
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(outcome, { left: comparisonInput.left, right: comparisonInput.right }), null)
+
+  // Repeated snapshots are deeply equal but never alias; public mutation cannot
+  // reach the private snapshot; snapshot mutation cannot reach a later snapshot.
+  const s1 = snapshotValidatedFormationGroupingOutcomeResult(outcome, comparisonInput)
+  const s2 = snapshotValidatedFormationGroupingOutcomeResult(outcome, comparisonInput)
+  assert.notEqual(s1, s2)
+  assert.deepEqual(s1, s2)
+  ;(s1 as { state?: string }).state = "TAMPERED"
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(outcome, comparisonInput)?.state, "merge_candidate")
+  ;(outcome as { state?: string }).state = "TAMPERED"
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(outcome, comparisonInput)?.state, "merge_candidate")
+})
+
+test("split pair traceability: identical split proposals are distinguished by provenance (Section 10; regression 14)", () => {
+  // Two DIFFERENT genuine must_split comparisons whose closed proposals are
+  // byte-identical — pair identity therefore cannot come from the payload.
+  const a = attestedComparison(
+    { sources: [{ provider: "github", sourceObjectId: "org/repo#1", externalId: "pr-1", occurredAt: "2020-01-01T00:00:00Z" }], goal: { workObject: "auth" }, canonicalWorkObjectRef: { provider: "github", sourceObjectId: "org/repo#1" } },
+    { sources: [{ provider: "github", sourceObjectId: "org/repo#2", externalId: "pr-2", occurredAt: "2026-01-01T00:00:00Z" }], goal: { workObject: "auth" }, canonicalWorkObjectRef: { provider: "github", sourceObjectId: "org/repo#2" } },
+  )
+  const b = attestedComparison(
+    { sources: [{ provider: "github", sourceObjectId: "org/repo#3", externalId: "pr-3", occurredAt: "2020-01-01T00:00:00Z" }], goal: { workObject: "auth" }, canonicalWorkObjectRef: { provider: "github", sourceObjectId: "org/repo#3" } },
+    { sources: [{ provider: "github", sourceObjectId: "org/repo#4", externalId: "pr-4", occurredAt: "2026-01-01T00:00:00Z" }], goal: { workObject: "auth" }, canonicalWorkObjectRef: { provider: "github", sourceObjectId: "org/repo#4" } },
+  )
+  assert.ok(a.comparisonResult.ok && b.comparisonResult.ok)
+  const outA = mapFormationGroupingOutcome({ comparisonInput: a.comparisonInput, comparisonResult: a.comparisonResult as never })
+  const outB = mapFormationGroupingOutcome({ comparisonInput: b.comparisonInput, comparisonResult: b.comparisonResult as never })
+  assert.ok(outA.ok && outB.ok)
+
+  // The visible payloads really are indistinguishable...
+  assert.deepEqual(JSON.parse(JSON.stringify(outA)), JSON.parse(JSON.stringify(outB)))
+
+  // ...but runtime provenance separates them.
+  assert.notEqual(snapshotValidatedFormationGroupingOutcomeResult(outA, a.comparisonInput), null)
+  assert.notEqual(snapshotValidatedFormationGroupingOutcomeResult(outB, b.comparisonInput), null)
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(outA, b.comparisonInput), null)
+  assert.equal(snapshotValidatedFormationGroupingOutcomeResult(outB, a.comparisonInput), null)
 })
 
 // ─── No LLM / network / provider-extraction / persistence surface in states.ts ─
