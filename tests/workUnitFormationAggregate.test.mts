@@ -24,6 +24,7 @@ import {
 } from "../app/lib/application/formation/goalDoneConditionAdapter.ts"
 import {
   buildWorkUnitFormationCandidate,
+  snapshotValidatedWorkUnitFormationResult,
   FORMATION_SOURCE_ROLES,
   type SourceRole,
 } from "../app/lib/application/formation/workUnitFormationAggregate.ts"
@@ -760,4 +761,48 @@ test("invariants remain green under attestation", () => {
     assert.equal(ok.candidate.candidateOnly, true)
     assert.equal(ok.candidate.humanReviewRequired, true)
   }
+})
+
+// ─── F1C runtime-provenance attestation (F3 depends on this) ──────────────────
+//
+// The exact success result object a real `buildWorkUnitFormationCandidate` call
+// returns attests; a clone, a forgery, a failed result, or the bare candidate
+// object never does. A later slice (F3) trusts ONLY this snapshot.
+
+// 69 — exact real result attests; clones / forgeries / candidate-only do not.
+test("attestation: only the exact F1C success result attests", () => {
+  const result = build([member(ghResult, "evidence")])
+  assert.equal(result.ok, true)
+  assert.notEqual(snapshotValidatedWorkUnitFormationResult(result), null)
+  // Bare candidate object (not the result) does not attest.
+  if (result.ok) assert.equal(snapshotValidatedWorkUnitFormationResult(result.candidate), null)
+  // Spread / JSON / structuredClone copies do not attest.
+  assert.equal(snapshotValidatedWorkUnitFormationResult({ ...result }), null)
+  assert.equal(snapshotValidatedWorkUnitFormationResult(JSON.parse(JSON.stringify(result))), null)
+  assert.equal(snapshotValidatedWorkUnitFormationResult(structuredClone(result)), null)
+  // A structural look-alike does not attest.
+  assert.equal(
+    snapshotValidatedWorkUnitFormationResult({ ok: true, candidateOnly: true, candidate: { members: [], goalDoneCondition: {}, humanReviewRequired: true, candidateOnly: true } }),
+    null,
+  )
+  // A failed result does not attest.
+  const failed = build([])
+  assert.equal(failed.ok, false)
+  assert.equal(snapshotValidatedWorkUnitFormationResult(failed), null)
+})
+
+// 70 — the private snapshot is detached: public mutation cannot reach it, and
+//      repeated snapshots never alias.
+test("attestation: snapshot is detached and never aliases", () => {
+  const result = build([member(ghResult, "evidence")])
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  const original = result.candidate.goalDoneCondition.doneCondition.status
+  ;(result.candidate.goalDoneCondition.doneCondition as { status: string }).status = "TAMPERED"
+  const snap = snapshotValidatedWorkUnitFormationResult(result)
+  assert.notEqual(snap, null)
+  assert.equal(snap?.goalDoneCondition.doneCondition.status, original)
+  const again = snapshotValidatedWorkUnitFormationResult(result)
+  assert.notEqual(snap, again)
+  assert.deepEqual(snap, again)
 })

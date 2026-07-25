@@ -127,6 +127,53 @@ function reject(reason: WorkUnitFormationRejectionReason): WorkUnitFormationResu
   return { ok: false, candidateOnly: true, reason }
 }
 
+// ─── Validated-result attestation (runtime provenance) ─────────
+//
+// F1C — like F1A and F1B — publishes NO forgeable brand. A later slice (F3
+// grouping) must never accept a structural or serialized clone of an F1C
+// success as a real aggregate. So the exact success result object returned by
+// `buildWorkUnitFormationCandidate` is registered here, keyed against a
+// module-private detached inert snapshot of its candidate taken BEFORE the
+// result is exposed. A hand-built look-alike, a spread/JSON/structuredClone
+// copy, a failed result, or the bare candidate object (not the result) is a
+// different identity, is never a key, and never attests. WeakMap keys are held
+// weakly, so a dead public result is not retained.
+const attestedFormationResults = new WeakMap<object, WorkUnitFormationCandidate>()
+
+// Deep clone over INTERNALLY-CONSTRUCTED, JSON-safe data only. Never run over an
+// arbitrary caller graph: callers only ever reach the WeakMap identity lookup.
+// The reconstruction drops any non-plain field, so no accessor, prototype, or
+// unknown post-validation field can travel into or out of a snapshot.
+function inertResultClone<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value
+  if (Array.isArray(value)) return value.map((item) => inertResultClone(item)) as unknown as T
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(value as Record<string, unknown>)) {
+    out[key] = inertResultClone((value as Record<string, unknown>)[key])
+  }
+  return out as T
+}
+
+/**
+ * Runtime-provenance attestation for a validated F1C result.
+ *
+ * Returns a fresh, fully detached inert snapshot of the candidate ONLY when
+ * `value` is the exact success result object a real
+ * `buildWorkUnitFormationCandidate` call returned; otherwise `null`. A forged
+ * look-alike, a shallow/deep clone, a serialized/deserialized copy, a failed
+ * result, or the bare candidate object is not registered and returns `null`.
+ * Repeated snapshots neither alias each other nor the stored snapshot, and a
+ * later mutation of the public result cannot alter it.
+ */
+export function snapshotValidatedWorkUnitFormationResult(
+  value: unknown,
+): WorkUnitFormationCandidate | null {
+  if (value === null || typeof value !== "object") return null
+  const stored = attestedFormationResults.get(value as object)
+  if (stored === undefined) return null
+  return inertResultClone(stored)
+}
+
 // Canonical membership identity is `sourceRef.source` + `sourceRef.externalId`
 // ONLY, JSON-tuple-encoded so no raw delimiter can forge a collision. Provider
 // alone, sourceObjectId, URL, container, capturedAt, title and navigationTarget
@@ -227,7 +274,7 @@ export function buildWorkUnitFormationCandidate(
   //    so the returned aggregate aliases no caller input and post-return
   //    mutation of any original input has no effect. The verdict is passed
   //    through unchanged — no second completion status is computed.
-  return {
+  const result: WorkUnitFormationResult = {
     ok: true,
     candidateOnly: true,
     candidate: {
@@ -237,4 +284,9 @@ export function buildWorkUnitFormationCandidate(
       candidateOnly: true,
     },
   }
+  // Register runtime provenance BEFORE the result leaves this module, snapshotting
+  // the candidate so a later mutation of the public result cannot reach the
+  // stored attestation. The success result object itself is the WeakMap key.
+  attestedFormationResults.set(result, inertResultClone(result.candidate))
+  return result
 }
