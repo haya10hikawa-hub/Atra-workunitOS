@@ -30,8 +30,11 @@ import {
   GROUPING_BOUNDS,
 } from "../app/lib/application/formation/goalIdentity.ts"
 import {
+  attestValidatedGroupingComparison,
+  attestedGroupingPairTokenMatches,
   compareGroupingSubjects,
   retrieveComparableSubjects,
+  snapshotValidatedGroupingComparisonResult,
   WEAK_MIN_DISTINCT_KINDS,
 } from "../app/lib/application/formation/grouping.ts"
 import {
@@ -516,6 +519,59 @@ test("verdict / evidence / retrieval vocabularies are the required closed sets",
   ])
 })
 
+// ─── F3 runtime-provenance attestation (consumed by F4; Section 6) ───────────
+
+test("F3 attestation: exact result + exact input attests; clones/forgeries/mismatched inputs do not", () => {
+  const left = buildSubject({ sources: [{ provider: "github", sourceObjectId: "org/repo#A80", externalId: "pr-a80", occurredAt: "2020-01-01T00:00:00Z" }] })
+  const right = buildSubject({ sources: [{ provider: "github", sourceObjectId: "org/repo#A80", externalId: "pr-b80", occurredAt: "2026-01-01T00:00:00Z" }] })
+  const input = { left, right }
+  const result = compareGroupingSubjects(input)
+  assert.equal(result.ok, true)
+
+  // Exact success result + exact original input attests.
+  const snap = snapshotValidatedGroupingComparisonResult(result, input)
+  assert.notEqual(snap, null)
+  assert.equal(snap?.verdict, "strong_match")
+
+  // Failed comparison does not attest.
+  const failed = compareGroupingSubjects({ left: { formationResult: {} as never }, right })
+  assert.equal(failed.ok, false)
+  assert.equal(snapshotValidatedGroupingComparisonResult(failed, { left: { formationResult: {} }, right }), null)
+
+  // Spread / JSON / structuredClone / forged result does not attest.
+  assert.equal(snapshotValidatedGroupingComparisonResult({ ...result }, input), null)
+  assert.equal(snapshotValidatedGroupingComparisonResult(JSON.parse(JSON.stringify(result)), input), null)
+  assert.equal(snapshotValidatedGroupingComparisonResult(structuredClone(result), input), null)
+  assert.equal(snapshotValidatedGroupingComparisonResult({ ok: true, candidateOnly: true, humanReviewRequired: true, hardSplit: [], hardPositive: [], weakSupport: [], verdict: "strong_match", reasons: [] }, input), null)
+
+  // Exact result + cloned / different input does not attest (identity, not shape).
+  assert.equal(snapshotValidatedGroupingComparisonResult(result, { ...input }), null)
+  assert.equal(snapshotValidatedGroupingComparisonResult(result, { left, right }), null)
+  assert.equal(snapshotValidatedGroupingComparisonResult(result, structuredClone(input)), null)
+
+  // Repeated snapshots do not alias but are deeply equal; a later mutation of the
+  // public result cannot change a fresh snapshot.
+  const s1 = snapshotValidatedGroupingComparisonResult(result, input)
+  const s2 = snapshotValidatedGroupingComparisonResult(result, input)
+  assert.notEqual(s1, s2)
+  assert.deepEqual(s1, s2)
+  ;(result as { verdict?: string }).verdict = "must_split"
+  assert.equal(snapshotValidatedGroupingComparisonResult(result, input)?.verdict, "strong_match")
+})
+
+test("F3 attestation: a pair-A result cannot be applied to a pair-B input", () => {
+  const a = { left: buildSubject({ sources: [{ provider: "github", sourceObjectId: "org/repo#PA", externalId: "pr-pa1", occurredAt: "2020-01-01T00:00:00Z" }] }), right: buildSubject({ sources: [{ provider: "github", sourceObjectId: "org/repo#PA", externalId: "pr-pa2", occurredAt: "2026-01-01T00:00:00Z" }] }) }
+  const b = { left: buildSubject({ sources: [{ provider: "slack", sourceObjectId: "T/C/PB", externalId: "msg-pb1", occurredAt: "2020-01-01T00:00:00Z" }] }), right: buildSubject({ sources: [{ provider: "slack", sourceObjectId: "T/C/PB", externalId: "msg-pb2", occurredAt: "2026-01-01T00:00:00Z" }] }) }
+  const ra = compareGroupingSubjects(a)
+  const rb = compareGroupingSubjects(b)
+  assert.ok(ra.ok && rb.ok)
+  // Cross-applied → null; self-applied → attests.
+  assert.equal(snapshotValidatedGroupingComparisonResult(ra, b), null)
+  assert.equal(snapshotValidatedGroupingComparisonResult(rb, a), null)
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(ra, a), null)
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(rb, b), null)
+})
+
 // ─── No LLM / network / provider-extraction surface in F3 modules ────────────
 
 test("F3 modules import no LLM / network / provider-extraction surface", () => {
@@ -527,4 +583,540 @@ test("F3 modules import no LLM / network / provider-extraction surface", () => {
       assert.ok(!src.includes(banned), `${file} must not reference ${banned}`)
     }
   }
+})
+
+// ─── F3 ordered-pair binding (Section 6) ─────────────────────────────────────
+//
+// The attested `comparisonInput` is a caller-owned MUTABLE object. Binding to
+// its container identity alone let a caller replace or swap the compared pair
+// in place while attestation kept passing, so a genuine pair-A verdict could be
+// carried on a container now holding pair C/D. These pin the ordered pair.
+
+type MutablePair = { left: GroupingSubjectInput; right: GroupingSubjectInput }
+
+function pairSubject(tag: string, objectId: string): GroupingSubjectInput {
+  return buildSubject({
+    sources: [{ provider: "github", sourceObjectId: objectId, externalId: `pr-${tag}`, occurredAt: "2026-01-01T00:00:00Z" }],
+    goal: { outcome: `${tag} outcome`, workObject: `${tag} wa` },
+  })
+}
+
+test("F3 pair binding: replacing both sides of the SAME input object rejects", () => {
+  const input = { left: pairSubject("pbA", "org/repo#PB"), right: pairSubject("pbB", "org/repo#PB") } as MutablePair
+  const result = compareGroupingSubjects(input)
+  assert.ok(result.ok && result.verdict === "strong_match")
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(result, input), null, "attests before mutation")
+
+  input.left = pairSubject("pbC", "org/other#PC")
+  input.right = pairSubject("pbD", "org/other#PD")
+  assert.equal(
+    snapshotValidatedGroupingComparisonResult(result, input),
+    null,
+    "a pair-A verdict must not survive the container being repopulated with C/D",
+  )
+})
+
+test("F3 pair binding: replacing only one side of the SAME input object rejects", () => {
+  const mkInput = () => ({ left: pairSubject("p1A", "org/repo#P1"), right: pairSubject("p1B", "org/repo#P1") }) as MutablePair
+
+  const onlyLeft = mkInput()
+  const rLeft = compareGroupingSubjects(onlyLeft)
+  assert.ok(rLeft.ok)
+  onlyLeft.left = pairSubject("p1X", "org/other#PX")
+  assert.equal(snapshotValidatedGroupingComparisonResult(rLeft, onlyLeft), null, "replaced left must reject")
+
+  const onlyRight = mkInput()
+  const rRight = compareGroupingSubjects(onlyRight)
+  assert.ok(rRight.ok)
+  onlyRight.right = pairSubject("p1Y", "org/other#PY")
+  assert.equal(snapshotValidatedGroupingComparisonResult(rRight, onlyRight), null, "replaced right must reject")
+})
+
+test("F3 pair binding: swapping left/right on the SAME input object rejects (ordered)", () => {
+  const input = { left: pairSubject("swA", "org/repo#SW"), right: pairSubject("swB", "org/repo#SW") } as MutablePair
+  const result = compareGroupingSubjects(input)
+  assert.ok(result.ok)
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(result, input), null)
+
+  const tmp = input.left
+  input.left = input.right
+  input.right = tmp
+  assert.equal(
+    snapshotValidatedGroupingComparisonResult(result, input),
+    null,
+    "left/right orientation is part of the binding; a swap must reject",
+  )
+})
+
+test("F3 pair binding: same subject wrapper with a replaced formationResult rejects", () => {
+  const input = { left: pairSubject("frA", "org/repo#FR"), right: pairSubject("frB", "org/repo#FR") } as MutablePair
+  const result = compareGroupingSubjects(input)
+  assert.ok(result.ok)
+
+  // The wrapper object identity is UNCHANGED; only the attested F1C result inside
+  // it is swapped for another genuine one.
+  const other = pairSubject("frZ", "org/other#FZ")
+  ;(input.left as { formationResult: unknown }).formationResult = other.formationResult
+  assert.equal(
+    snapshotValidatedGroupingComparisonResult(result, input),
+    null,
+    "a re-pointed formationResult inside the same wrapper must reject",
+  )
+})
+
+test("F3 pair binding: canonical selector added, removed, or edited rejects", () => {
+  const REF = { provider: "github", sourceObjectId: "org/wa#SEL" }
+  const withRef = () =>
+    buildSubject({
+      sources: [{ provider: "github", sourceObjectId: "org/repo#SEL", externalId: "pr-sel", occurredAt: "2026-01-01T00:00:00Z", referencedObjects: [REF] }],
+      goal: { outcome: "sel outcome", workObject: "sel wa" },
+      canonicalWorkObjectRef: REF,
+    })
+  const plain = () =>
+    buildSubject({
+      sources: [{ provider: "github", sourceObjectId: "org/repo#SEL", externalId: "pr-sel2", occurredAt: "2026-01-01T00:00:00Z", referencedObjects: [REF] }],
+      goal: { outcome: "sel2 outcome", workObject: "sel2 wa" },
+    })
+
+  // Added after comparison.
+  const added = { left: plain(), right: plain() } as MutablePair
+  const rAdded = compareGroupingSubjects(added)
+  assert.ok(rAdded.ok)
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(rAdded, added), null)
+  ;(added.left as { canonicalWorkObjectRef?: unknown }).canonicalWorkObjectRef = { ...REF }
+  assert.equal(snapshotValidatedGroupingComparisonResult(rAdded, added), null, "selector added must reject")
+
+  // Removed after comparison.
+  const removed = { left: withRef(), right: plain() } as MutablePair
+  const rRemoved = compareGroupingSubjects(removed)
+  assert.ok(rRemoved.ok)
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(rRemoved, removed), null)
+  delete (removed.left as { canonicalWorkObjectRef?: unknown }).canonicalWorkObjectRef
+  assert.equal(snapshotValidatedGroupingComparisonResult(rRemoved, removed), null, "selector removed must reject")
+
+  // provider edited in place.
+  const editedProvider = { left: withRef(), right: plain() } as MutablePair
+  const rProv = compareGroupingSubjects(editedProvider)
+  assert.ok(rProv.ok)
+  ;(editedProvider.left as { canonicalWorkObjectRef: { provider: string } }).canonicalWorkObjectRef.provider = "slack"
+  assert.equal(snapshotValidatedGroupingComparisonResult(rProv, editedProvider), null, "selector provider change must reject")
+
+  // sourceObjectId edited in place.
+  const editedId = { left: withRef(), right: plain() } as MutablePair
+  const rId = compareGroupingSubjects(editedId)
+  assert.ok(rId.ok)
+  ;(editedId.left as { canonicalWorkObjectRef: { sourceObjectId: string } }).canonicalWorkObjectRef.sourceObjectId = "org/wa#OTHER"
+  assert.equal(snapshotValidatedGroupingComparisonResult(rId, editedId), null, "selector sourceObjectId change must reject")
+})
+
+test("F3 pair binding: an untouched exact ordered pair still attests", () => {
+  const input = { left: pairSubject("okA", "org/repo#OK"), right: pairSubject("okB", "org/repo#OK") } as MutablePair
+  const result = compareGroupingSubjects(input)
+  assert.ok(result.ok)
+  const snap = snapshotValidatedGroupingComparisonResult(result, input)
+  assert.notEqual(snap, null)
+  assert.equal(snap?.verdict, "strong_match")
+  // Still attests on repeat, and a structural clone of the container still rejects.
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(result, input), null)
+  assert.equal(snapshotValidatedGroupingComparisonResult(result, { ...input }), null)
+})
+
+test("F3 pair binding: a FRESH wrapper around the same formationResult rejects", () => {
+  // Isolates the subject-wrapper identity check: the replacement carries the
+  // identical attested formationResult and an identically-absent selector, so
+  // only the wrapper object identity differs.
+  const mk = () => ({ left: pairSubject("wrA", "org/repo#WR"), right: pairSubject("wrB", "org/repo#WR") }) as MutablePair
+
+  const leftSwap = mk()
+  const rLeft = compareGroupingSubjects(leftSwap)
+  assert.ok(rLeft.ok)
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(rLeft, leftSwap), null)
+  leftSwap.left = { formationResult: leftSwap.left.formationResult }
+  assert.equal(snapshotValidatedGroupingComparisonResult(rLeft, leftSwap), null, "replaced left wrapper must reject")
+
+  const rightSwap = mk()
+  const rRight = compareGroupingSubjects(rightSwap)
+  assert.ok(rRight.ok)
+  rightSwap.right = { formationResult: rightSwap.right.formationResult }
+  assert.equal(snapshotValidatedGroupingComparisonResult(rRight, rightSwap), null, "replaced right wrapper must reject")
+})
+
+// ─── F3 single coherent pair capture — accessor / Proxy TOCTOU (T1–T7) ───────
+//
+// Pinning the ordered pair is not enough on its own: `readonly` is erased at
+// runtime, so every caller-owned property can be an accessor or a Proxy trap
+// that answers differently on each read. The predecessor head computed the
+// verdict from one read of the caller graph and captured the binding from a
+// SECOND read, so a two-valued getter had a verdict computed over pair A/B
+// registered as belonging to pair C/D — and refusing to attest against the pair
+// it actually came from. These tests pin EXACT READ COUNTS: every
+// security-sensitive caller value must be read exactly once per comparison, and
+// the pair used for computation must be the pair stored in the binding.
+
+/** A property whose reads are counted; `force` pins a value for later phases. */
+function probe<T>(script: readonly T[]) {
+  const state = { reads: 0, observed: [] as T[], forced: undefined as T | undefined, forcing: false }
+  return {
+    state,
+    get(): T {
+      const value = state.forcing ? (state.forced as T) : script[Math.min(state.reads, script.length - 1)]
+      state.reads += 1
+      state.observed.push(value)
+      return value
+    },
+    force(value: T): void {
+      state.forcing = true
+      state.forced = value
+    },
+  }
+}
+
+function defineGetter(target: object, key: string, get: () => unknown): void {
+  Object.defineProperty(target, key, { get, enumerable: true, configurable: true })
+}
+
+const capA = () => pairSubject("capA", "org/repo#CAP")
+const capB = () => pairSubject("capB", "org/repo#CAP")
+const capOther = () => pairSubject("capX", "org/other#CAPX")
+
+test("F3 capture: a changing input.left getter is read ONCE and binds the computed pair", () => {
+  const A = capA()
+  const B = capB()
+  const C = capOther()
+  const left = probe([A, C])
+  const input = { right: B } as Record<string, unknown>
+  defineGetter(input, "left", left.get)
+
+  const result = compareGroupingSubjects(input as never)
+  assert.equal(left.state.reads, 1, "input.left must be read exactly once per comparison")
+  assert.equal(left.state.observed[0], A, "the single read must be the value used for the verdict")
+  assert.ok(result.ok && result.verdict === "strong_match", "verdict is computed from A/B")
+
+  // The second scripted value (C) must never be what the result is bound to.
+  left.force(C)
+  assert.equal(
+    snapshotValidatedGroupingComparisonResult(result, input),
+    null,
+    "a verdict computed from A/B must never attest against C/B",
+  )
+  left.force(A)
+  assert.notEqual(
+    snapshotValidatedGroupingComparisonResult(result, input),
+    null,
+    "the binding is the pair the verdict was computed from",
+  )
+})
+
+test("F3 capture: a changing input.right getter is read ONCE and binds the computed pair", () => {
+  const A = capA()
+  const B = capB()
+  const D = capOther()
+  const right = probe([B, D])
+  const input = { left: A } as Record<string, unknown>
+  defineGetter(input, "right", right.get)
+
+  const result = compareGroupingSubjects(input as never)
+  assert.equal(right.state.reads, 1, "input.right must be read exactly once per comparison")
+  assert.equal(right.state.observed[0], B)
+  assert.ok(result.ok && result.verdict === "strong_match")
+
+  right.force(D)
+  assert.equal(snapshotValidatedGroupingComparisonResult(result, input), null, "must not attest against A/D")
+  right.force(B)
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(result, input), null, "attests against A/B")
+})
+
+test("F3 capture: both side getters changing yields ONE coherent captured pair", () => {
+  const A = capA()
+  const B = capB()
+  const C = pairSubject("bothC", "org/other#BC")
+  const D = pairSubject("bothD", "org/other#BC")
+  const left = probe([A, C])
+  const right = probe([B, D])
+  const input = {} as Record<string, unknown>
+  defineGetter(input, "left", left.get)
+  defineGetter(input, "right", right.get)
+
+  const result = compareGroupingSubjects(input as never)
+  assert.equal(left.state.reads, 1, "left read exactly once")
+  assert.equal(right.state.reads, 1, "right read exactly once")
+  assert.deepEqual([left.state.observed[0], right.state.observed[0]], [A, B])
+  assert.ok(result.ok && result.verdict === "strong_match")
+
+  // C/D is itself a genuine strong_match pair, so this is not merely a
+  // fail-closed verdict difference: the result must belong to A/B, not C/D.
+  left.force(C)
+  right.force(D)
+  assert.equal(
+    snapshotValidatedGroupingComparisonResult(result, input),
+    null,
+    "a result computed over A/B must never be registered as belonging to C/D",
+  )
+  left.force(A)
+  right.force(B)
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(result, input), null)
+})
+
+test("F3 capture: a changing formationResult getter is read ONCE for preparation and binding", () => {
+  const A = capA()
+  const B = capB()
+  const C = capOther()
+  const fr = probe([A.formationResult, C.formationResult])
+  const wrapper = {} as Record<string, unknown>
+  defineGetter(wrapper, "formationResult", fr.get)
+  const input = { left: wrapper, right: B }
+
+  const result = compareGroupingSubjects(input as never)
+  assert.equal(fr.state.reads, 1, "subject.formationResult must be read exactly once per comparison")
+  assert.equal(fr.state.observed[0], A.formationResult, "preparation and binding share the one value")
+  assert.ok(result.ok && result.verdict === "strong_match")
+
+  fr.force(C.formationResult)
+  assert.equal(
+    snapshotValidatedGroupingComparisonResult(result, input),
+    null,
+    "a verdict prepared from A's attested result must not bind to C's",
+  )
+  fr.force(A.formationResult)
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(result, input), null)
+})
+
+test("F3 capture: a changing canonicalWorkObjectRef getter is read ONCE", () => {
+  const REF = { provider: "github", sourceObjectId: "org/wa#CAPSEL" }
+  const withRefSubject = buildSubject({
+    sources: [{ provider: "github", sourceObjectId: "org/repo#CAPSEL", externalId: "pr-capsel", occurredAt: "2026-01-01T00:00:00Z", referencedObjects: [REF] }],
+    goal: { outcome: "capsel outcome", workObject: "capsel wa" },
+  })
+  const partner = buildSubject({
+    sources: [{ provider: "github", sourceObjectId: "org/repo#CAPSEL", externalId: "pr-capsel2", occurredAt: "2026-01-01T00:00:00Z", referencedObjects: [REF] }],
+    goal: { outcome: "capsel2 outcome", workObject: "capsel2 wa" },
+  })
+  const selX = { ...REF } // an admitted member of the subject's object universe
+  const selY = { provider: "slack", sourceObjectId: "org/wa#OTHER" } // not a member
+  const sel = probe([selX, selY])
+  const wrapper = { formationResult: withRefSubject.formationResult } as Record<string, unknown>
+  defineGetter(wrapper, "canonicalWorkObjectRef", sel.get)
+  const input = { left: wrapper, right: partner }
+
+  const result = compareGroupingSubjects(input as never)
+  assert.equal(sel.state.reads, 1, "canonicalWorkObjectRef must be read exactly once per comparison")
+  assert.equal(sel.state.observed[0], selX, "admission and binding share the one selector read")
+  assert.ok(result.ok, "the admitted member selector must not be rejected")
+
+  sel.force(selY)
+  assert.equal(
+    snapshotValidatedGroupingComparisonResult(result, input),
+    null,
+    "a verdict admitted under selector X must not bind to selector Y",
+  )
+  sel.force(selX)
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(result, input), null)
+})
+
+test("F3 capture: changing selector provider/sourceObjectId getters are read ONCE each", () => {
+  const REF = { provider: "github", sourceObjectId: "org/wa#CAPTUP" }
+  const subject = buildSubject({
+    sources: [{ provider: "github", sourceObjectId: "org/repo#CAPTUP", externalId: "pr-captup", occurredAt: "2026-01-01T00:00:00Z", referencedObjects: [REF] }],
+    goal: { outcome: "captup outcome", workObject: "captup wa" },
+  })
+  const partner = buildSubject({
+    sources: [{ provider: "github", sourceObjectId: "org/repo#CAPTUP", externalId: "pr-captup2", occurredAt: "2026-01-01T00:00:00Z", referencedObjects: [REF] }],
+    goal: { outcome: "captup2 outcome", workObject: "captup2 wa" },
+  })
+  const provider = probe(["github", "slack"])
+  const objectId = probe(["org/wa#CAPTUP", "org/wa#ELSEWHERE"])
+  const selector = {} as Record<string, unknown>
+  defineGetter(selector, "provider", provider.get)
+  defineGetter(selector, "sourceObjectId", objectId.get)
+  const input = { left: { formationResult: subject.formationResult, canonicalWorkObjectRef: selector }, right: partner }
+
+  const result = compareGroupingSubjects(input as never)
+  assert.equal(provider.state.reads, 1, "selector.provider must be read exactly once per comparison")
+  assert.equal(objectId.state.reads, 1, "selector.sourceObjectId must be read exactly once per comparison")
+  assert.deepEqual([provider.state.observed[0], objectId.state.observed[0]], ["github", "org/wa#CAPTUP"])
+  assert.ok(result.ok, "the admitted tuple must not be rejected")
+
+  provider.force("slack")
+  objectId.force("org/wa#ELSEWHERE")
+  assert.equal(
+    snapshotValidatedGroupingComparisonResult(result, input),
+    null,
+    "one primitive tuple is used throughout; a different tuple must not attest",
+  )
+  provider.force("github")
+  objectId.force("org/wa#CAPTUP")
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(result, input), null)
+})
+
+test("F3 capture: a Proxy serving a phase-dependent pair cannot bind a different pair", () => {
+  const A = capA()
+  const B = capB()
+  const C = pairSubject("pxC", "org/other#PX")
+  const D = pairSubject("pxD", "org/other#PX")
+  const trapReads: string[] = []
+  let serveSecondPair = false
+  const input = new Proxy({} as Record<string, unknown>, {
+    get(target, prop, receiver) {
+      if (prop === "left" || prop === "right") {
+        const value = prop === "left" ? (serveSecondPair ? C : A) : serveSecondPair ? D : B
+        trapReads.push(String(prop))
+        return value
+      }
+      return Reflect.get(target, prop, receiver)
+    },
+  })
+
+  const result = compareGroupingSubjects(input as never)
+  assert.equal(trapReads.length, 2, "a comparison must trap exactly one left and one right read")
+  assert.deepEqual(trapReads, ["left", "right"])
+  assert.ok(result.ok && result.verdict === "strong_match", "verdict computed from the first-phase pair A/B")
+
+  serveSecondPair = true
+  assert.equal(
+    snapshotValidatedGroupingComparisonResult(result, input),
+    null,
+    "a Proxy cannot have an A/B result registered against the C/D pair it serves later",
+  )
+  serveSecondPair = false
+  assert.notEqual(snapshotValidatedGroupingComparisonResult(result, input), null)
+})
+
+// ─── F3 opaque pair token (Section 7) ────────────────────────────────────────
+
+test("F3 token: a genuine attestation returns an opaque token carrying no pair data", () => {
+  const input = { left: pairSubject("tkA", "org/repo#TK"), right: pairSubject("tkB", "org/repo#TK") } as MutablePair
+  const result = compareGroupingSubjects(input)
+  assert.ok(result.ok)
+  const attested = attestValidatedGroupingComparison(result, input)
+  assert.notEqual(attested, null, "an exact result with its exact pair attests")
+  const token = attested!.pairToken
+
+  // The token exposes NOTHING: no subject, formationResult, selector, or input.
+  assert.equal(Object.keys(token as object).length, 0, "the token must have no own enumerable keys")
+  assert.deepEqual(Reflect.ownKeys(token as object), [], "the token must have no own keys at all")
+  assert.equal(JSON.stringify(token), "{}", "the token must serialize to an empty object")
+  const surface = JSON.stringify(token)
+  for (const banned of ["formationResult", "canonicalWorkObjectRef", "provider", "sourceObjectId", "left", "right"]) {
+    assert.ok(!surface.includes(banned), `token must not expose ${banned}`)
+  }
+  assert.ok(attestedGroupingPairTokenMatches(token, input), "the genuine token resolves its own pair")
+})
+
+test("F3 token: forged, cloned, and serialized tokens never resolve a pair", () => {
+  const input = { left: pairSubject("fgA", "org/repo#FG"), right: pairSubject("fgB", "org/repo#FG") } as MutablePair
+  const result = compareGroupingSubjects(input)
+  assert.ok(result.ok)
+  const token = attestValidatedGroupingComparison(result, input)!.pairToken
+
+  assert.equal(attestedGroupingPairTokenMatches({}, input), false, "a forged empty object must not resolve")
+  assert.equal(attestedGroupingPairTokenMatches({ ...(token as object) }, input), false, "a spread clone must not resolve")
+  assert.equal(
+    attestedGroupingPairTokenMatches(JSON.parse(JSON.stringify(token)), input),
+    false,
+    "a JSON round-trip must not resolve",
+  )
+  assert.equal(attestedGroupingPairTokenMatches(structuredClone(token), input), false, "a structuredClone must not resolve")
+  assert.equal(attestedGroupingPairTokenMatches(Object.create(token as object), input), false, "a descendant must not resolve")
+  assert.equal(attestedGroupingPairTokenMatches(new Proxy(token as object, {}), input), false, "a Proxy wrapper must not resolve")
+  for (const bad of [null, undefined, 0, "", "token", true, Symbol("t")]) {
+    assert.equal(attestedGroupingPairTokenMatches(bad, input), false, `${String(bad)} must not resolve`)
+  }
+  // The real token still works — the rejections above are not a blanket failure.
+  assert.ok(attestedGroupingPairTokenMatches(token, input))
+})
+
+test("F3 token: a token is bound to ONE ordered pair and dies when that pair changes", () => {
+  const inputA = { left: pairSubject("t2A", "org/repo#T2"), right: pairSubject("t2B", "org/repo#T2") } as MutablePair
+  const inputB = { left: pairSubject("t3A", "org/repo#T3"), right: pairSubject("t3B", "org/repo#T3") } as MutablePair
+  const rA = compareGroupingSubjects(inputA)
+  const rB = compareGroupingSubjects(inputB)
+  assert.ok(rA.ok && rB.ok)
+  const tokenA = attestValidatedGroupingComparison(rA, inputA)!.pairToken
+  const tokenB = attestValidatedGroupingComparison(rB, inputB)!.pairToken
+
+  assert.equal(attestedGroupingPairTokenMatches(tokenA, inputB), false, "pair-A token must not resolve pair B")
+  assert.equal(attestedGroupingPairTokenMatches(tokenB, inputA), false, "pair-B token must not resolve pair A")
+  assert.equal(attestedGroupingPairTokenMatches(tokenA, { ...inputA }), false, "a cloned container must not resolve")
+
+  // Ordered: a swap on the SAME container invalidates the token.
+  const swapped = { left: pairSubject("t4A", "org/repo#T4"), right: pairSubject("t4B", "org/repo#T4") } as MutablePair
+  const rS = compareGroupingSubjects(swapped)
+  assert.ok(rS.ok)
+  const tokenS = attestValidatedGroupingComparison(rS, swapped)!.pairToken
+  assert.ok(attestedGroupingPairTokenMatches(tokenS, swapped))
+  const tmp = swapped.left
+  swapped.left = swapped.right
+  swapped.right = tmp
+  assert.equal(attestedGroupingPairTokenMatches(tokenS, swapped), false, "a left/right swap must invalidate the token")
+
+  // A current-pair mutation invalidates later verification.
+  const mutated = { left: pairSubject("t5A", "org/repo#T5"), right: pairSubject("t5B", "org/repo#T5") } as MutablePair
+  const rM = compareGroupingSubjects(mutated)
+  assert.ok(rM.ok)
+  const tokenM = attestValidatedGroupingComparison(rM, mutated)!.pairToken
+  assert.ok(attestedGroupingPairTokenMatches(tokenM, mutated))
+  mutated.right = pairSubject("t5Z", "org/other#T5Z")
+  assert.equal(attestedGroupingPairTokenMatches(tokenM, mutated), false, "a replaced side must invalidate the token")
+})
+
+test("F3 token: the public attestation path stays in agreement with the token path", () => {
+  const input = { left: pairSubject("agA", "org/repo#AG"), right: pairSubject("agB", "org/repo#AG") } as MutablePair
+  const result = compareGroupingSubjects(input)
+  assert.ok(result.ok)
+
+  const viaPublic = snapshotValidatedGroupingComparisonResult(result, input)
+  const viaToken = attestValidatedGroupingComparison(result, input)
+  assert.notEqual(viaPublic, null)
+  assert.notEqual(viaToken, null)
+  assert.deepEqual(viaPublic, viaToken!.snapshot, "both paths yield the same detached snapshot")
+  assert.notEqual(viaPublic, viaToken!.snapshot, "and the snapshots do not alias each other")
+
+  // A failure in one path is a failure in the other.
+  const clone = { ...result }
+  assert.equal(snapshotValidatedGroupingComparisonResult(clone, input), null)
+  assert.equal(attestValidatedGroupingComparison(clone, input), null)
+  input.left = pairSubject("agZ", "org/other#AGZ")
+  assert.equal(snapshotValidatedGroupingComparisonResult(result, input), null)
+  assert.equal(attestValidatedGroupingComparison(result, input), null)
+})
+
+test("F3 capture: no token or capture data is reachable from the public result", () => {
+  const input = { left: pairSubject("lkA", "org/repo#LK"), right: pairSubject("lkB", "org/repo#LK") } as MutablePair
+  const result = compareGroupingSubjects(input)
+  assert.ok(result.ok)
+
+  const keys = new Set<string>()
+  const walk = (value: unknown): void => {
+    if (Array.isArray(value)) for (const v of value) walk(v)
+    else if (value && typeof value === "object") {
+      for (const [k, v] of Object.entries(value)) {
+        keys.add(k)
+        walk(v)
+      }
+    }
+  }
+  walk(result)
+  // `left` / `right` legitimately appear as evidence SUPPORT COUNTS, so the ban
+  // is on pair-carrying keys; the value scan below proves no subject leaks.
+  for (const banned of ["pairToken", "token", "capture", "binding", "formationResult", "canonicalWorkObjectRef", "stable", "subject", "leftSubject", "rightSubject"]) {
+    assert.ok(!keys.has(banned), `the public F3 result must not expose ${banned}`)
+  }
+  // No captured subject wrapper, attested result, or selector is reachable by value.
+  const reachable = new Set<unknown>()
+  const walkValues = (value: unknown): void => {
+    if (value === null || typeof value !== "object") return
+    if (reachable.has(value)) return
+    reachable.add(value)
+    for (const v of Object.values(value)) walkValues(v)
+  }
+  walkValues(result)
+  assert.ok(!reachable.has(input.left), "the left subject wrapper must not be reachable from the result")
+  assert.ok(!reachable.has(input.right), "the right subject wrapper must not be reachable from the result")
+  assert.ok(!reachable.has(input.left.formationResult), "no attested F1C result may be reachable")
+  assert.ok(!reachable.has(input), "the comparison input container must not be reachable")
+  assert.deepEqual(
+    Object.keys(result).sort(),
+    ["candidateOnly", "hardPositive", "hardSplit", "humanReviewRequired", "ok", "reasons", "verdict", "weakSupport"],
+    "the public F3 result shape is unchanged by the token mechanism",
+  )
 })
