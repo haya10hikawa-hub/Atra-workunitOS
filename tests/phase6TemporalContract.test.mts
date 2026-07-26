@@ -49,6 +49,47 @@ function leaves(value: unknown, out: unknown[] = []): unknown[] {
   } else out.push(value)
   return out
 }
+// Property NAMES are checked against the forbidden vocabulary; bounded constant
+// sentences are not, so ordinary prose words never trip the scan.
+const FORBIDDEN_NAME = /^(tenantid|userid|provider|sourceid|sourceobjectid|claimid|claim|subjectref|subject|actor|authority|title|summary|text|message|url|payload|timestamp|instant|duration|count|index|score|priority|confidence|rank|conflict|approval|execution)$|hash$/i
+// Descriptor-level recursion: symbols, non-enumerables, accessors, prototypes
+// and frozenness, not just enumerable string values.
+function scan(value: unknown, path: string, out: string[] = []): string[] {
+  if (value === null || typeof value !== "object") {
+    if (typeof value === "number" || typeof value === "bigint") out.push(`${path}: numeric value`)
+    if (typeof value === "string" && /\d/.test(value)) out.push(`${path}: digit in string`)
+    return out
+  }
+  const proto = Object.getPrototypeOf(value)
+  if (proto !== Object.prototype && proto !== Array.prototype) out.push(`${path}: unexpected prototype`)
+  if (!Object.isFrozen(value)) out.push(`${path}: not frozen`)
+  for (const symbol of Object.getOwnPropertySymbols(value)) out.push(`${path}[${String(symbol)}]: symbol key`)
+  for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(value))) {
+    const at = `${path}.${key}`
+    // Array `length` is an intrinsic, never an H1A field; nothing else may be non-enumerable.
+    if (Array.isArray(value) && key === "length") continue
+    if (!descriptor.enumerable) out.push(`${at}: non-enumerable own field`)
+    if (descriptor.get !== undefined || descriptor.set !== undefined) out.push(`${at}: accessor`)
+    if (FORBIDDEN_NAME.test(key)) out.push(`${at}: forbidden property name`)
+    scan(descriptor.value, at, out)
+  }
+  return out
+}
+const namesOf = (value: object): string[] => Object.getOwnPropertyNames(value).sort()
+const SENTENCE: Record<string, string> = {
+  valid_time_left_before_right: "The left valid interval ends before the right valid interval begins.",
+  valid_time_right_before_left: "The right valid interval ends before the left valid interval begins.",
+  observed_time_left_before_right: "The left observation was observed before the right observation.",
+  observed_time_right_before_left: "The right observation was observed before the left observation.",
+  left_late_arriving: "The left observation arrived after the right observation despite representing an earlier valid interval.",
+  right_late_arriving: "The right observation arrived after the left observation despite representing an earlier valid interval.",
+}
+const H1A_SCOPE = ["app/lib/phase6/temporalContract/evaluate.ts", "app/lib/phase6/temporalContract/types.ts",
+  "docs/HTPE_H1A_TEMPORAL_CONTRACT.md", "tests/phase6TemporalContract.test.mts"]
+const git = (...args: string[]): string => execFileSync("git", args, { cwd: ROOT, encoding: "utf8" }).trim()
+const revokedProxy = (target: object): object => {
+  const { proxy, revoke } = Proxy.revocable(target, {}); revoke(); return proxy
+}
 
 // Reference scenarios: strict orders, tie cases, and unresolved boundaries.
 const LBR_IN_ORDER = pair(obs(T0, T1, T4, T4), obs(T2, T3, T5, T5))
@@ -57,7 +98,10 @@ const SAME_INTERVAL = pair(obs(T0, T1, T4, T4), obs(T0, T1, T4, T4))
 const OVERLAP = pair(obs(T0, T2, T4, T5), obs(T1, T3, T4, T5))
 const TOUCHING = pair(obs(T0, T1, T4, T4), obs(T1, T2, T4, T4))
 const UNRESOLVED = pair(obs(null, T1, T4, T4), obs(T2, T3, T5, T5))
-const ALL_SCENARIOS = [LBR_IN_ORDER, LEFT_LATE, SAME_INTERVAL, OVERLAP, TOUCHING, UNRESOLVED]
+// Overlapping intervals whose observation order IS distinct: arrival must stay
+// unresolved, because observation order may never resolve an overlap.
+const OVERLAP_DISTINCT_OBSERVED = pair(obs(T0, T2, T4, T4), obs(T1, T3, T5, T5))
+const ALL_SCENARIOS = [LBR_IN_ORDER, LEFT_LATE, SAME_INTERVAL, OVERLAP, TOUCHING, UNRESOLVED, OVERLAP_DISTINCT_OBSERVED]
 
 test("h1a: canonical valid input succeeds with literal shadow markers (t1,t12,t46-48)", () => {
   const result = okOf(LBR_IN_ORDER)
@@ -142,6 +186,27 @@ test("h1a: throwing accessors and proxy traps fail closed (t9,t10,t11)", () => {
   }), "input_unreadable")
 })
 
+test("h1a: revoked proxies fail closed at every input boundary (t12a-t12f)", () => {
+  // Array.isArray/Reflect.ownKeys throw on a revoked Proxy; no caller exception
+  // may escape, and the code is the same one used for every unreadable input.
+  const unreadable = { ok: false, failureCode: "input_unreadable" }
+  assert.deepEqual(evaluateTemporalRelation(revokedProxy({ ...LBR_IN_ORDER }) as never), unreadable)
+  assert.deepEqual(evaluateTemporalRelation(revokedProxy([]) as never), unreadable)
+  assert.deepEqual(evaluateTemporalRelation(pair(revokedProxy({ ...LBR_IN_ORDER.left }) as never, LBR_IN_ORDER.right)), unreadable)
+  assert.deepEqual(evaluateTemporalRelation(pair(LBR_IN_ORDER.left, revokedProxy({ ...LBR_IN_ORDER.right }) as never)), unreadable)
+  const nested = pair(revokedProxy({ ...LBR_IN_ORDER.left }) as never, revokedProxy({ ...LBR_IN_ORDER.right }) as never)
+  assert.deepEqual(evaluateTemporalRelation(nested), unreadable)
+  // Deterministic on repeat, and the result carries no exception text or caller value.
+  const repeated = evaluateTemporalRelation(revokedProxy({ ...LBR_IN_ORDER }) as never)
+  assert.deepEqual(repeated, unreadable)
+  assert.deepEqual(namesOf(repeated), ["failureCode", "ok"])
+  assert.deepEqual(scan(repeated, "revoked"), [])
+  // A revoked proxy on the attestation surface is rejected, never thrown from.
+  const rejected = { ok: false, failureCode: "attestation_rejected" }
+  assert.deepEqual(snapshotValidatedTemporalRelationResult(revokedProxy({}), LBR_IN_ORDER), rejected)
+  assert.deepEqual(snapshotValidatedTemporalRelationResult(okOf(LBR_IN_ORDER), revokedProxy({})), rejected)
+})
+
 test("h1a: only canonical UTC instants are accepted (t13-t18)", () => {
   for (const bad of [
     "2026-01-01T00:00:00.000+09:00", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00.000z",
@@ -195,6 +260,13 @@ test("h1a: arrival classification (t30-t35)", () => {
   assert.equal(okOf(OVERLAP).arrivalClassification, "unresolved")
   assert.equal(okOf(SAME_INTERVAL).arrivalClassification, "unresolved")
   assert.equal(okOf(UNRESOLVED).arrivalClassification, "unresolved")
+  // Overlapping intervals with a DISTINCT observation order: observation order
+  // must not resolve an unproven valid-time order into an arrival verdict.
+  const overlapDistinct = okOf(OVERLAP_DISTINCT_OBSERVED)
+  assert.equal(overlapDistinct.validTimeRelation, "overlaps")
+  assert.equal(overlapDistinct.observedTimeRelation, "left_before_right")
+  assert.equal(overlapDistinct.arrivalClassification, "unresolved")
+  assert.equal(okOf(swap(OVERLAP_DISTINCT_OBSERVED)).arrivalClassification, "unresolved")
 })
 
 test("h1a: recording order never changes arrival; observed order never changes valid time (t36,t37)", () => {
@@ -262,6 +334,71 @@ test("h1a: reason order and narrative are deterministic and bounded (t42,t43)", 
   }
 })
 
+test("h1a: exact public own-key shapes on every output surface (t44a-t44g)", () => {
+  const success = okOf(LBR_IN_ORDER)
+  assert.deepEqual(namesOf(success), ["arrivalClassification", "candidateOnly", "humanReviewRequired", "narrative",
+    "observedTimeRelation", "ok", "reasonCodes", "recordedTimeRelation", "shadowOnly", "supersessionOrder", "transitionEvidence", "validTimeRelation"])
+  assert.deepEqual(namesOf(evaluateTemporalRelation(null as never)), ["failureCode", "ok"])
+  const attested = snapshotValidatedTemporalRelationResult(success, LBR_IN_ORDER)
+  assert.deepEqual(namesOf(attested), ["ok", "snapshot"])
+  assert.deepEqual(namesOf(snapshotValidatedTemporalRelationResult({}, LBR_IN_ORDER)), ["failureCode", "ok"])
+  assert.equal(attested.ok, true)
+  if (!attested.ok) return
+  // The snapshot is the success surface minus `ok` — no extra field may appear.
+  assert.deepEqual(namesOf(attested.snapshot), namesOf(success).filter((name) => name !== "ok"))
+  // Arrays carry exactly six index names plus the intrinsic length — no extra slot.
+  const arrayNames = ["0", "1", "2", "3", "4", "5", "length"]
+  assert.deepEqual(namesOf(attested.snapshot.reasonCodes), arrayNames)
+  assert.deepEqual(namesOf(attested.snapshot.narrative), arrayNames)
+  assert.deepEqual(namesOf(success.reasonCodes), arrayNames)
+  assert.deepEqual(namesOf(success.narrative), arrayNames)
+  for (const surface of [success, attested, attested.snapshot]) {
+    assert.equal(Object.getOwnPropertySymbols(surface).length, 0)
+    assert.equal(Object.getPrototypeOf(surface), Object.prototype)
+    assert.equal(Object.isFrozen(surface), true)
+  }
+})
+
+test("h1a: descriptor-level output safety on every public surface (t45a-t45c)", () => {
+  const attestedInput = LBR_IN_ORDER
+  const success = okOf(attestedInput)
+  const surfaces: [string, unknown][] = [
+    ...ALL_SCENARIOS.map((s, i): [string, unknown] => [`success${i}`, okOf(s)]),
+    ["failInvalid", evaluateTemporalRelation(null as never)],
+    ["failUnknown", evaluateTemporalRelation({ ...LBR_IN_ORDER, extra: 1 } as never)],
+    ["failInstant", evaluateTemporalRelation(pair(obs(T0, T1, "nope" as never, T4), LBR_IN_ORDER.right))],
+    ["attested", snapshotValidatedTemporalRelationResult(success, attestedInput)],
+    ["attestRejected", snapshotValidatedTemporalRelationResult({}, attestedInput)],
+  ]
+  for (const [label, surface] of surfaces) assert.deepEqual(scan(surface, label), [])
+})
+
+test("h1a: swap inverts reason codes and narrative sentences exactly (t41a,t41b)", () => {
+  const codes = (input: TemporalRelationInput): string[] => [...okOf(input).reasonCodes]
+  assert.deepEqual(codes(LBR_IN_ORDER), ["valid_time_left_before_right", "observed_time_left_before_right",
+    "recorded_time_left_before_right", "arrival_in_order", "transition_not_established", "supersession_not_established"])
+  assert.deepEqual(codes(swap(LBR_IN_ORDER)), ["valid_time_right_before_left", "observed_time_right_before_left",
+    "recorded_time_right_before_left", "arrival_in_order", "transition_not_established", "supersession_not_established"])
+  assert.deepEqual(codes(LEFT_LATE), ["valid_time_left_before_right", "observed_time_right_before_left",
+    "recorded_time_right_before_left", "left_late_arriving", "transition_not_established", "supersession_not_established"])
+  assert.deepEqual(codes(swap(LEFT_LATE)), ["valid_time_right_before_left", "observed_time_left_before_right",
+    "recorded_time_left_before_right", "right_late_arriving", "transition_not_established", "supersession_not_established"])
+  // Each side-bearing code must carry ITS OWN sentence, in the same position.
+  for (const scenario of ALL_SCENARIOS) {
+    for (const input of [scenario, swap(scenario)]) {
+      const result = okOf(input)
+      result.reasonCodes.forEach((code, index) => {
+        if (SENTENCE[code] !== undefined) assert.equal(result.narrative[index], SENTENCE[code])
+      })
+    }
+  }
+  // Fixed points keep their exact values under swap.
+  for (const fixed of [SAME_INTERVAL, OVERLAP, TOUCHING]) {
+    assert.deepEqual(codes(fixed), codes(swap(fixed)))
+    assert.deepEqual([...okOf(fixed).narrative], [...okOf(swap(fixed)).narrative])
+  }
+})
+
 test("h1a: no raw timestamp, digit, or numeric value in any output (t44,t45)", () => {
   const outputs: unknown[] = ALL_SCENARIOS.map((scenario) => okOf(scenario))
   outputs.push(evaluateTemporalRelation(null as never))
@@ -317,22 +454,23 @@ test("h1a: snapshots never alias and survive public mutation (t53,t54)", () => {
   if (after.ok) assert.equal(JSON.stringify(after.snapshot), before)
 })
 
-test("h1a: no production consumer and no foreign import (t55,t56)", () => {
+test("h1a: no production consumer anywhere in the repository (t55,t56)", () => {
   const moduleDir = `${ROOT}app/lib/phase6/temporalContract`
-  const offenders: string[] = []
-  const walk = (dir: string): void => {
-    for (const entry of readdirSync(dir)) {
-      const path = `${dir}/${entry}`
-      if (statSync(path).isDirectory()) {
-        if (path !== moduleDir) walk(path)
-      } else if (/\.(ts|tsx|mts)$/.test(entry) && readFileSync(path, "utf8").includes("temporalContract")) {
-        offenders.push(path)
-      }
-    }
-  }
-  walk(`${ROOT}app`)
+  // Every TRACKED executable source file in the repository — app/, scripts/,
+  // electron/, prototypes/, root configs and any future directory — not only app/.
+  const sources = git("ls-files").split("\n").filter((path) => /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(path))
+  assert.equal(sources.length > 0, true)
+  const own = new Set(H1A_SCOPE)
+  // Any reference form — static import, export-from, dynamic import(), require(),
+  // or a bare path — must spell the module directory to reach it from outside.
+  const offenders = sources.filter((path) => !own.has(path) && readFileSync(`${ROOT}${path}`, "utf8").includes("temporalContract"))
   assert.deepEqual(offenders, [])
   const evaluateSource = readFileSync(`${moduleDir}/evaluate.ts`, "utf8")
+  // The module itself may not reach outward dynamically either.
+  for (const source of [evaluateSource, readFileSync(`${moduleDir}/types.ts`, "utf8")]) {
+    assert.doesNotMatch(source, /\bimport\s*\(/)
+    assert.doesNotMatch(source, /\brequire\s*\(/)
+  }
   const importSpecifiers = [...evaluateSource.matchAll(/(?:from|^\s*import)\s+"([^"]+)"/gm)].map((match) => match[1])
   assert.deepEqual(importSpecifiers, ["./types.ts"])
   const typesSource = readFileSync(`${moduleDir}/types.ts`, "utf8")
@@ -344,26 +482,23 @@ test("h1a: no production consumer and no foreign import (t55,t56)", () => {
   }
 })
 
-test("h1a: exact module surface, four-file scope, H0 document unchanged (t57,t58)", () => {
+test("h1a: exact module surface, exact four-file scope, contract documents intact (t57,t58)", () => {
   assert.deepEqual(readdirSync(`${ROOT}app/lib/phase6/temporalContract`).sort(), ["evaluate.ts", "types.ts"])
   const h0 = createHash("sha256").update(readFileSync(`${ROOT}docs/PROVENANCE_CLAIM_CONTRACT.md`)).digest("hex")
   assert.equal(h0, H0_DOC_SHA256)
-  const ALLOWED = [
-    "app/lib/phase6/temporalContract/evaluate.ts", "app/lib/phase6/temporalContract/types.ts",
-    "docs/HTPE_H1A_TEMPORAL_CONTRACT.md", "tests/phase6TemporalContract.test.mts",
-  ]
-  const git = (...args: string[]): string =>
-    execFileSync("git", args, { cwd: ROOT, encoding: "utf8" }).trim()
-  let baseAvailable = true
-  try { git("cat-file", "-e", H1A_BASE_SHA) } catch { baseAvailable = false }
-  if (!baseAvailable) return
-  const scoped = git("diff", "--name-only", H1A_BASE_SHA, "HEAD", "--", ...ALLOWED, "docs/PROVENANCE_CLAIM_CONTRACT.md")
-    .split("\n").filter((line) => line !== "").sort()
-  assert.deepEqual(scoped.filter((path) => path === "docs/PROVENANCE_CLAIM_CONTRACT.md"), [])
-  let exactSlice = false
-  try { exactSlice = git("merge-base", H1A_BASE_SHA, "HEAD") === H1A_BASE_SHA && Number(git("rev-list", "--count", `${H1A_BASE_SHA}..HEAD`)) <= 1 } catch { exactSlice = false }
-  if (exactSlice) {
-    const committed = git("diff", "--name-only", H1A_BASE_SHA, "HEAD").split("\n").filter((line) => line !== "").sort()
-    for (const path of committed) assert.equal(ALLOWED.includes(path), true)
-  }
+  // The H1A contract document must exist and be readable: deleting it is a
+  // scope regression, not a silent no-op.
+  const contractPath = `${ROOT}docs/HTPE_H1A_TEMPORAL_CONTRACT.md`
+  assert.equal(statSync(contractPath).isFile(), true)
+  const contract = readFileSync(contractPath, "utf8")
+  assert.match(contract, /^# HTPE H1A Temporal Relation Contract$/m)
+  for (const required of ["SHADOW ONLY", "**Authority:** NONE", "**Production consumer:** NONE"]) assert.equal(contract.includes(required), true)
+  // The exact base object MUST be present. When it is not, this fails loudly
+  // instead of returning and claiming the scope assertion passed.
+  assert.doesNotThrow(() => git("cat-file", "-e", `${H1A_BASE_SHA}^{commit}`), "exact H1A base commit unavailable: release scope cannot be proven (fetch the base, do not skip)")
+  // Base -> working tree: catches committed AND working-tree adds, edits and deletes.
+  const changed = git("diff", "--name-only", H1A_BASE_SHA, "--").split("\n").filter((line) => line !== "").sort()
+  // EXACT set equality, never subset membership: a fifth path fails, and a
+  // missing required path fails just as loudly.
+  assert.deepEqual(changed, [...H1A_SCOPE].sort())
 })

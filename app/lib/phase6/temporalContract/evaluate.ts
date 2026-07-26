@@ -68,7 +68,19 @@ type Captured = { readonly values: readonly unknown[] } | TemporalRelationFailur
 // order, after rejecting unknown own keys by NAME ONLY (their values are never
 // read). Every trap or accessor throw fails closed and value-free.
 function captureOwn(value: unknown, allowedKeys: readonly string[]): Captured {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return fail("invalid_input")
+  // `typeof` and `=== null` are total: they never invoke a Proxy internal
+  // method, so a revoked Proxy reaches the readability checks below.
+  if (value === null || typeof value !== "object") return fail("invalid_input")
+  // Array.isArray performs IsArray, which THROWS on a revoked Proxy. An object
+  // whose readability is gone is unreadable, not mistyped, so it joins the
+  // other trap failures rather than invalid_input.
+  let isArray: boolean
+  try {
+    isArray = Array.isArray(value)
+  } catch {
+    return fail("input_unreadable")
+  }
+  if (isArray) return fail("invalid_input")
   let ownKeys: (string | symbol)[]
   try {
     ownKeys = Reflect.ownKeys(value)
