@@ -1,10 +1,10 @@
 {
   "_note": "F5 permanent counterexamples. Every subject is compiled through the REAL F1A/F1B/F1C boundaries, so each formationResult is a genuinely ATTESTED object, never a clone. F5 is subject-scoped: there is deliberately no pair, comparison input, or grouping outcome here — those remain owned by F4.",
   "subjectScenarios": [
-    { "name": "A_known_actor_explicit_limit_meaningful_update",
+    { "name": "A_asserted_actor_structured_authority_explicit_limit_meaningful_update",
       "doneCondition": "complete", "independentClosure": "independent",
       "sources": [{ "externalId": "a1", "sourceObjectId": "org/repo#101", "actors": [{ "name": "Dana" }], "deadline": { "value": "2026-08-01T00:00:00Z", "inferred": false }, "authoritySignals": [{ "kind": "owner_of_record", "inferred": false }], "statusMarkers": ["approved"] }],
-      "expect": { "actor": "known", "limit": "explicit", "eventTime": "known", "update": "meaningful", "authority": "structured", "unresolved": "absent", "missing": "absent", "subjectState": "formal_candidate" } },
+      "expect": { "actor": "asserted", "limit": "explicit", "eventTime": "known", "update": "meaningful", "authority": "structured", "unresolved": "absent", "missing": "absent", "subjectState": "formal_candidate" } },
     { "name": "B_asserted_actor_inferred_limit",
       "doneCondition": "complete", "independentClosure": "independent",
       "sources": [{ "externalId": "b1", "sourceObjectId": "org/repo#102", "actors": [{ "name": "Dana" }, { "name": "Sam", "relation": "assignee" }], "deadline": { "value": "2026-08-01T00:00:00Z", "inferred": true }, "authoritySignals": [{ "kind": "decision_maker_named", "inferred": false }] }],

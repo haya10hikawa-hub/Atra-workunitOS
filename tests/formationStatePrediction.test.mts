@@ -4,9 +4,8 @@
  * Every subject is compiled through the REAL F1A/F1B/F1C boundaries, so each
  * `formationResult` is genuinely ATTESTED, never a clone. Closed factor
  * expectations live in `fixtures/formation/state-prediction/scenarios.json`;
- * attestation, one-read capture, leakage, determinism and the subject-only
- * boundary are pinned inline. The pair-scoped grouping context an earlier head
- * accepted is gone: a comparison input or F4 grouping outcome fails closed.
+ * attestation, one-read capture, leakage, determinism, unbound actor promotion
+ * and the subject-only boundary are pinned inline.
  */
 
 import test from "node:test"
@@ -15,9 +14,7 @@ import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 
 import {
-  buildFormationSourceCandidate,
-  type FormationSourceCandidate,
-  type FormationSourceContractResult,
+  buildFormationSourceCandidate, type FormationSourceCandidate, type FormationSourceContractResult,
 } from "../app/lib/application/formation/sourceContract.ts"
 import { buildFormationGoalDoneConditionCandidate } from "../app/lib/application/formation/goalDoneConditionAdapter.ts"
 import { buildWorkUnitFormationCandidate } from "../app/lib/application/formation/workUnitFormationAggregate.ts"
@@ -43,8 +40,7 @@ type SourceSpec = {
   externalId: string; sourceObjectId: string; provider?: string
   occurredAt?: string; capturedAt?: string; editedAt?: string
   actors?: readonly { name: string; relation?: string }[]
-  deadline?: { value: string; inferred: boolean }
-  versionInfo?: { value: string; inferred: boolean }
+  deadline?: { value: string; inferred: boolean }; versionInfo?: { value: string; inferred: boolean }
   supersedes?: readonly { provider: string; sourceObjectId: string; inferred: boolean }[]
   unresolvedMarkers?: readonly Entry[]; decisionMarkers?: readonly Entry[]
   statusMarkers?: readonly string[]; authoritySignals?: readonly Entry[]
@@ -60,10 +56,7 @@ function buildSource(spec: SourceSpec): OkSource {
     title: `Item ${spec.externalId}`,
     sanitizedSummary: `Summary for ${spec.externalId}`,
     actorAssertions: (spec.actors ?? []).map((a) => ({ name: a.name, assertedRelation: a.relation ?? "author" })),
-    timestamps: {
-      occurredAt: spec.occurredAt ?? OCCURRED_AT, capturedAt: spec.capturedAt ?? CAPTURED_AT,
-      ...(spec.editedAt !== undefined ? { editedAt: spec.editedAt } : {}),
-    },
+    timestamps: { occurredAt: spec.occurredAt ?? OCCURRED_AT, capturedAt: spec.capturedAt ?? CAPTURED_AT, ...(spec.editedAt !== undefined ? { editedAt: spec.editedAt } : {}) },
     ...(spec.deadline !== undefined ? { explicitDeadline: spec.deadline } : {}),
     ...(spec.versionInfo !== undefined ? { versionInfo: spec.versionInfo } : {}),
     sourceLinks: [{ url }], referencedObjects: [], supersedes: spec.supersedes ?? [],
@@ -81,11 +74,9 @@ const ALL_GOAL_FIELDS: Record<string, string> = {
 }
 
 type SubjectSpec = {
-  sources: readonly SourceSpec[]
-  goalFields?: "all" | "missing_timeHorizon"
-  doneCondition?: "complete" | "partial"
+  sources: readonly SourceSpec[]; goalFields?: "all" | "missing_timeHorizon"
+  doneCondition?: "complete" | "partial"; minimalGoal?: boolean
   independentClosure?: "independent" | "parent_bounded" | "unknown"
-  minimalGoal?: boolean
 }
 
 function buildSubject(spec: SubjectSpec): ValidatedFormationSubjectResult {
@@ -113,16 +104,11 @@ function buildSubject(spec: SubjectSpec): ValidatedFormationSubjectResult {
 
 /** A complete, independently closable single-source subject. */
 function subjectOf(externalId: string, sourceObjectId: string, extra: Partial<SourceSpec> = {}): ValidatedFormationSubjectResult {
-  return buildSubject({
-    sources: [{ externalId, sourceObjectId, ...extra }],
-    doneCondition: "complete", independentClosure: "independent",
-  })
+  return buildSubject({ sources: [{ externalId, sourceObjectId, ...extra }], doneCondition: "complete", independentClosure: "independent" })
 }
 
 function inspect(value: unknown): { strings: string[]; numbers: number[]; keys: Set<string> } {
-  const strings: string[] = []
-  const numbers: number[] = []
-  const keys = new Set<string>()
+  const strings: string[] = []; const numbers: number[] = []; const keys = new Set<string>()
   const walk = (v: unknown): void => {
     if (typeof v === "string") strings.push(v)
     else if (typeof v === "number") numbers.push(v)
@@ -142,9 +128,8 @@ const FORBIDDEN_OUTPUT_KEYS = [
   "formationResult", "subject", "members", "goal", "goalDoneCondition", "doneCondition", "sourceRef",
   "sourceObjectId", "title", "sanitizedSummary", "navigationTarget", "url", "actorAssertions",
   "authoritySignals", "timestamps", "explicitDeadline", "tenantId", "userId", "roi", "ranking", "rank",
-  "score", "priority", "urgency", "whyNow", "grouped", "membership", "merged", "formalized", "approved",
-  "executed", "conflictFindings", "conflicts", "mergeCandidate", "splitCandidate",
-]
+  "score", "priority", "urgency", "whyNow", "grouped", "membership", "merged", "formalized",
+  "approved", "executed", "conflictFindings", "conflicts", "mergeCandidate", "splitCandidate"]
 
 function assertBoundedSafeOutput(result: unknown): void {
   const { strings, numbers, keys } = inspect(result)
@@ -166,6 +151,9 @@ function okResult(input: unknown) {
   if (!r.ok) throw new Error("unreachable")
   assert.equal(r.candidateOnly, true)
   assert.equal(r.humanReviewRequired, true)
+  // RESERVED and unreachable: no genuine F1A input may promote an actor.
+  assert.ok(!r.reasonCodes.includes("actor_known_structured_owner"), "reserved actor code emitted")
+  assert.notEqual(r.factors.actor, "known", "actor was promoted to known")
   assertBoundedSafeOutput(r)
   return r
 }
@@ -179,13 +167,18 @@ function rejects(input: unknown, reason: string, label: string): void {
 // ─── Closed vocabularies ─────────────────────────────────────────────────────
 
 test("factor vocabularies are exactly the closed sets and carry no grouping concept", () => {
-  assert.deepEqual([...STATE_PREDICTION_ACTOR_FACTORS], ["known", "asserted", "unknown"])
-  assert.deepEqual([...STATE_PREDICTION_LIMIT_FACTORS], ["explicit", "inferred", "absent"])
-  assert.deepEqual([...STATE_PREDICTION_EVENT_TIME_FACTORS], ["known", "uncertain", "absent"])
-  assert.deepEqual([...STATE_PREDICTION_UPDATE_FACTORS], ["meaningful", "unchanged", "unknown"])
-  assert.deepEqual([...STATE_PREDICTION_AUTHORITY_FACTORS], ["structured", "asserted", "absent"])
-  assert.deepEqual([...STATE_PREDICTION_UNRESOLVED_FACTORS], ["present", "absent", "unknown"])
-  assert.deepEqual([...STATE_PREDICTION_MISSING_FACTORS], ["present", "absent"])
+  // `actor: known` stays in the vocabulary as a RESERVED future state.
+  assert.deepEqual([
+    [...STATE_PREDICTION_ACTOR_FACTORS], [...STATE_PREDICTION_LIMIT_FACTORS],
+    [...STATE_PREDICTION_EVENT_TIME_FACTORS], [...STATE_PREDICTION_UPDATE_FACTORS],
+    [...STATE_PREDICTION_AUTHORITY_FACTORS], [...STATE_PREDICTION_UNRESOLVED_FACTORS],
+    [...STATE_PREDICTION_MISSING_FACTORS],
+  ], [
+    ["known", "asserted", "unknown"], ["explicit", "inferred", "absent"],
+    ["known", "uncertain", "absent"], ["meaningful", "unchanged", "unknown"],
+    ["structured", "asserted", "absent"], ["present", "absent", "unknown"],
+    ["present", "absent"],
+  ])
   for (const code of STATE_PREDICTION_REASON_CODES) {
     assert.ok(!/group|pair|merge|split|conflict_finding|ranking|roi|score|urgency/i.test(code), `out-of-slice code: ${code}`)
   }
@@ -195,9 +188,8 @@ test("factor vocabularies are exactly the closed sets and carry no grouping conc
 // ─── Deterministic factors (fixtures A–L) ────────────────────────────────────
 
 const fixturePath = fileURLToPath(new URL("./fixtures/formation/state-prediction/scenarios.json", import.meta.url))
-const fixtures = JSON.parse(readFileSync(fixturePath, "utf8")) as {
-  subjectScenarios: (SubjectSpec & { name: string; expect: Record<string, string> })[]
-}
+const fixtures = JSON.parse(readFileSync(fixturePath, "utf8")) as
+  { subjectScenarios: (SubjectSpec & { name: string; expect: Record<string, string> })[] }
 
 for (const scenario of fixtures.subjectScenarios) {
   test(`state-prediction ${scenario.name}`, () => {
@@ -205,8 +197,7 @@ for (const scenario of fixtures.subjectScenarios) {
     assert.deepEqual({ ...r.factors }, {
       actor: scenario.expect.actor, limit: scenario.expect.limit, eventTime: scenario.expect.eventTime,
       update: scenario.expect.update, authority: scenario.expect.authority,
-      unresolved: scenario.expect.unresolved, missing: scenario.expect.missing,
-    })
+      unresolved: scenario.expect.unresolved, missing: scenario.expect.missing })
     assert.equal(r.subjectState, scenario.expect.subjectState)
     for (const code of r.reasonCodes) assert.ok(STATE_PREDICTION_REASON_CODES.includes(code), `unclosed code ${code}`)
     assert.equal(r.reasonCodes.length, 8)
@@ -232,6 +223,38 @@ test("missing evidence stays missing; conflict-shaped evidence becomes unresolve
   }) })
   assert.equal(conflict.factors.unresolved, "present")
   assert.equal(conflict.subjectState, "formal_candidate")
+})
+
+test("an unbound authority signal never promotes actor certainty", () => {
+  // F1A binds no actor identity to an authority signal, so an uninferred
+  // owner_of_record on the SAME source proves nothing about the named actor.
+  // Authority stays independently structured; the actor stays asserted.
+  const authoritySignals = [{ kind: "owner_of_record", inferred: false }]
+  for (const relation of ["author", "assignee", "reviewer_requested", "mentioned", "owner_claimed", "approver_claimed"]) {
+    const r = okResult({ formationResult: subjectOf(`rel-${relation}`, "org/repo#920", { actors: [{ name: "Dana", relation }], authoritySignals }) })
+    assert.equal(r.factors.actor, "asserted", relation)
+    assert.equal(r.factors.authority, "structured", relation)
+  }
+  // One repeated display name across sources is still only an assertion.
+  const repeated = okResult({ formationResult: buildSubject({
+    sources: [
+      { externalId: "rep-1", sourceObjectId: "org/repo#921", actors: [{ name: "Dana" }], authoritySignals },
+      { externalId: "rep-2", sourceObjectId: "org/repo#922", actors: [{ name: "Dana" }], authoritySignals }],
+    doneCondition: "complete", independentClosure: "independent",
+  }) })
+  assert.equal(repeated.factors.actor, "asserted")
+  // Multiple distinct names, and provider identity, change nothing either.
+  assert.equal(okResult({ formationResult: subjectOf("dist-1", "org/repo#923", { actors: [{ name: "Dana" }, { name: "Sam", relation: "assignee" }], authoritySignals }) }).factors.actor, "asserted")
+  for (const provider of ["github", "slack", "notion"]) {
+    assert.equal(okResult({ formationResult: subjectOf(`pa-${provider}`, `obj/${provider}`, { provider, actors: [{ name: "Dana" }], authoritySignals }) }).factors.actor, "asserted")
+  }
+  // An assertion without authority, and authority without any assertion.
+  const noAuthority = okResult({ formationResult: subjectOf("noauth-1", "org/repo#924", { actors: [{ name: "Dana" }] }) })
+  assert.equal(noAuthority.factors.actor, "asserted")
+  assert.equal(noAuthority.factors.authority, "absent")
+  const noActor = okResult({ formationResult: subjectOf("noactor-1", "org/repo#925", { authoritySignals }) })
+  assert.equal(noActor.factors.actor, "unknown")
+  assert.equal(noActor.factors.authority, "structured")
 })
 
 test("assertion, inference and provider identity are never promoted to fact", () => {

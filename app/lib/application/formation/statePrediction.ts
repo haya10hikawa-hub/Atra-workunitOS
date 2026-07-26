@@ -2,18 +2,17 @@
  * F5 — Deterministic State Prediction (SUBJECT-SCOPED).
  *
  * F5 explains ONE already-validated formation subject — actor, limit, event
- * time, meaningful update, authority, unresolved and missing evidence — and
- * nothing else.
+ * time, meaningful update, authority, unresolved and missing evidence.
  *
  * F5 consumes NO pair artifact. An earlier head took a comparison input and an
  * F4 grouping outcome alongside the subject and reported that verdict as
  * "pair-scoped context": both were independently attested, but nothing proved
- * the subject was either side of that pair, so an unrelated subject could be
- * combined with a real verdict into one subject-specific prediction. No trusted
- * immutable subject-to-side resolver exists and inventing one is out of scope,
- * so the capability is REMOVED rather than disclosed. F4 remains the sole
- * authority for pair verdicts, merge/split proposals and membership, and
- * supplying `comparisonInput` or `groupingOutcomeResult` fails closed.
+ * the subject was either side of that pair. No trusted immutable resolver
+ * exists and inventing one is out of scope, so the capability is REMOVED rather
+ * than disclosed. F4 remains the sole authority for pair verdicts, merge/split
+ * proposals and membership; `comparisonInput` and `groupingOutcomeResult` fail
+ * closed. The same rule governs the actor factor below: two unbound records
+ * never establish the relationship between them.
  *
  * Authorities consumed read-only: F1C is the sole validated-subject authority
  * (`snapshotValidatedWorkUnitFormationResult`; every factor comes from the
@@ -24,36 +23,26 @@
  *
  * The subject is read EXACTLY ONCE, so a changing accessor cannot split
  * validation from reporting, and a hostile accessor fails closed. Output is
- * closed enums, closed reason codes and constant sentences only — no raw text,
- * identifier, timestamp, deadline value, numeric score, or F6/F7 concept can
- * travel out — and there is no external call, wall-clock or randomness read.
+ * closed enums, closed reason codes and constant sentences only, with no
+ * external call, wall-clock or randomness read.
  */
 
 import type { FormationSourceCandidate } from "./sourceContract.ts"
 import { mapFormationSubjectState } from "./states.ts"
+import { snapshotValidatedWorkUnitFormationResult, type WorkUnitFormationCandidate } from "./workUnitFormationAggregate.ts"
 import {
-  snapshotValidatedWorkUnitFormationResult,
-  type WorkUnitFormationCandidate,
-} from "./workUnitFormationAggregate.ts"
-import {
-  type FormationStatePredictionFactors,
-  type FormationStatePredictionInput,
-  type FormationStatePredictionRejection,
-  type FormationStatePredictionResult,
-  type StatePredictionActorFactor,
-  type StatePredictionAuthorityFactor,
-  type StatePredictionEventTimeFactor,
-  type StatePredictionLimitFactor,
-  type StatePredictionMissingFactor,
-  type StatePredictionReasonCode,
-  type StatePredictionUnresolvedFactor,
-  type StatePredictionUpdateFactor,
+  type FormationStatePredictionFactors, type FormationStatePredictionInput,
+  type FormationStatePredictionRejection, type FormationStatePredictionResult,
+  type StatePredictionActorFactor, type StatePredictionAuthorityFactor,
+  type StatePredictionEventTimeFactor, type StatePredictionLimitFactor,
+  type StatePredictionMissingFactor, type StatePredictionReasonCode,
+  type StatePredictionUnresolvedFactor, type StatePredictionUpdateFactor,
 } from "./statePredictionTypes.ts"
 
 // A signal is STRUCTURED only when the source records it as fact
 // (`inferred: false`) AND its kind is a structural record rather than a claim
-// about a person; `decision_maker_named` is therefore excluded. Provider
-// identity appears nowhere here — provider is never authority.
+// about a person; `decision_maker_named` is excluded, and provider is never
+// authority. An authority signal names nobody, so it binds no actor.
 const STRUCTURED_AUTHORITY_SIGNAL_KINDS: ReadonlySet<string> = new Set([
   "accepted_status", "owner_of_record", "signed_off_review", "official_external_communication", "superseded_marker",
 ])
@@ -61,14 +50,15 @@ const STRUCTURED_AUTHORITY_SIGNAL_KINDS: ReadonlySet<string> = new Set([
 const ASSERTED_ACTOR_RELATIONS: ReadonlySet<string> = new Set(["owner_claimed", "approver_claimed"])
 /** Status values recording a real transition, not mere activity. */
 const MEANINGFUL_STATUS_MARKERS: ReadonlySet<string> = new Set(["approved", "changes_requested", "merged", "closed", "cancelled"])
-/** Contradiction-shaped status pairs — reported as unresolved, never resolved. */
+/** Contradiction-shaped pairs — reported as unresolved, never resolved. */
 const SETTLED_STATUS_MARKERS: ReadonlySet<string> = new Set(["approved", "merged"])
 const CONTESTED_STATUS_MARKERS: ReadonlySet<string> = new Set(["changes_requested", "cancelled"])
 
 // One constant sentence per reason code. Nothing is interpolated, so no value
 // from any source can travel into a sentence.
 const NARRATIVE: Record<StatePredictionReasonCode, string> = {
-  actor_known_structured_owner: "A single named actor is backed by a recorded owner of record.",
+  // RESERVED: unreachable until a contract binds a canonical actor identity.
+  actor_known_structured_owner: "A named actor is bound to a recorded owner of record.",
   actor_asserted_only: "The acting party is only asserted by the sources and is not proven here.",
   actor_unknown_no_assertion: "No source asserts who is acting.",
   limit_explicit_declared: "At least one source declares an explicit time limit.",
@@ -104,8 +94,8 @@ const CODES = {
   subjectState: { formal_candidate: "subject_state_formal_candidate", clarification_needed: "subject_state_clarification_needed", context_only: "subject_state_context_only" },
 } as const satisfies Record<string, Record<string, StatePredictionReasonCode>>
 
-// Pair-shaped fields the previous head accepted. Their own-property presence now
-// fails closed — a stale caller is told, never silently ignored.
+// Pair-shaped fields the previous head accepted: presence now fails closed, so a
+// stale caller is told rather than silently ignored.
 const PAIR_INPUT_FIELDS = ["comparisonInput", "groupingOutcomeResult"] as const
 
 // Other caller-supplied fields that must never bind or override anything here.
@@ -144,24 +134,19 @@ function field(source: FormationSourceCandidate, key: string): unknown {
   return (source as unknown as Record<string, unknown>)[key]
 }
 
+// F1A models actor assertions and authority signals as SEPARATE unbound records:
+// an authority signal carries `kind` + `inferred` and NO actor identity, so no
+// combination of them proves the named actor IS the recorded owner. `known` is
+// RESERVED and unreachable until a separately reviewed contract binds a canonical
+// actor identity. Nothing below reads authoritySignals, provider, source identity,
+// relation labels, or display-name equality — an assertion is only an assertion,
+// and authority stays independent, so `asserted` + `structured` is the pairing.
 function classifyActor(sources: readonly FormationSourceCandidate[]): StatePredictionActorFactor {
-  const names = new Set<string>()
-  let structuredOwnerNamed = false
-  for (const source of sources) {
-    const named = list(field(source, "actorAssertions"))
-      .map((a) => record(a)?.name)
-      .filter((n): n is string => typeof n === "string" && n.length > 0)
-    named.forEach((n) => names.add(n))
-    // A single named actor is `known` only when the SAME source also records an
-    // owner of record as fact. An assertion alone never reaches `known`.
-    const owned = list(field(source, "authoritySignals")).some((s) => {
-      const entry = record(s)
-      return entry?.inferred === false && entry?.kind === "owner_of_record"
-    })
-    if (named.length > 0 && owned) structuredOwnerNamed = true
-  }
-  if (names.size === 0) return "unknown"
-  return names.size === 1 && structuredOwnerNamed ? "known" : "asserted"
+  const named = sources.some((source) => list(field(source, "actorAssertions")).some((assertion) => {
+    const name = record(assertion)?.name
+    return typeof name === "string" && name.length > 0
+  }))
+  return named ? "asserted" : "unknown"
 }
 
 function classifyLimit(sources: readonly FormationSourceCandidate[]): StatePredictionLimitFactor {
@@ -331,23 +316,16 @@ function predict(input: FormationStatePredictionInput): FormationStatePrediction
   const sources = memberSources(subject)
   const change = readChangeSignals(sources)
   const factors: FormationStatePredictionFactors = {
-    actor: classifyActor(sources),
-    limit: classifyLimit(sources),
-    eventTime: classifyEventTime(sources),
-    update: classifyUpdate(change),
-    authority: classifyAuthority(sources),
-    unresolved: classifyUnresolved(sources, change),
+    actor: classifyActor(sources), limit: classifyLimit(sources),
+    eventTime: classifyEventTime(sources), update: classifyUpdate(change),
+    authority: classifyAuthority(sources), unresolved: classifyUnresolved(sources, change),
     missing: classifyMissing(subject),
   }
 
   const reasonCodes: readonly StatePredictionReasonCode[] = [
-    CODES.actor[factors.actor],
-    CODES.limit[factors.limit],
-    CODES.eventTime[factors.eventTime],
-    CODES.update[factors.update],
-    CODES.authority[factors.authority],
-    CODES.unresolved[factors.unresolved],
-    CODES.missing[factors.missing],
+    CODES.actor[factors.actor], CODES.limit[factors.limit], CODES.eventTime[factors.eventTime],
+    CODES.update[factors.update], CODES.authority[factors.authority],
+    CODES.unresolved[factors.unresolved], CODES.missing[factors.missing],
     CODES.subjectState[mapped.state],
   ]
 

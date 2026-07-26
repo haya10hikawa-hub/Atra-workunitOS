@@ -16,7 +16,9 @@ import type { WorkUnitFormationResult } from "./workUnitFormationAggregate.ts"
 /** The ONLY admissible input: a successful F1C aggregate result. */
 export type ValidatedFormationSubjectResult = Extract<WorkUnitFormationResult, { readonly ok: true }>
 
-// Closed factor vocabulary. An asserted actor is never promoted to `known`; an
+// Closed factor vocabulary. `actor: known` is RESERVED and unreachable — F1A
+// binds no actor identity to an authority signal, so no current value proves a
+// named actor is the recorded owner; an asserted actor stays asserted. An
 // inferred limit is never a fact; event time is the SOURCE event, never our
 // record time; an edit alone is not a meaningful update; provider identity is
 // never authority; unresolved is never "unread"; missing stays missing.
@@ -56,19 +58,16 @@ export const STATE_PREDICTION_REASON_CODES = [
   "update_meaningful_recorded", "update_unchanged", "update_unknown_inferred_only",
   "authority_structured_signal", "authority_asserted_only", "authority_absent",
   "unresolved_present", "unresolved_unknown_inferred_only", "unresolved_absent",
-  "missing_present", "missing_absent",
-  "subject_state_formal_candidate", "subject_state_clarification_needed", "subject_state_context_only",
+  "missing_present", "missing_absent", "subject_state_formal_candidate",
+  "subject_state_clarification_needed", "subject_state_context_only",
 ] as const
 
 export type StatePredictionReasonCode = (typeof STATE_PREDICTION_REASON_CODES)[number]
 
 /** Fail-closed rejections. Every one is value-free. */
 export const STATE_PREDICTION_REJECTIONS = [
-  "subject_not_validated",
-  "subject_state_unavailable",
-  "grouping_context_not_supported",
-  "unbound_reference_supplied",
-  "input_unreadable",
+  "subject_not_validated", "subject_state_unavailable", "grouping_context_not_supported",
+  "unbound_reference_supplied", "input_unreadable",
 ] as const
 
 export type FormationStatePredictionRejection = (typeof STATE_PREDICTION_REJECTIONS)[number]
@@ -78,9 +77,7 @@ export type FormationStatePredictionRejection = (typeof STATE_PREDICTION_REJECTI
  * else. A pair, comparison input, F4 grouping outcome, candidate id, side,
  * token, ranking value, or safety-literal override fails closed on presence.
  */
-export type FormationStatePredictionInput = {
-  readonly formationResult: ValidatedFormationSubjectResult
-}
+export type FormationStatePredictionInput = { readonly formationResult: ValidatedFormationSubjectResult }
 
 export type FormationStatePredictionResult =
   | { readonly ok: false; readonly candidateOnly: true; readonly reason: FormationStatePredictionRejection }
