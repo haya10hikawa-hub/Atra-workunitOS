@@ -4,8 +4,8 @@
  * Every subject is compiled through the REAL F1A/F1B/F1C boundaries, so each
  * `formationResult` is genuinely ATTESTED, never a clone. Closed factor
  * expectations live in `fixtures/formation/state-prediction/scenarios.json`;
- * attestation, one-read capture, leakage, determinism, unbound actor promotion
- * and the subject-only boundary are pinned inline.
+ * attestation, one-read capture, leakage, determinism, unbound actor promotion,
+ * the update evidence boundary and the subject-only boundary are pinned inline.
  */
 
 import test from "node:test"
@@ -22,11 +22,12 @@ import { buildWorkUnitFormationCandidate } from "../app/lib/application/formatio
 import { compareGroupingSubjects } from "../app/lib/application/formation/grouping.ts"
 import { mapFormationGroupingOutcome } from "../app/lib/application/formation/states.ts"
 import {
-  STATE_PREDICTION_ACTOR_FACTORS, STATE_PREDICTION_AUTHORITY_FACTORS,
-  STATE_PREDICTION_EVENT_TIME_FACTORS, STATE_PREDICTION_LIMIT_FACTORS,
-  STATE_PREDICTION_MISSING_FACTORS, STATE_PREDICTION_REASON_CODES,
-  STATE_PREDICTION_REJECTIONS, STATE_PREDICTION_UNRESOLVED_FACTORS,
-  STATE_PREDICTION_UPDATE_FACTORS, type ValidatedFormationSubjectResult,
+  RESERVED_STATE_PREDICTION_UPDATE_FACTORS, STATE_PREDICTION_ACTOR_FACTORS,
+  STATE_PREDICTION_AUTHORITY_FACTORS, STATE_PREDICTION_EVENT_TIME_FACTORS,
+  STATE_PREDICTION_LIMIT_FACTORS, STATE_PREDICTION_MISSING_FACTORS,
+  STATE_PREDICTION_REASON_CODES, STATE_PREDICTION_REJECTIONS,
+  STATE_PREDICTION_UNRESOLVED_FACTORS, STATE_PREDICTION_UPDATE_FACTORS,
+  type ValidatedFormationSubjectResult,
 } from "../app/lib/application/formation/statePredictionTypes.ts"
 import { predictFormationState } from "../app/lib/application/formation/statePrediction.ts"
 
@@ -36,12 +37,13 @@ type Entry = { kind: string; summary?: string; inferred?: boolean }
 const CAPTURED_AT = "2026-07-19T00:00:00Z"
 const OCCURRED_AT = "2026-01-01T00:00:00Z"
 
+type Claim = { provider: string; sourceObjectId: string; inferred: boolean }
 type SourceSpec = {
   externalId: string; sourceObjectId: string; provider?: string
   occurredAt?: string; capturedAt?: string; editedAt?: string
   actors?: readonly { name: string; relation?: string }[]
   deadline?: { value: string; inferred: boolean }; versionInfo?: { value: string; inferred: boolean }
-  supersedes?: readonly { provider: string; sourceObjectId: string; inferred: boolean }[]
+  supersedes?: readonly Claim[]; supersededBy?: readonly Claim[]
   unresolvedMarkers?: readonly Entry[]; decisionMarkers?: readonly Entry[]
   statusMarkers?: readonly string[]; authoritySignals?: readonly Entry[]
 }
@@ -59,7 +61,7 @@ function buildSource(spec: SourceSpec): OkSource {
     timestamps: { occurredAt: spec.occurredAt ?? OCCURRED_AT, capturedAt: spec.capturedAt ?? CAPTURED_AT, ...(spec.editedAt !== undefined ? { editedAt: spec.editedAt } : {}) },
     ...(spec.deadline !== undefined ? { explicitDeadline: spec.deadline } : {}),
     ...(spec.versionInfo !== undefined ? { versionInfo: spec.versionInfo } : {}),
-    sourceLinks: [{ url }], referencedObjects: [], supersedes: spec.supersedes ?? [],
+    sourceLinks: [{ url }], referencedObjects: [], supersedes: spec.supersedes ?? [], supersededBy: spec.supersededBy ?? [],
     unresolvedMarkers: spec.unresolvedMarkers ?? [], decisionMarkers: spec.decisionMarkers ?? [],
     statusMarkers: spec.statusMarkers ?? [], authoritySignals: spec.authoritySignals ?? [],
     navigationTarget: url,
@@ -68,10 +70,8 @@ function buildSource(spec: SourceSpec): OkSource {
   return result
 }
 
-const ALL_GOAL_FIELDS: Record<string, string> = {
-  outcome: "Ship the reviewed widget", workObject: "widget", decisionNeeded: "whether to ship",
-  scope: "the widget module", verifier: "human_owner", timeHorizon: "this quarter",
-}
+const ALL_GOAL_FIELDS: Record<string, string> = { outcome: "Ship the reviewed widget", workObject: "widget",
+  decisionNeeded: "whether to ship", scope: "the widget module", verifier: "human_owner", timeHorizon: "this quarter" }
 
 type SubjectSpec = {
   sources: readonly SourceSpec[]; goalFields?: "all" | "missing_timeHorizon"
@@ -86,12 +86,9 @@ function buildSubject(spec: SubjectSpec): ValidatedFormationSubjectResult {
   if (spec.goalFields === "missing_timeHorizon") delete goal.timeHorizon
   const gdc = buildFormationGoalDoneConditionCandidate({
     goal: goal as never,
-    doneCondition: {
-      outcome: "Ship the reviewed widget", verifier: "human_owner",
+    doneCondition: { outcome: "Ship the reviewed widget", verifier: "human_owner", humanInputRef: "human:reviewer",
       acceptanceCriteria: spec.doneCondition === "partial" ? [] : ["A human reviewer can verify the outcome."],
-      humanInputRef: "human:reviewer", missingFields: [], status: "partial",
-      invalidReasons: [], riskFlags: [], candidateOnly: true,
-    },
+      missingFields: [], status: "partial", invalidReasons: [], riskFlags: [], candidateOnly: true },
     independentClosure: spec.independentClosure ?? "unknown",
     validatedSources: candidates,
   })
@@ -115,8 +112,7 @@ function inspect(value: unknown): { strings: string[]; numbers: number[]; keys: 
     else if (Array.isArray(v)) v.forEach(walk)
     else if (v && typeof v === "object") for (const [k, inner] of Object.entries(v)) { keys.add(k); walk(inner) }
   }
-  walk(value)
-  return { strings, numbers, keys }
+  walk(value); return { strings, numbers, keys }
 }
 
 // The first row is the removed pair surface; the rest are raw-data, ranking and
@@ -126,9 +122,9 @@ const FORBIDDEN_OUTPUT_KEYS = [
   "groupingUnchanged", "membershipUnchanged", "subjectSideResolved", "targetSide", "sourceSide",
   "pairSides", "pairToken", "comparisonInput", "comparisonResult", "groupingContext", "present",
   "formationResult", "subject", "members", "goal", "goalDoneCondition", "doneCondition", "sourceRef",
-  "sourceObjectId", "title", "sanitizedSummary", "navigationTarget", "url", "actorAssertions",
-  "authoritySignals", "timestamps", "explicitDeadline", "tenantId", "userId", "roi", "ranking", "rank",
-  "score", "priority", "urgency", "whyNow", "grouped", "membership", "merged", "formalized",
+  "sourceObjectId", "title", "sanitizedSummary", "navigationTarget", "url", "actorAssertions", "statusMarkers",
+  "authoritySignals", "timestamps", "explicitDeadline", "versionInfo", "tenantId", "userId", "roi", "ranking",
+  "rank", "score", "priority", "urgency", "whyNow", "grouped", "membership", "merged", "formalized",
   "approved", "executed", "conflictFindings", "conflicts", "mergeCandidate", "splitCandidate"]
 
 function assertBoundedSafeOutput(result: unknown): void {
@@ -139,8 +135,7 @@ function assertBoundedSafeOutput(result: unknown): void {
   for (const s of strings) assert.ok(!/\bgrouping\b|\bpair\b|merge candidate|split proposal/i.test(s), `grouping-shaped text: ${s}`)
   assert.deepEqual(numbers, [], "F5 output must carry no numeric value")
   for (const s of strings) assert.ok(s.length <= 200, `output string exceeds 200 chars: ${s.slice(0, 40)}`)
-  for (const raw of [
-    "Dana", "Sam", "org/repo#", "org/other#", "Ship the reviewed widget", "widget", "Item ",
+  for (const raw of ["Dana", "Sam", "org/repo#", "org/other#", "Ship the reviewed widget", "widget", "Item ",
     "Summary for", "https://", "error response shape", "rollout decision", "human:reviewer",
   ]) for (const s of strings) assert.ok(!s.includes(raw), `raw value leaked into output: ${raw}`)
 }
@@ -151,9 +146,12 @@ function okResult(input: unknown) {
   if (!r.ok) throw new Error("unreachable")
   assert.equal(r.candidateOnly, true)
   assert.equal(r.humanReviewRequired, true)
-  // RESERVED and unreachable: no genuine F1A input may promote an actor.
+  // RESERVED and unreachable on EVERY successful result: no genuine F1A input may
+  // promote an actor, and none may claim nothing changed without a trusted baseline.
   assert.ok(!r.reasonCodes.includes("actor_known_structured_owner"), "reserved actor code emitted")
   assert.notEqual(r.factors.actor, "known", "actor was promoted to known")
+  assert.ok(!r.reasonCodes.includes("update_unchanged"), "reserved update code emitted")
+  assert.notEqual(r.factors.update, "unchanged", "reserved update factor emitted")
   assertBoundedSafeOutput(r)
   return r
 }
@@ -167,7 +165,8 @@ function rejects(input: unknown, reason: string, label: string): void {
 // ─── Closed vocabularies ─────────────────────────────────────────────────────
 
 test("factor vocabularies are exactly the closed sets and carry no grouping concept", () => {
-  // `actor: known` stays in the vocabulary as a RESERVED future state.
+  // `actor: known` and `update: unchanged` stay in the vocabulary as RESERVED.
+  assert.deepEqual([...RESERVED_STATE_PREDICTION_UPDATE_FACTORS], ["unchanged"])
   assert.deepEqual([
     [...STATE_PREDICTION_ACTOR_FACTORS], [...STATE_PREDICTION_LIMIT_FACTORS],
     [...STATE_PREDICTION_EVENT_TIME_FACTORS], [...STATE_PREDICTION_UPDATE_FACTORS],
@@ -205,6 +204,46 @@ for (const scenario of fixtures.subjectScenarios) {
   })
 }
 
+// ─── Update evidence boundary (the remediated blocker) ──────────────────────
+
+test("update needs an explicit non-inferred change EVENT; current state never proves one", () => {
+  const dm = (inferred: boolean): Entry[] => [{ kind: "decision_recorded", summary: "The rollout decision was recorded.", inferred }]
+  const sup = (inferred: boolean) => [{ provider: "github", sourceObjectId: "org/repo#99", inferred }]
+  const cases: [string, Partial<SourceSpec>][] = [
+    // Only an explicit relationship that IS a change event proves a change.
+    ["meaningful", { decisionMarkers: dm(false) }], ["meaningful", { supersedes: sup(false) }],
+    ["meaningful", { supersededBy: sup(false) }],
+    // A current status neither creates nor destroys that proof.
+    ["meaningful", { decisionMarkers: dm(false), statusMarkers: ["approved"] }],
+    ["meaningful", { decisionMarkers: dm(false), statusMarkers: ["open"] }],
+    // An inferred claim proves nothing.
+    ["unknown", { decisionMarkers: dm(true) }], ["unknown", { supersedes: sup(true) }], ["unknown", { supersededBy: sup(true) }],
+    // Current state is not a transition: one current version, an edit time, nothing.
+    ["unknown", { versionInfo: { value: "v3", inferred: false } }], ["unknown", { versionInfo: { value: "v3", inferred: true } }],
+    ["unknown", { editedAt: "2026-02-01T00:00:00Z" }], ["unknown", {}],
+    ...["approved", "merged", "closed", "changes_requested", "cancelled", "open", "draft"]
+      .map((s): [string, Partial<SourceSpec>] => ["unknown", { statusMarkers: [s] }]),
+  ]
+  for (const [i, [update, extra]] of cases.entries()) {
+    const r = okResult({ formationResult: subjectOf(`upd-${i}`, "org/repo#930", extra) })
+    assert.equal(r.factors.update, update, JSON.stringify(extra))
+    assert.ok(r.reasonCodes.includes(update === "meaningful" ? "update_meaningful_recorded" : "update_unknown_no_trusted_baseline"))
+  }
+})
+
+test("status markers stay source-state evidence and can never reach the update factor", () => {
+  // F1A still carries them verbatim; F5 reads them only for unresolved reporting.
+  const spec = { externalId: "sm-1", sourceObjectId: "org/repo#931", statusMarkers: ["approved", "changes_requested"] }
+  assert.deepEqual([...buildSource(spec).candidate.statusMarkers], ["approved", "changes_requested"])
+  const r = okResult({ formationResult: buildSubject({ sources: [spec], doneCondition: "complete", independentClosure: "independent" }) })
+  assert.equal(r.factors.update, "unknown")
+  assert.equal(r.factors.unresolved, "present")
+  const source = readFileSync(fileURLToPath(new URL("../app/lib/application/formation/statePrediction.ts", import.meta.url)), "utf8")
+  assert.ok(!/MEANINGFUL_STATUS_MARKERS/.test(source), "the current-status update promotion must not return")
+  const changeReader = source.slice(source.indexOf("function readChangeSignals"), source.indexOf("function classifyUpdate"))
+  assert.ok(changeReader.length > 0 && !changeReader.includes("statusMarkers"), "readChangeSignals must never read statusMarkers")
+})
+
 test("missing evidence stays missing; conflict-shaped evidence becomes unresolved only", () => {
   const missing = okResult({ formationResult: buildSubject({
     sources: [{ externalId: "miss-1", sourceObjectId: "org/repo#900" }],
@@ -215,12 +254,9 @@ test("missing evidence stays missing; conflict-shaped evidence becomes unresolve
   assert.ok(missing.reasonCodes.includes("missing_present"))
   // A settled/contested contradiction is reported, never resolved — and F5 has
   // no grouping input or output through which it could regroup anything.
-  const conflict = okResult({ formationResult: buildSubject({
-    sources: [
-      { externalId: "conf-1", sourceObjectId: "org/repo#901", statusMarkers: ["approved"] },
-      { externalId: "conf-2", sourceObjectId: "org/repo#902", statusMarkers: ["changes_requested"] }],
-    doneCondition: "complete", independentClosure: "independent",
-  }) })
+  const conflict = okResult({ formationResult: buildSubject({ doneCondition: "complete", independentClosure: "independent",
+    sources: [{ externalId: "conf-1", sourceObjectId: "org/repo#901", statusMarkers: ["approved"] },
+      { externalId: "conf-2", sourceObjectId: "org/repo#902", statusMarkers: ["changes_requested"] }] }) })
   assert.equal(conflict.factors.unresolved, "present")
   assert.equal(conflict.subjectState, "formal_candidate")
 })
@@ -236,12 +272,9 @@ test("an unbound authority signal never promotes actor certainty", () => {
     assert.equal(r.factors.authority, "structured", relation)
   }
   // One repeated display name across sources is still only an assertion.
-  const repeated = okResult({ formationResult: buildSubject({
-    sources: [
-      { externalId: "rep-1", sourceObjectId: "org/repo#921", actors: [{ name: "Dana" }], authoritySignals },
-      { externalId: "rep-2", sourceObjectId: "org/repo#922", actors: [{ name: "Dana" }], authoritySignals }],
-    doneCondition: "complete", independentClosure: "independent",
-  }) })
+  const repeated = okResult({ formationResult: buildSubject({ doneCondition: "complete", independentClosure: "independent",
+    sources: [{ externalId: "rep-1", sourceObjectId: "org/repo#921", actors: [{ name: "Dana" }], authoritySignals },
+      { externalId: "rep-2", sourceObjectId: "org/repo#922", actors: [{ name: "Dana" }], authoritySignals }] }) })
   assert.equal(repeated.factors.actor, "asserted")
   // Multiple distinct names, and provider identity, change nothing either.
   assert.equal(okResult({ formationResult: subjectOf("dist-1", "org/repo#923", { actors: [{ name: "Dana" }, { name: "Sam", relation: "assignee" }], authoritySignals }) }).factors.actor, "asserted")
@@ -259,10 +292,8 @@ test("an unbound authority signal never promotes actor certainty", () => {
 
 test("assertion, inference and provider identity are never promoted to fact", () => {
   // Asserted / inferred authority never becomes structured authority.
-  const signals = [
-    [{ kind: "accepted_status", inferred: true }], [{ kind: "owner_of_record", inferred: true }],
-    [{ kind: "signed_off_review", inferred: true }], [{ kind: "decision_maker_named", inferred: false }],
-  ]
+  const signals = [[{ kind: "accepted_status", inferred: true }], [{ kind: "owner_of_record", inferred: true }],
+    [{ kind: "signed_off_review", inferred: true }], [{ kind: "decision_maker_named", inferred: false }]]
   for (const [i, authoritySignals] of signals.entries()) {
     const r = okResult({ formationResult: subjectOf(`auth-${i}`, "org/repo#903", { authoritySignals }) })
     assert.equal(r.factors.authority, "asserted")
@@ -285,13 +316,10 @@ test("assertion, inference and provider identity are never promoted to fact", ()
 
 test("a cloned, forged, wrapped, bare or failed F1C subject rejects", () => {
   const good = subjectOf("prov-1", "org/repo#905")
-  const bads: unknown[] = [
-    { ...good }, JSON.parse(JSON.stringify(good)), structuredClone(good),
-    Object.create(good as object), new Proxy(good as object, {}),
-    (good as { candidate?: unknown }).candidate,
+  const bads: unknown[] = [{ ...good }, JSON.parse(JSON.stringify(good)), structuredClone(good),
+    Object.create(good as object), new Proxy(good as object, {}), (good as { candidate?: unknown }).candidate,
     { ok: true, candidateOnly: true, candidate: { members: [], goalDoneCondition: {}, humanReviewRequired: true, candidateOnly: true } },
-    buildWorkUnitFormationCandidate({ members: [], goalDoneCondition: {} } as never),
-  ]
+    buildWorkUnitFormationCandidate({ members: [], goalDoneCondition: {} } as never)]
   for (const [i, bad] of bads.entries()) rejects({ formationResult: bad }, "subject_not_validated", `clone ${i}`)
 })
 
@@ -305,14 +333,10 @@ test("mutating the public F1C result after attestation cannot alter the predicti
 })
 
 test("the subject is read exactly once; hostile and malformed input fails closed", () => {
-  const first = subjectOf("read-1", "org/repo#907", {
-    actors: [{ name: "Dana" }], authoritySignals: [{ kind: "owner_of_record", inferred: false }],
-    deadline: { value: "2026-08-01T00:00:00Z", inferred: false }, statusMarkers: ["approved"],
-  })
-  const second = buildSubject({
-    sources: [{ externalId: "read-2", sourceObjectId: "org/repo#908" }],
-    goalFields: "missing_timeHorizon", doneCondition: "partial", independentClosure: "unknown",
-  })
+  const first = subjectOf("read-1", "org/repo#907", { actors: [{ name: "Dana" }], statusMarkers: ["approved"],
+    authoritySignals: [{ kind: "owner_of_record", inferred: false }], deadline: { value: "2026-08-01T00:00:00Z", inferred: false } })
+  const second = buildSubject({ sources: [{ externalId: "read-2", sourceObjectId: "org/repo#908" }],
+    goalFields: "missing_timeHorizon", doneCondition: "partial", independentClosure: "unknown" })
   const expected = okResult({ formationResult: first })
   assert.notDeepEqual(okResult({ formationResult: second }).factors, expected.factors)
   let reads = 0
@@ -321,23 +345,18 @@ test("the subject is read exactly once; hostile and malformed input fails closed
   assert.equal(reads, 1, "the subject must be read exactly once")
   assert.deepEqual(r.factors, expected.factors)
   assert.deepEqual(r.reasonCodes, expected.reasonCodes)
-  for (const hostile of [
-    new Proxy({}, { get() { throw new Error("hostile accessor") } }),
-    { get formationResult(): never { throw new Error("hostile getter") } },
-  ]) rejects(hostile, "input_unreadable", "hostile accessor")
+  for (const hostile of [new Proxy({}, { get() { throw new Error("hostile accessor") } }),
+    { get formationResult(): never { throw new Error("hostile getter") } }]) rejects(hostile, "input_unreadable", "hostile accessor")
   for (const [i, bad] of [null, undefined, 42, "subject", [], {}, { formationResult: null }, { formationResult: {} }].entries()) {
     const failed = predictFormationState(bad as never)
     assert.equal(failed.ok, false, `malformed input ${i}`)
-    if (!failed.ok) assert.ok(STATE_PREDICTION_REJECTIONS.includes(failed.reason))
-  }
+    if (!failed.ok) assert.ok(STATE_PREDICTION_REJECTIONS.includes(failed.reason)) }
 })
 
 test("repeated predictions are byte-stable, deeply equal and non-aliasing", () => {
-  const formationResult = subjectOf("det-1", "org/repo#909", {
-    actors: [{ name: "Dana" }], authoritySignals: [{ kind: "owner_of_record", inferred: false }],
-    deadline: { value: "2026-08-01T00:00:00Z", inferred: false }, statusMarkers: ["approved"],
-    unresolvedMarkers: [{ kind: "open_question", summary: "One question is still open." }],
-  })
+  const formationResult = subjectOf("det-1", "org/repo#909", { actors: [{ name: "Dana" }], statusMarkers: ["approved"],
+    authoritySignals: [{ kind: "owner_of_record", inferred: false }], deadline: { value: "2026-08-01T00:00:00Z", inferred: false },
+    unresolvedMarkers: [{ kind: "open_question", summary: "One question is still open." }] })
   const first = okResult({ formationResult })
   const second = okResult({ formationResult })
   assert.deepEqual(second, first)
@@ -363,8 +382,7 @@ test("pair-shaped and other forbidden caller bindings fail closed value-free", (
     rejects({ formationResult, get [field]() { read = true; return {} } }, "grouping_context_not_supported", field)
     assert.equal(read, false, `${field} must never be read`)
   }
-  for (const field of [
-    "candidateId", "targetSide", "sourceSide", "pairSides", "pairToken", "pairGroupingContext",
+  for (const field of ["candidateId", "targetSide", "sourceSide", "pairSides", "pairToken", "pairGroupingContext",
     "roi", "score", "rank", "ranking", "priority", "urgency", "conflictFindings", "membership",
     "approved", "executed", "candidateOnly", "humanReviewRequired",
   ]) rejects({ formationResult, [field]: "x" }, "unbound_reference_supplied", field)
@@ -391,15 +409,12 @@ test("an unrelated subject can no longer be composed with a genuine grouping out
 test("the F5 module imports only subject authorities and no F4 grouping-outcome API", () => {
   const modulePath = fileURLToPath(new URL("../app/lib/application/formation/statePrediction.ts", import.meta.url))
   const source = readFileSync(modulePath, "utf8")
-  assert.deepEqual([...source.matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1]).sort(), [
-    "./sourceContract.ts", "./statePredictionTypes.ts", "./states.ts", "./workUnitFormationAggregate.ts",
-  ])
-  for (const forbidden of [
-    "snapshotValidatedFormationGroupingOutcomeResult", "attestValidatedGroupingComparison",
+  assert.deepEqual([...source.matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1]).sort(),
+    ["./sourceContract.ts", "./statePredictionTypes.ts", "./states.ts", "./workUnitFormationAggregate.ts"])
+  for (const forbidden of ["snapshotValidatedFormationGroupingOutcomeResult", "attestValidatedGroupingComparison",
     "attestedGroupingPairTokenMatches", "GroupingComparisonInput", "AttestedGroupingPairToken",
     "SuccessfulFormationGroupingOutcomeResult", "SuccessfulFormationGroupingOutcomeSnapshot",
-    "./grouping.ts", "./groupingTypes.ts",
-  ]) assert.ok(!source.includes(forbidden), `F5 must not reference ${forbidden}`)
+    "./grouping.ts", "./groupingTypes.ts"]) assert.ok(!source.includes(forbidden), `F5 must not reference ${forbidden}`)
   for (const forbidden of [/\bfetch\s*\(/, /\bDate\.now\b/, /\bMath\.random\b/, /orchestrator/i]) {
     assert.ok(!forbidden.test(source), `F5 must not contain ${forbidden}`)
   }

@@ -2,27 +2,29 @@
  * F5 — Deterministic State Prediction (SUBJECT-SCOPED).
  *
  * F5 explains ONE already-validated formation subject — actor, limit, event
- * time, meaningful update, authority, unresolved and missing evidence.
+ * time, update, authority, unresolved and missing evidence.
  *
  * F5 consumes NO pair artifact. An earlier head took a comparison input and an
  * F4 grouping outcome alongside the subject and reported that verdict as
- * "pair-scoped context": both were independently attested, but nothing proved
- * the subject was either side of that pair. No trusted immutable resolver
- * exists and inventing one is out of scope, so the capability is REMOVED rather
+ * "pair-scoped context", though nothing proved the subject was either side of
+ * that pair; no trusted resolver exists, so the capability is REMOVED rather
  * than disclosed. F4 remains the sole authority for pair verdicts, merge/split
- * proposals and membership; `comparisonInput` and `groupingOutcomeResult` fail
- * closed. The same rule governs the actor factor below: two unbound records
- * never establish the relationship between them.
+ * proposals and membership; `comparisonInput`/`groupingOutcomeResult` fail closed.
+ *
+ * The SAME rule governs the actor and update factors: two unbound records never
+ * establish the relationship between them, and one CURRENT value never
+ * establishes a transition. A source status, a single current version and an
+ * edit timestamp are all current STATE; F1A carries no previous status,
+ * transition edge, transition event or trusted prior snapshot, so `update`
+ * requires an explicit non-inferred change EVENT and `unchanged` is RESERVED.
  *
  * Authorities consumed read-only: F1C is the sole validated-subject authority
  * (`snapshotValidatedWorkUnitFormationResult`; every factor comes from the
  * DETACHED inert snapshot it returns); F1B, through that snapshot, is the sole
  * Done Condition status authority (read, never recomputed); F4 is the sole
  * formation-state authority (`mapFormationSubjectState` over the same attested
- * subject, so no caller-supplied state exists to forge).
- *
- * The subject is read EXACTLY ONCE, so a changing accessor cannot split
- * validation from reporting, and a hostile accessor fails closed. Output is
+ * subject). The subject is read EXACTLY ONCE, so a changing accessor cannot
+ * split validation from reporting and a hostile accessor fails closed. Output is
  * closed enums, closed reason codes and constant sentences only, with no
  * external call, wall-clock or randomness read.
  */
@@ -48,8 +50,6 @@ const STRUCTURED_AUTHORITY_SIGNAL_KINDS: ReadonlySet<string> = new Set([
 ])
 /** Actor relations that assert responsibility without proving it. */
 const ASSERTED_ACTOR_RELATIONS: ReadonlySet<string> = new Set(["owner_claimed", "approver_claimed"])
-/** Status values recording a real transition, not mere activity. */
-const MEANINGFUL_STATUS_MARKERS: ReadonlySet<string> = new Set(["approved", "changes_requested", "merged", "closed", "cancelled"])
 /** Contradiction-shaped pairs — reported as unresolved, never resolved. */
 const SETTLED_STATUS_MARKERS: ReadonlySet<string> = new Set(["approved", "merged"])
 const CONTESTED_STATUS_MARKERS: ReadonlySet<string> = new Set(["changes_requested", "cancelled"])
@@ -67,14 +67,15 @@ const NARRATIVE: Record<StatePredictionReasonCode, string> = {
   event_time_known: "Every source event time is recorded and internally consistent.",
   event_time_uncertain: "At least one source event time is inconsistent with its capture, so timing is uncertain.",
   event_time_absent: "No usable source event time is recorded.",
-  update_meaningful_recorded: "A meaningful state change is recorded on at least one source.",
+  update_meaningful_recorded: "An explicit change event is recorded on at least one source.",
+  // RESERVED: unreachable until a contract supplies a trusted previous state.
   update_unchanged: "No source records a change beyond its original state.",
-  update_unknown_inferred_only: "Only inferred change signals are present, so whether anything meaningful changed is unknown.",
+  update_unknown_no_trusted_baseline: "The available evidence does not establish whether a meaningful change occurred.",
   authority_structured_signal: "At least one source carries a recorded structural authority signal.",
   authority_asserted_only: "Authority is only asserted or inferred, never structurally recorded.",
   authority_absent: "No source carries an authority signal.",
   unresolved_present: "At least one open item or contradiction-shaped signal is carried by the sources.",
-  unresolved_unknown_inferred_only: "Only inferred change claims are present, so whether anything is unresolved is unknown.",
+  unresolved_unknown_no_trusted_baseline: "The available evidence does not establish whether anything is unresolved.",
   unresolved_absent: "No source carries an open item.",
   missing_present: "Required Goal or Done Condition evidence is still missing.",
   missing_absent: "No required Goal or Done Condition evidence is missing.",
@@ -87,9 +88,9 @@ const CODES = {
   actor: { known: "actor_known_structured_owner", asserted: "actor_asserted_only", unknown: "actor_unknown_no_assertion" },
   limit: { explicit: "limit_explicit_declared", inferred: "limit_inferred_not_authoritative", absent: "limit_absent" },
   eventTime: { known: "event_time_known", uncertain: "event_time_uncertain", absent: "event_time_absent" },
-  update: { meaningful: "update_meaningful_recorded", unchanged: "update_unchanged", unknown: "update_unknown_inferred_only" },
+  update: { meaningful: "update_meaningful_recorded", unchanged: "update_unchanged", unknown: "update_unknown_no_trusted_baseline" },
   authority: { structured: "authority_structured_signal", asserted: "authority_asserted_only", absent: "authority_absent" },
-  unresolved: { present: "unresolved_present", absent: "unresolved_absent", unknown: "unresolved_unknown_inferred_only" },
+  unresolved: { present: "unresolved_present", absent: "unresolved_absent", unknown: "unresolved_unknown_no_trusted_baseline" },
   missing: { present: "missing_present", absent: "missing_absent" },
   subjectState: { formal_candidate: "subject_state_formal_candidate", clarification_needed: "subject_state_clarification_needed", context_only: "subject_state_context_only" },
 } as const satisfies Record<string, Record<string, StatePredictionReasonCode>>
@@ -179,36 +180,35 @@ function classifyEventTime(sources: readonly FormationSourceCandidate[]): StateP
   return uncertain ? "uncertain" : "known"
 }
 
-/** Change signals split into recorded facts and merely inferred claims. */
-type ChangeSignals = { readonly meaningful: boolean; readonly inferredOnly: boolean }
+/** `explicitRecordedChange` is the ONLY proof of change: an explicit non-inferred
+ * relationship that IS itself a change event. `uncertainOrInferredChangeEvidence`
+ * is everything merely change-SHAPED — an inferred claim, or a CURRENT value. */
+type ChangeSignals = { readonly explicitRecordedChange: boolean; readonly uncertainOrInferredChangeEvidence: boolean }
 
+// `statusMarkers` is deliberately NOT read here: F2 defines it as CURRENT SOURCE
+// STATUS only, so no status value can prove a transition. `versionInfo` likewise
+// carries one CURRENT version and no previous one, so even uninferred it is state.
 function readChangeSignals(sources: readonly FormationSourceCandidate[]): ChangeSignals {
-  let meaningful = false
-  let inferredOnly = false
+  let explicit = false
+  let uncertain = false
   for (const source of sources) {
     for (const key of ["decisionMarkers", "supersedes", "supersededBy"] as const) {
       for (const entry of list(field(source, key))) {
-        if (record(entry)?.inferred === false) meaningful = true
-        else inferredOnly = true
+        if (record(entry)?.inferred === false) explicit = true
+        else uncertain = true
       }
     }
-    for (const status of list(field(source, "statusMarkers"))) {
-      if (typeof status === "string" && MEANINGFUL_STATUS_MARKERS.has(status)) meaningful = true
-    }
-    const version = record(field(source, "versionInfo"))
-    if (version !== null) {
-      if (version.inferred === false) meaningful = true
-      else inferredOnly = true
-    }
-    // An edit timestamp alone is activity, never a meaningful update.
-    if (record(field(source, "timestamps"))?.editedAt !== undefined) inferredOnly = true
+    // A current version value and an edit timestamp are activity — never transitions.
+    if (record(field(source, "versionInfo")) !== null || record(field(source, "timestamps"))?.editedAt !== undefined) uncertain = true
   }
-  return { meaningful, inferredOnly }
+  return { explicitRecordedChange: explicit, uncertainOrInferredChangeEvidence: uncertain }
 }
 
+/** `unchanged` is RESERVED and never returned: proving nothing changed needs a
+ * trusted previous-state baseline, and none exists. Absence of change evidence is
+ * never evidence that nothing changed, so everything unproven reports `unknown`. */
 function classifyUpdate(change: ChangeSignals): StatePredictionUpdateFactor {
-  if (change.meaningful) return "meaningful"
-  return change.inferredOnly ? "unknown" : "unchanged"
+  return change.explicitRecordedChange ? "meaningful" : "unknown"
 }
 
 function classifyAuthority(sources: readonly FormationSourceCandidate[]): StatePredictionAuthorityFactor {
@@ -246,10 +246,10 @@ function classifyUnresolved(
       if (CONTESTED_STATUS_MARKERS.has(status)) contested = true
     }
   }
-  // Contradiction-shaped evidence is REPORTED, never resolved, and can change
-  // no membership: F5 has no grouping input or output to change.
+  // Contradiction-shaped evidence is REPORTED, never resolved, and changes no
+  // membership. This is the ONLY status read left, and it never reaches `update`.
   if (settled && contested) return "present"
-  return change.inferredOnly ? "unknown" : "absent"
+  return change.uncertainOrInferredChangeEvidence ? "unknown" : "absent"
 }
 
 function classifyMissing(candidate: WorkUnitFormationCandidate): StatePredictionMissingFactor {

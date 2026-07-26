@@ -2,13 +2,12 @@
  * F5 — Deterministic State Prediction — closed types.
  *
  * SUBJECT-SCOPED ONLY. F5 explains exactly one already-validated formation
- * subject and consumes no pair artifact of any kind, so it can never associate
- * a subject with a pair it was never proven to belong to. F4 remains the sole
- * authority for pair verdicts, merge/split proposals and membership.
- *
- * F5 decides no Goal Identity, changes no membership, resolves no conflict,
- * formalizes nothing, approves nothing, executes nothing, and emits no F6
- * conflict finding and no F7 ranking. There is deliberately no numeric field.
+ * subject and consumes no pair artifact of any kind, so it can never associate a
+ * subject with a pair it was never proven to belong to. F4 remains the sole
+ * authority for pair verdicts, merge/split proposals and membership. F5 decides
+ * no Goal Identity, changes no membership, resolves no conflict, formalizes
+ * nothing, approves nothing, executes nothing, and emits no F6 conflict finding
+ * and no F7 ranking. There is deliberately no numeric field.
  */
 
 import type { WorkUnitFormationResult } from "./workUnitFormationAggregate.ts"
@@ -16,12 +15,12 @@ import type { WorkUnitFormationResult } from "./workUnitFormationAggregate.ts"
 /** The ONLY admissible input: a successful F1C aggregate result. */
 export type ValidatedFormationSubjectResult = Extract<WorkUnitFormationResult, { readonly ok: true }>
 
-// Closed factor vocabulary. `actor: known` is RESERVED and unreachable — F1A
-// binds no actor identity to an authority signal, so no current value proves a
-// named actor is the recorded owner; an asserted actor stays asserted. An
-// inferred limit is never a fact; event time is the SOURCE event, never our
-// record time; an edit alone is not a meaningful update; provider identity is
-// never authority; unresolved is never "unread"; missing stays missing.
+// Closed factor vocabulary. `actor: known` and `update: unchanged` are RESERVED
+// and unreachable — F1A binds no actor identity to an authority signal, and no
+// trusted previous-state baseline exists. An inferred limit is never a fact;
+// event time is the SOURCE event, never our record time; an edit alone is not a
+// meaningful update; provider identity is never authority; unresolved is never
+// "unread"; missing stays missing.
 export const STATE_PREDICTION_ACTOR_FACTORS = ["known", "asserted", "unknown"] as const
 export const STATE_PREDICTION_LIMIT_FACTORS = ["explicit", "inferred", "absent"] as const
 export const STATE_PREDICTION_EVENT_TIME_FACTORS = ["known", "uncertain", "absent"] as const
@@ -37,6 +36,12 @@ export type StatePredictionUpdateFactor = (typeof STATE_PREDICTION_UPDATE_FACTOR
 export type StatePredictionAuthorityFactor = (typeof STATE_PREDICTION_AUTHORITY_FACTORS)[number]
 export type StatePredictionUnresolvedFactor = (typeof STATE_PREDICTION_UNRESOLVED_FACTORS)[number]
 export type StatePredictionMissingFactor = (typeof STATE_PREDICTION_MISSING_FACTORS)[number]
+
+// RESERVED and unreachable from every current input, in the same shape F4 uses
+// for its reserved `conflict`. Proving nothing changed needs a trusted previous-
+// state baseline; F5 gets one attested subject and no prior snapshot, so absence
+// of change evidence is NEVER evidence that nothing changed.
+export const RESERVED_STATE_PREDICTION_UPDATE_FACTORS = ["unchanged"] as const satisfies readonly StatePredictionUpdateFactor[]
 
 /** The complete closed factor set. There is no combined or universal value. */
 export type FormationStatePredictionFactors = {
@@ -55,9 +60,9 @@ export const STATE_PREDICTION_REASON_CODES = [
   "actor_known_structured_owner", "actor_asserted_only", "actor_unknown_no_assertion",
   "limit_explicit_declared", "limit_inferred_not_authoritative", "limit_absent",
   "event_time_known", "event_time_uncertain", "event_time_absent",
-  "update_meaningful_recorded", "update_unchanged", "update_unknown_inferred_only",
+  "update_meaningful_recorded", "update_unchanged", "update_unknown_no_trusted_baseline",
   "authority_structured_signal", "authority_asserted_only", "authority_absent",
-  "unresolved_present", "unresolved_unknown_inferred_only", "unresolved_absent",
+  "unresolved_present", "unresolved_unknown_no_trusted_baseline", "unresolved_absent",
   "missing_present", "missing_absent", "subject_state_formal_candidate",
   "subject_state_clarification_needed", "subject_state_context_only",
 ] as const
