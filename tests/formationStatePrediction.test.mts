@@ -22,7 +22,7 @@ import { buildWorkUnitFormationCandidate } from "../app/lib/application/formatio
 import { compareGroupingSubjects } from "../app/lib/application/formation/grouping.ts"
 import { mapFormationGroupingOutcome } from "../app/lib/application/formation/states.ts"
 import {
-  RESERVED_STATE_PREDICTION_UPDATE_FACTORS, STATE_PREDICTION_ACTOR_FACTORS,
+  RESERVED_STATE_PREDICTION_UNRESOLVED_FACTORS, RESERVED_STATE_PREDICTION_UPDATE_FACTORS, STATE_PREDICTION_ACTOR_FACTORS,
   STATE_PREDICTION_AUTHORITY_FACTORS, STATE_PREDICTION_EVENT_TIME_FACTORS,
   STATE_PREDICTION_LIMIT_FACTORS, STATE_PREDICTION_MISSING_FACTORS,
   STATE_PREDICTION_REASON_CODES, STATE_PREDICTION_REJECTIONS,
@@ -40,32 +40,27 @@ const OCCURRED_AT = "2026-01-01T00:00:00Z"
 type Claim = { provider: string; sourceObjectId: string; inferred: boolean }
 type SourceSpec = {
   externalId: string; sourceObjectId: string; provider?: string
-  occurredAt?: string; capturedAt?: string; editedAt?: string
+  occurredAt?: string; capturedAt?: string; editedAt?: string; statusMarkers?: readonly string[]
   actors?: readonly { name: string; relation?: string }[]
   deadline?: { value: string; inferred: boolean }; versionInfo?: { value: string; inferred: boolean }
-  supersedes?: readonly Claim[]; supersededBy?: readonly Claim[]
+  supersedes?: readonly Claim[]; supersededBy?: readonly Claim[]; authoritySignals?: readonly Entry[]
   unresolvedMarkers?: readonly Entry[]; decisionMarkers?: readonly Entry[]
-  statusMarkers?: readonly string[]; authoritySignals?: readonly Entry[]
 }
 
 function buildSource(spec: SourceSpec): OkSource {
   const provider = spec.provider ?? "github"
   const url = `https://example.com/${provider}/${encodeURIComponent(spec.externalId)}`
   const result = buildFormationSourceCandidate(JSON.stringify({
-    provider,
+    provider, sourceObjectId: spec.sourceObjectId, navigationTarget: url,
     sourceRef: { source: provider, externalId: spec.externalId, url, capturedAt: CAPTURED_AT },
-    sourceObjectId: spec.sourceObjectId,
-    title: `Item ${spec.externalId}`,
-    sanitizedSummary: `Summary for ${spec.externalId}`,
+    title: `Item ${spec.externalId}`, sanitizedSummary: `Summary for ${spec.externalId}`,
     actorAssertions: (spec.actors ?? []).map((a) => ({ name: a.name, assertedRelation: a.relation ?? "author" })),
     timestamps: { occurredAt: spec.occurredAt ?? OCCURRED_AT, capturedAt: spec.capturedAt ?? CAPTURED_AT, ...(spec.editedAt !== undefined ? { editedAt: spec.editedAt } : {}) },
     ...(spec.deadline !== undefined ? { explicitDeadline: spec.deadline } : {}),
     ...(spec.versionInfo !== undefined ? { versionInfo: spec.versionInfo } : {}),
     sourceLinks: [{ url }], referencedObjects: [], supersedes: spec.supersedes ?? [], supersededBy: spec.supersededBy ?? [],
     unresolvedMarkers: spec.unresolvedMarkers ?? [], decisionMarkers: spec.decisionMarkers ?? [],
-    statusMarkers: spec.statusMarkers ?? [], authoritySignals: spec.authoritySignals ?? [],
-    navigationTarget: url,
-  }))
+    statusMarkers: spec.statusMarkers ?? [], authoritySignals: spec.authoritySignals ?? [] }))
   if (!result.ok) throw new Error(`F1A fixture rejected (${spec.externalId}): ${JSON.stringify(result.findings)}`)
   return result
 }
@@ -85,16 +80,12 @@ function buildSubject(spec: SubjectSpec): ValidatedFormationSubjectResult {
   const goal: Record<string, string> = spec.minimalGoal ? {} : { ...ALL_GOAL_FIELDS }
   if (spec.goalFields === "missing_timeHorizon") delete goal.timeHorizon
   const gdc = buildFormationGoalDoneConditionCandidate({
-    goal: goal as never,
+    goal: goal as never, independentClosure: spec.independentClosure ?? "unknown", validatedSources: candidates,
     doneCondition: { outcome: "Ship the reviewed widget", verifier: "human_owner", humanInputRef: "human:reviewer",
       acceptanceCriteria: spec.doneCondition === "partial" ? [] : ["A human reviewer can verify the outcome."],
-      missingFields: [], status: "partial", invalidReasons: [], riskFlags: [], candidateOnly: true },
-    independentClosure: spec.independentClosure ?? "unknown",
-    validatedSources: candidates,
-  })
+      missingFields: [], status: "partial", invalidReasons: [], riskFlags: [], candidateOnly: true } })
   const f1c = buildWorkUnitFormationCandidate({
-    members: results.map((r) => ({ sourceResult: r, role: "evidence" })), goalDoneCondition: gdc,
-  } as never)
+    members: results.map((r) => ({ sourceResult: r, role: "evidence" })), goalDoneCondition: gdc } as never)
   if (!f1c.ok) throw new Error(`F1C build failed: ${JSON.stringify(f1c)}`)
   return f1c as ValidatedFormationSubjectResult
 }
@@ -118,14 +109,13 @@ function inspect(value: unknown): { strings: string[]; numbers: number[]; keys: 
 // The first row is the removed pair surface; the rest are raw-data, ranking and
 // lifecycle fields that must never appear.
 const FORBIDDEN_OUTPUT_KEYS = [
-  "pairGroupingContext", "groupingOutcome", "basisVerdict", "proposalStrength", "defaultGrouped",
-  "groupingUnchanged", "membershipUnchanged", "subjectSideResolved", "targetSide", "sourceSide",
-  "pairSides", "pairToken", "comparisonInput", "comparisonResult", "groupingContext", "present",
-  "formationResult", "subject", "members", "goal", "goalDoneCondition", "doneCondition", "sourceRef",
-  "sourceObjectId", "title", "sanitizedSummary", "navigationTarget", "url", "actorAssertions", "statusMarkers",
-  "authoritySignals", "timestamps", "explicitDeadline", "versionInfo", "tenantId", "userId", "roi", "ranking",
-  "rank", "score", "priority", "urgency", "whyNow", "grouped", "membership", "merged", "formalized",
-  "approved", "executed", "conflictFindings", "conflicts", "mergeCandidate", "splitCandidate"]
+  "pairGroupingContext", "groupingOutcome", "basisVerdict", "proposalStrength", "defaultGrouped", "groupingUnchanged",
+  "membershipUnchanged", "subjectSideResolved", "targetSide", "sourceSide", "pairSides", "pairToken", "comparisonInput",
+  "comparisonResult", "groupingContext", "present", "formationResult", "subject", "members", "goal", "goalDoneCondition",
+  "doneCondition", "sourceRef", "sourceObjectId", "title", "sanitizedSummary", "navigationTarget", "url", "actorAssertions",
+  "statusMarkers", "authoritySignals", "timestamps", "explicitDeadline", "versionInfo", "tenantId", "userId", "roi", "ranking",
+  "rank", "score", "priority", "urgency", "whyNow", "grouped", "membership", "merged", "formalized", "approved", "executed",
+  "conflictFindings", "conflicts", "mergeCandidate", "splitCandidate"]
 
 function assertBoundedSafeOutput(result: unknown): void {
   const { strings, numbers, keys } = inspect(result)
@@ -152,6 +142,8 @@ function okResult(input: unknown) {
   assert.notEqual(r.factors.actor, "known", "actor was promoted to known")
   assert.ok(!r.reasonCodes.includes("update_unchanged"), "reserved update code emitted")
   assert.notEqual(r.factors.update, "unchanged", "reserved update factor emitted")
+  assert.ok(!r.reasonCodes.includes("unresolved_unknown"), "reserved unresolved code emitted")
+  assert.notEqual(r.factors.unresolved, "unknown", "reserved unresolved factor emitted")
   assertBoundedSafeOutput(r)
   return r
 }
@@ -166,7 +158,7 @@ function rejects(input: unknown, reason: string, label: string): void {
 
 test("factor vocabularies are exactly the closed sets and carry no grouping concept", () => {
   // `actor: known` and `update: unchanged` stay in the vocabulary as RESERVED.
-  assert.deepEqual([...RESERVED_STATE_PREDICTION_UPDATE_FACTORS], ["unchanged"])
+  assert.deepEqual([[...RESERVED_STATE_PREDICTION_UPDATE_FACTORS], [...RESERVED_STATE_PREDICTION_UNRESOLVED_FACTORS]], [["unchanged"], ["unknown"]])
   assert.deepEqual([
     [...STATE_PREDICTION_ACTOR_FACTORS], [...STATE_PREDICTION_LIMIT_FACTORS],
     [...STATE_PREDICTION_EVENT_TIME_FACTORS], [...STATE_PREDICTION_UPDATE_FACTORS],
@@ -206,27 +198,32 @@ for (const scenario of fixtures.subjectScenarios) {
 
 // ─── Update evidence boundary (the remediated blocker) ──────────────────────
 
-test("update needs an explicit non-inferred change EVENT; current state never proves one", () => {
+test("update needs an explicit change EVENT, unresolved needs unresolved evidence, neither drives the other", () => {
   const dm = (inferred: boolean): Entry[] => [{ kind: "decision_recorded", summary: "The rollout decision was recorded.", inferred }]
   const sup = (inferred: boolean) => [{ provider: "github", sourceObjectId: "org/repo#99", inferred }]
-  const cases: [string, Partial<SourceSpec>][] = [
-    // Only an explicit relationship that IS a change event proves a change.
-    ["meaningful", { decisionMarkers: dm(false) }], ["meaningful", { supersedes: sup(false) }],
-    ["meaningful", { supersededBy: sup(false) }],
-    // A current status neither creates nor destroys that proof.
-    ["meaningful", { decisionMarkers: dm(false), statusMarkers: ["approved"] }],
-    ["meaningful", { decisionMarkers: dm(false), statusMarkers: ["open"] }],
-    // An inferred claim proves nothing.
-    ["unknown", { decisionMarkers: dm(true) }], ["unknown", { supersedes: sup(true) }], ["unknown", { supersededBy: sup(true) }],
-    // Current state is not a transition: one current version, an edit time, nothing.
-    ["unknown", { versionInfo: { value: "v3", inferred: false } }], ["unknown", { versionInfo: { value: "v3", inferred: true } }],
-    ["unknown", { editedAt: "2026-02-01T00:00:00Z" }], ["unknown", {}],
+  const um = (kind: string): Entry[] => [{ kind, summary: "One item is still open." }]
+  const cases: [string, string, Partial<SourceSpec>][] = [
+    // Only an explicit relationship that IS a change event proves a change, and no
+    ["meaningful", "absent", { decisionMarkers: dm(false) }], ["meaningful", "absent", { supersedes: sup(false) }],
+    ["meaningful", "absent", { supersededBy: sup(false) }], ["meaningful", "absent", { decisionMarkers: dm(false), statusMarkers: ["approved"] }],
+    ["meaningful", "absent", { decisionMarkers: dm(false), statusMarkers: ["open"] }],
+    // An inferred claim proves no change and says nothing about open items.
+    ["unknown", "absent", { decisionMarkers: dm(true) }], ["unknown", "absent", { supersedes: sup(true) }],
+    ["unknown", "absent", { supersededBy: sup(true) }],
+    // Current state is never a transition: one current version, an edit time, nothing.
+    ["unknown", "absent", { versionInfo: { value: "v3", inferred: false } }], ["unknown", "absent", { versionInfo: { value: "v3", inferred: true } }],
+    ["unknown", "absent", { editedAt: "2026-02-01T00:00:00Z" }], ["unknown", "absent", {}],
     ...["approved", "merged", "closed", "changes_requested", "cancelled", "open", "draft"]
-      .map((s): [string, Partial<SourceSpec>] => ["unknown", { statusMarkers: [s] }]),
+      .map((v): [string, string, Partial<SourceSpec>] => ["unknown", "absent", { statusMarkers: [v] }]),
+    // Unresolved needs unresolved-specific evidence, and it never alters update.
+    ...["open_question", "unresolved_review", "unanswered_request", "missing_approval", "blocker_claim"]
+      .map((k): [string, string, Partial<SourceSpec>] => ["unknown", "present", { unresolvedMarkers: um(k) }]),
+    ["meaningful", "present", { decisionMarkers: dm(false), unresolvedMarkers: um("open_question") }],
   ]
-  for (const [i, [update, extra]] of cases.entries()) {
-    const r = okResult({ formationResult: subjectOf(`upd-${i}`, "org/repo#930", extra) })
+  for (const [i, [update, unresolved, extra]] of cases.entries()) {
+    const r = okResult({ formationResult: subjectOf(`f-${i}`, "org/repo#930", extra) })
     assert.equal(r.factors.update, update, JSON.stringify(extra))
+    assert.equal(r.factors.unresolved, unresolved, JSON.stringify(extra))
     assert.ok(r.reasonCodes.includes(update === "meaningful" ? "update_meaningful_recorded" : "update_unknown_no_trusted_baseline"))
   }
 })
@@ -235,16 +232,29 @@ test("status markers stay source-state evidence and can never reach the update f
   // F1A still carries them verbatim; F5 reads them only for unresolved reporting.
   const spec = { externalId: "sm-1", sourceObjectId: "org/repo#931", statusMarkers: ["approved", "changes_requested"] }
   assert.deepEqual([...buildSource(spec).candidate.statusMarkers], ["approved", "changes_requested"])
-  const r = okResult({ formationResult: buildSubject({ sources: [spec], doneCondition: "complete", independentClosure: "independent" }) })
-  assert.equal(r.factors.update, "unknown")
-  assert.equal(r.factors.unresolved, "present")
+  // A bounded settled/contested contradiction is the ONLY other unresolved form.
+  for (const [a, b] of [["approved", "changes_requested"], ["merged", "cancelled"]]) {
+    const c = okResult({ formationResult: buildSubject({ doneCondition: "complete", independentClosure: "independent",
+      sources: [a, b].map((v, j) => ({ externalId: `ctr-${v}`, sourceObjectId: `org/repo#95${j}`, statusMarkers: [v] })) }) })
+    assert.equal(c.factors.unresolved, "present", `${a}+${b}`)
+    assert.equal(c.factors.update, "unknown", `${a}+${b}`)
+  }
+  // One settled, or one contested, status alone is not a contradiction.
+  for (const v of ["approved", "merged", "changes_requested", "cancelled"]) {
+    assert.equal(okResult({ formationResult: subjectOf(`solo-${v}`, "org/repo#941", { statusMarkers: [v] }) }).factors.unresolved, "absent", v)
+  }
   const source = readFileSync(fileURLToPath(new URL("../app/lib/application/formation/statePrediction.ts", import.meta.url)), "utf8")
   assert.ok(!/MEANINGFUL_STATUS_MARKERS/.test(source), "the current-status update promotion must not return")
-  const changeReader = source.slice(source.indexOf("function readChangeSignals"), source.indexOf("function classifyUpdate"))
-  assert.ok(changeReader.length > 0 && !changeReader.includes("statusMarkers"), "readChangeSignals must never read statusMarkers")
+  const changeReader = source.slice(source.indexOf("function hasExplicitRecordedChange"), source.indexOf("function classifyUpdate"))
+  assert.ok(changeReader.length > 0 && !changeReader.includes("statusMarkers"), "the change reader must never read statusMarkers")
+  // Unresolved takes ONLY sources: there is no change-evidence parameter to read.
+  const unresolvedFn = source.slice(source.indexOf("function classifyUnresolved"), source.indexOf("function classifyMissing"))
+  assert.ok(/^function classifyUnresolved\(sources: readonly FormationSourceCandidate\[\]\): StatePredictionUnresolvedFactor \{$/m.test(unresolvedFn), "classifyUnresolved must take only sources")
+  for (const f of ["ChangeSignals", "hasExplicitRecordedChange", "readChangeSignals"]) assert.ok(!unresolvedFn.includes(f), `unresolved must not read ${f}`)
+  assert.ok(source.includes("unresolved: classifyUnresolved(sources),"), "classifyUnresolved must be called with sources alone")
 })
 
-test("missing evidence stays missing; conflict-shaped evidence becomes unresolved only", () => {
+test("missing evidence stays missing and is never fabricated as absent", () => {
   const missing = okResult({ formationResult: buildSubject({
     sources: [{ externalId: "miss-1", sourceObjectId: "org/repo#900" }],
     goalFields: "missing_timeHorizon", doneCondition: "partial", independentClosure: "unknown",
@@ -252,13 +262,6 @@ test("missing evidence stays missing; conflict-shaped evidence becomes unresolve
   assert.equal(missing.factors.missing, "present")
   assert.equal(missing.subjectState, "clarification_needed")
   assert.ok(missing.reasonCodes.includes("missing_present"))
-  // A settled/contested contradiction is reported, never resolved — and F5 has
-  // no grouping input or output through which it could regroup anything.
-  const conflict = okResult({ formationResult: buildSubject({ doneCondition: "complete", independentClosure: "independent",
-    sources: [{ externalId: "conf-1", sourceObjectId: "org/repo#901", statusMarkers: ["approved"] },
-      { externalId: "conf-2", sourceObjectId: "org/repo#902", statusMarkers: ["changes_requested"] }] }) })
-  assert.equal(conflict.factors.unresolved, "present")
-  assert.equal(conflict.subjectState, "formal_candidate")
 })
 
 test("an unbound authority signal never promotes actor certainty", () => {

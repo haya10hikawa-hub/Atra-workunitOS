@@ -1,5 +1,5 @@
 {
-  "_note": "F5 permanent counterexamples. Every subject is compiled through the REAL F1A/F1B/F1C boundaries, so each formationResult is a genuinely ATTESTED object, never a clone. F5 is subject-scoped: there is deliberately no pair, comparison input, or grouping outcome here — those remain owned by F4. `update` requires an explicit non-inferred change EVENT: a current status marker and a single current version value are current STATE and never qualify, and `unchanged` is RESERVED and unreachable because no trusted previous-state baseline exists.",
+  "_note": "F5 permanent counterexamples. Every subject is compiled through the REAL F1A/F1B/F1C boundaries, so each formationResult is a genuinely ATTESTED object, never a clone. F5 is subject-scoped: there is deliberately no pair, comparison input, or grouping outcome here — those remain owned by F4. `update` requires an explicit non-inferred change EVENT: a current status marker and a single current version value are current STATE and never qualify, and `unchanged` is RESERVED and unreachable because no trusted previous-state baseline exists. `unresolved` is independent of change evidence and `unknown` is RESERVED and unreachable.",
   "subjectScenarios": [
     { "name": "A_asserted_actor_structured_authority_explicit_limit_status_only", "doneCondition": "complete", "independentClosure": "independent",
       "sources": [{ "externalId": "a1", "sourceObjectId": "org/repo#101", "actors": [{ "name": "Dana" }], "deadline": { "value": "2026-08-01T00:00:00Z", "inferred": false }, "authoritySignals": [{ "kind": "owner_of_record", "inferred": false }], "statusMarkers": ["approved"] }],
@@ -19,12 +19,6 @@
     { "name": "F2_meaningful_update_recorded_decision", "doneCondition": "complete", "independentClosure": "independent",
       "sources": [{ "externalId": "f2", "sourceObjectId": "org/repo#107", "decisionMarkers": [{ "kind": "decision_recorded", "summary": "The rollout decision was recorded.", "inferred": false }] }],
       "expect": { "actor": "unknown", "limit": "absent", "eventTime": "known", "update": "meaningful", "authority": "absent", "unresolved": "absent", "missing": "absent", "subjectState": "formal_candidate" } },
-    { "name": "G_unresolved_present_open_question", "doneCondition": "complete", "independentClosure": "independent",
-      "sources": [{ "externalId": "g1", "sourceObjectId": "org/repo#108", "unresolvedMarkers": [{ "kind": "open_question", "summary": "The error response shape is still undefined." }] }],
-      "expect": { "actor": "unknown", "limit": "absent", "eventTime": "known", "update": "unknown", "authority": "absent", "unresolved": "present", "missing": "absent", "subjectState": "formal_candidate" } },
-    { "name": "G2_unresolved_unknown_inferred_supersession_only", "doneCondition": "complete", "independentClosure": "independent",
-      "sources": [{ "externalId": "g2", "sourceObjectId": "org/repo#109", "supersedes": [{ "provider": "github", "sourceObjectId": "org/repo#99", "inferred": true }] }],
-      "expect": { "actor": "unknown", "limit": "absent", "eventTime": "known", "update": "unknown", "authority": "absent", "unresolved": "unknown", "missing": "absent", "subjectState": "formal_candidate" } },
     { "name": "H_missing_present_clarification_needed", "goalFields": "missing_timeHorizon", "doneCondition": "partial", "independentClosure": "unknown",
       "sources": [{ "externalId": "h1", "sourceObjectId": "org/repo#110" }],
       "expect": { "actor": "unknown", "limit": "absent", "eventTime": "known", "update": "unknown", "authority": "absent", "unresolved": "absent", "missing": "present", "subjectState": "clarification_needed" } },

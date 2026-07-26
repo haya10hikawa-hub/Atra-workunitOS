@@ -15,12 +15,12 @@ import type { WorkUnitFormationResult } from "./workUnitFormationAggregate.ts"
 /** The ONLY admissible input: a successful F1C aggregate result. */
 export type ValidatedFormationSubjectResult = Extract<WorkUnitFormationResult, { readonly ok: true }>
 
-// Closed factor vocabulary. `actor: known` and `update: unchanged` are RESERVED
-// and unreachable — F1A binds no actor identity to an authority signal, and no
-// trusted previous-state baseline exists. An inferred limit is never a fact;
-// event time is the SOURCE event, never our record time; an edit alone is not a
-// meaningful update; provider identity is never authority; unresolved is never
-// "unread"; missing stays missing.
+// Closed factor vocabulary. `actor: known`, `update: unchanged` and `unresolved:
+// unknown` are RESERVED and unreachable — F1A binds no actor identity to an
+// authority signal, no trusted previous-state baseline exists, and no unresolved
+// item can be marked uncertain. An inferred limit is never a fact; event time is
+// the SOURCE event, never our record time; an edit alone is not a meaningful
+// update; provider is never authority; unresolved is never "unread".
 export const STATE_PREDICTION_ACTOR_FACTORS = ["known", "asserted", "unknown"] as const
 export const STATE_PREDICTION_LIMIT_FACTORS = ["explicit", "inferred", "absent"] as const
 export const STATE_PREDICTION_EVENT_TIME_FACTORS = ["known", "uncertain", "absent"] as const
@@ -43,6 +43,10 @@ export type StatePredictionMissingFactor = (typeof STATE_PREDICTION_MISSING_FACT
 // of change evidence is NEVER evidence that nothing changed.
 export const RESERVED_STATE_PREDICTION_UPDATE_FACTORS = ["unchanged"] as const satisfies readonly StatePredictionUpdateFactor[]
 
+// RESERVED likewise: F1A models unresolvedMarkers separately and offers no way to
+// mark an unresolved item inferred, so `update` uncertainty may never leak in here.
+export const RESERVED_STATE_PREDICTION_UNRESOLVED_FACTORS = ["unknown"] as const satisfies readonly StatePredictionUnresolvedFactor[]
+
 /** The complete closed factor set. There is no combined or universal value. */
 export type FormationStatePredictionFactors = {
   readonly actor: StatePredictionActorFactor
@@ -62,7 +66,7 @@ export const STATE_PREDICTION_REASON_CODES = [
   "event_time_known", "event_time_uncertain", "event_time_absent",
   "update_meaningful_recorded", "update_unchanged", "update_unknown_no_trusted_baseline",
   "authority_structured_signal", "authority_asserted_only", "authority_absent",
-  "unresolved_present", "unresolved_unknown_no_trusted_baseline", "unresolved_absent",
+  "unresolved_present", "unresolved_unknown", "unresolved_absent",
   "missing_present", "missing_absent", "subject_state_formal_candidate",
   "subject_state_clarification_needed", "subject_state_context_only",
 ] as const
