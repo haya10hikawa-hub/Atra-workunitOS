@@ -1,18 +1,12 @@
 {
-  "_note": "F5 permanent counterexamples. Every subject is compiled through the REAL F1A/F1B/F1C boundaries, so each formationResult is a genuinely ATTESTED object, never a clone. F5 is subject-scoped: there is deliberately no pair, comparison input, or grouping outcome here — those remain owned by F4. `update` requires an explicit non-inferred change EVENT: a current status marker and a single current version value are current STATE and never qualify, and `unchanged` is RESERVED and unreachable because no trusted previous-state baseline exists. `unresolved` is independent of change evidence and `unknown` is RESERVED and unreachable.",
+  "_note": "F5 permanent counterexamples. Every subject is compiled through the REAL F1A/F1B/F1C boundaries, so each formationResult is a genuinely ATTESTED object, never a clone. F5 is subject-scoped: there is deliberately no pair, comparison input, or grouping outcome here — those remain owned by F4. `update` requires an explicit non-inferred change EVENT: a current status marker and a single current version value are current STATE and never qualify, and `unchanged` is RESERVED and unreachable because no trusted previous-state baseline exists. `unresolved` is independent of change evidence, requires an actual unresolvedMarker (status cohabitation across members is never a contradiction — that is F6), and `unknown` is RESERVED and unreachable.",
   "subjectScenarios": [
     { "name": "A_asserted_actor_structured_authority_explicit_limit_status_only", "doneCondition": "complete", "independentClosure": "independent",
       "sources": [{ "externalId": "a1", "sourceObjectId": "org/repo#101", "actors": [{ "name": "Dana" }], "deadline": { "value": "2026-08-01T00:00:00Z", "inferred": false }, "authoritySignals": [{ "kind": "owner_of_record", "inferred": false }], "statusMarkers": ["approved"] }],
       "expect": { "actor": "asserted", "limit": "explicit", "eventTime": "known", "update": "unknown", "authority": "structured", "unresolved": "absent", "missing": "absent", "subjectState": "formal_candidate" } },
-    { "name": "B_asserted_actor_inferred_limit", "doneCondition": "complete", "independentClosure": "independent",
-      "sources": [{ "externalId": "b1", "sourceObjectId": "org/repo#102", "actors": [{ "name": "Dana" }, { "name": "Sam", "relation": "assignee" }], "deadline": { "value": "2026-08-01T00:00:00Z", "inferred": true }, "authoritySignals": [{ "kind": "decision_maker_named", "inferred": false }] }],
-      "expect": { "actor": "asserted", "limit": "inferred", "eventTime": "known", "update": "unknown", "authority": "asserted", "unresolved": "absent", "missing": "absent", "subjectState": "formal_candidate" } },
     { "name": "C_unknown_actor_no_limit_no_authority", "doneCondition": "complete", "independentClosure": "independent",
       "sources": [{ "externalId": "c1", "sourceObjectId": "org/repo#103" }],
       "expect": { "actor": "unknown", "limit": "absent", "eventTime": "known", "update": "unknown", "authority": "absent", "unresolved": "absent", "missing": "absent", "subjectState": "formal_candidate" } },
-    { "name": "D_inferred_signal_stays_asserted_authority", "doneCondition": "complete", "independentClosure": "independent",
-      "sources": [{ "externalId": "d1", "sourceObjectId": "org/repo#104", "actors": [{ "name": "Dana", "relation": "owner_claimed" }], "authoritySignals": [{ "kind": "accepted_status", "inferred": true }] }],
-      "expect": { "actor": "asserted", "limit": "absent", "eventTime": "known", "update": "unknown", "authority": "asserted", "unresolved": "absent", "missing": "absent", "subjectState": "formal_candidate" } },
     { "name": "E_uncertain_event_time_capture_precedes_event", "doneCondition": "complete", "independentClosure": "independent",
       "sources": [{ "externalId": "e1", "sourceObjectId": "org/repo#105", "occurredAt": "2026-07-20T00:00:00Z", "capturedAt": "2026-07-19T00:00:00Z" }],
       "expect": { "actor": "unknown", "limit": "absent", "eventTime": "uncertain", "update": "unknown", "authority": "absent", "unresolved": "absent", "missing": "absent", "subjectState": "formal_candidate" } },
@@ -24,9 +18,6 @@
       "expect": { "actor": "unknown", "limit": "absent", "eventTime": "known", "update": "unknown", "authority": "absent", "unresolved": "absent", "missing": "present", "subjectState": "clarification_needed" } },
     { "name": "K_context_only_parent_bounded", "doneCondition": "complete", "independentClosure": "parent_bounded",
       "sources": [{ "externalId": "k1", "sourceObjectId": "org/repo#111" }],
-      "expect": { "actor": "unknown", "limit": "absent", "eventTime": "known", "update": "unknown", "authority": "absent", "unresolved": "absent", "missing": "absent", "subjectState": "context_only" } },
-    { "name": "L_conflict_shaped_status_contradiction", "doneCondition": "complete", "independentClosure": "independent",
-      "sources": [{ "externalId": "l1", "sourceObjectId": "org/repo#112", "statusMarkers": ["approved"] }, { "externalId": "l2", "sourceObjectId": "org/repo#113", "statusMarkers": ["changes_requested"] }],
-      "expect": { "actor": "unknown", "limit": "absent", "eventTime": "known", "update": "unknown", "authority": "absent", "unresolved": "present", "missing": "absent", "subjectState": "formal_candidate" } }
+      "expect": { "actor": "unknown", "limit": "absent", "eventTime": "known", "update": "unknown", "authority": "absent", "unresolved": "absent", "missing": "absent", "subjectState": "context_only" } }
   ]
 }

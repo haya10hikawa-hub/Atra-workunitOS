@@ -70,7 +70,7 @@ const ALL_GOAL_FIELDS: Record<string, string> = { outcome: "Ship the reviewed wi
 
 type SubjectSpec = {
   sources: readonly SourceSpec[]; goalFields?: "all" | "missing_timeHorizon"
-  doneCondition?: "complete" | "partial"; minimalGoal?: boolean
+  doneCondition?: "complete" | "partial"; minimalGoal?: boolean; roles?: readonly string[]
   independentClosure?: "independent" | "parent_bounded" | "unknown"
 }
 
@@ -85,7 +85,7 @@ function buildSubject(spec: SubjectSpec): ValidatedFormationSubjectResult {
       acceptanceCriteria: spec.doneCondition === "partial" ? [] : ["A human reviewer can verify the outcome."],
       missingFields: [], status: "partial", invalidReasons: [], riskFlags: [], candidateOnly: true } })
   const f1c = buildWorkUnitFormationCandidate({
-    members: results.map((r) => ({ sourceResult: r, role: "evidence" })), goalDoneCondition: gdc } as never)
+    members: results.map((r, i) => ({ sourceResult: r, role: spec.roles?.[i] ?? "evidence" })), goalDoneCondition: gdc } as never)
   if (!f1c.ok) throw new Error(`F1C build failed: ${JSON.stringify(f1c)}`)
   return f1c as ValidatedFormationSubjectResult
 }
@@ -111,8 +111,8 @@ function inspect(value: unknown): { strings: string[]; numbers: number[]; keys: 
 const FORBIDDEN_OUTPUT_KEYS = [
   "pairGroupingContext", "groupingOutcome", "basisVerdict", "proposalStrength", "defaultGrouped", "groupingUnchanged",
   "membershipUnchanged", "subjectSideResolved", "targetSide", "sourceSide", "pairSides", "pairToken", "comparisonInput",
-  "comparisonResult", "groupingContext", "present", "formationResult", "subject", "members", "goal", "goalDoneCondition",
-  "doneCondition", "sourceRef", "sourceObjectId", "title", "sanitizedSummary", "navigationTarget", "url", "actorAssertions",
+  "comparisonResult", "groupingContext", "present", "formationResult", "subject", "members", "goal", "goalDoneCondition", "url",
+  "doneCondition", "sourceRef", "sourceObjectId", "title", "sanitizedSummary", "navigationTarget", "actorAssertions",
   "statusMarkers", "authoritySignals", "timestamps", "explicitDeadline", "versionInfo", "tenantId", "userId", "roi", "ranking",
   "rank", "score", "priority", "urgency", "whyNow", "grouped", "membership", "merged", "formalized", "approved", "executed",
   "conflictFindings", "conflicts", "mergeCandidate", "splitCandidate"]
@@ -122,7 +122,7 @@ function assertBoundedSafeOutput(result: unknown): void {
   for (const key of FORBIDDEN_OUTPUT_KEYS) assert.ok(!keys.has(key), `forbidden output key: ${key}`)
   // No grouping or pair concept may survive anywhere, under any key or wording.
   for (const key of keys) assert.ok(!/group|pair|merge|split|membership/i.test(key), `grouping-shaped key: ${key}`)
-  for (const s of strings) assert.ok(!/\bgrouping\b|\bpair\b|merge candidate|split proposal/i.test(s), `grouping-shaped text: ${s}`)
+  for (const s of strings) assert.ok(!/\bgrouping\b|\bpair\b|merge candidate|split proposal|contradict|conflict/i.test(s), `out-of-slice text: ${s}`)
   assert.deepEqual(numbers, [], "F5 output must carry no numeric value")
   for (const s of strings) assert.ok(s.length <= 200, `output string exceeds 200 chars: ${s.slice(0, 40)}`)
   for (const raw of ["Dana", "Sam", "org/repo#", "org/other#", "Ship the reviewed widget", "widget", "Item ",
@@ -228,29 +228,42 @@ test("update needs an explicit change EVENT, unresolved needs unresolved evidenc
   }
 })
 
-test("status markers stay source-state evidence and can never reach the update factor", () => {
-  // F1A still carries them verbatim; F5 reads them only for unresolved reporting.
+test("cohabitation is not contradiction: no status, role, provider or id pair is unresolved", () => {
+  // F1A still carries statusMarkers verbatim; F5 now reads them nowhere at all.
   const spec = { externalId: "sm-1", sourceObjectId: "org/repo#931", statusMarkers: ["approved", "changes_requested"] }
   assert.deepEqual([...buildSource(spec).candidate.statusMarkers], ["approved", "changes_requested"])
-  // A bounded settled/contested contradiction is the ONLY other unresolved form.
-  for (const [a, b] of [["approved", "changes_requested"], ["merged", "cancelled"]]) {
-    const c = okResult({ formationResult: buildSubject({ doneCondition: "complete", independentClosure: "independent",
-      sources: [a, b].map((v, j) => ({ externalId: `ctr-${v}`, sourceObjectId: `org/repo#95${j}`, statusMarkers: [v] })) }) })
-    assert.equal(c.factors.unresolved, "present", `${a}+${b}`)
-    assert.equal(c.factors.update, "unknown", `${a}+${b}`)
+  // Even both statuses on ONE source are current state, not a recorded conflict.
+  assert.equal(okResult({ formationResult: buildSubject({ sources: [spec], doneCondition: "complete", independentClosure: "independent" }) }).factors.unresolved, "absent")
+  // Two members on DIFFERENT objects: F1C proves membership and an explicit role,
+  // never that they concern one decision — so no combination may bind them.
+  const combos: string[][] = []
+  for (const [x, y] of [["approved", "changes_requested"], ["merged", "cancelled"]])
+    for (const [p, q] of [["github", "github"], ["github", "slack"]])
+      for (const [oa, ob] of [["object-A", "object-B"], ["object-S", "object-S"]])
+        for (const [ra, rb] of [["evidence", "evidence"], ["implementation", "review_state"],
+          ["historical_context", "external_context"], ["contradicting_claim", "contradicting_claim"]]) combos.push([x, y, p, q, ra, rb, oa, ob])
+  for (const [k, [x, y, p, q, ra, rb, oa, ob]] of combos.entries()) {
+    const r = okResult({ formationResult: buildSubject({ doneCondition: "complete", independentClosure: "independent", roles: [ra, rb],
+      sources: [{ externalId: `co-${k}a`, sourceObjectId: oa, provider: p, statusMarkers: [x] },
+        { externalId: `co-${k}b`, sourceObjectId: ob, provider: q, statusMarkers: [y] }] }) })
+    assert.equal(r.factors.unresolved, "absent", `${x}+${y} ${p}/${q} ${ra}/${rb} ${oa}/${ob}`)
+    assert.equal(r.factors.update, "unknown", `${x}+${y} ${p}/${q} ${ra}/${rb} ${oa}/${ob}`)
   }
-  // One settled, or one contested, status alone is not a contradiction.
-  for (const v of ["approved", "merged", "changes_requested", "cancelled"]) {
-    assert.equal(okResult({ formationResult: subjectOf(`solo-${v}`, "org/repo#941", { statusMarkers: [v] }) }).factors.unresolved, "absent", v)
-  }
+  // Only a real unresolvedMarker flips it — even beside the same status pair.
+  assert.equal(okResult({ formationResult: buildSubject({ doneCondition: "complete", independentClosure: "independent",
+    sources: [{ externalId: "co-m1", sourceObjectId: "object-A", statusMarkers: ["approved"], unresolvedMarkers: [{ kind: "open_question", summary: "One item is still open." }] },
+      { externalId: "co-m2", sourceObjectId: "object-B", statusMarkers: ["changes_requested"] }] }) }).factors.unresolved, "present")
+  // Structural: the status heuristics are gone and F5 reads statusMarkers nowhere.
   const source = readFileSync(fileURLToPath(new URL("../app/lib/application/formation/statePrediction.ts", import.meta.url)), "utf8")
-  assert.ok(!/MEANINGFUL_STATUS_MARKERS/.test(source), "the current-status update promotion must not return")
-  const changeReader = source.slice(source.indexOf("function hasExplicitRecordedChange"), source.indexOf("function classifyUpdate"))
-  assert.ok(changeReader.length > 0 && !changeReader.includes("statusMarkers"), "the change reader must never read statusMarkers")
-  // Unresolved takes ONLY sources: there is no change-evidence parameter to read.
+  for (const gone of ["MEANINGFUL_STATUS_MARKERS", "SETTLED_STATUS_MARKERS", "CONTESTED_STATUS_MARKERS"]) {
+    assert.ok(!source.includes(gone), `${gone} must not return`)
+  }
+  assert.ok(!/field\([^)]*"statusMarkers"\)/.test(source), "F5 must not read statusMarkers at all")
   const unresolvedFn = source.slice(source.indexOf("function classifyUnresolved"), source.indexOf("function classifyMissing"))
   assert.ok(/^function classifyUnresolved\(sources: readonly FormationSourceCandidate\[\]\): StatePredictionUnresolvedFactor \{$/m.test(unresolvedFn), "classifyUnresolved must take only sources")
-  for (const f of ["ChangeSignals", "hasExplicitRecordedChange", "readChangeSignals"]) assert.ok(!unresolvedFn.includes(f), `unresolved must not read ${f}`)
+  for (const f of ["ChangeSignals", "hasExplicitRecordedChange", "statusMarkers", "role", "provider", "sourceObjectId"]) {
+    assert.ok(!unresolvedFn.includes(f), `unresolved must not read ${f}`)
+  }
   assert.ok(source.includes("unresolved: classifyUnresolved(sources),"), "classifyUnresolved must be called with sources alone")
 })
 

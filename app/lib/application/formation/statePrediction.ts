@@ -17,8 +17,12 @@
  *    previous status, transition edge or prior snapshot, so `update` requires an
  *    explicit non-inferred change EVENT and `unchanged` is RESERVED.
  *  - Uncertainty about CHANGE is not uncertainty about whether something is OPEN.
- *    `unresolved` reads only unresolvedMarkers and a bounded settled/contested
- *    status contradiction, takes no change evidence, and `unknown` is RESERVED.
+ *  - Sharing an aggregate is not describing the same thing. F1C proves membership
+ *    and an explicit role, never that two members concern one decision, object or
+ *    moment, so no status pair, role, provider or id may imply a contradiction —
+ *    that is F6's. `unresolved` reads ONLY unresolvedMarkers and `unknown` is
+ *    RESERVED. Consequently `statusMarkers` is read NOWHERE in this module: it is
+ *    current source STATE, and no factor here may conclude anything from it.
  *
  * Authorities consumed read-only: F1C is the sole validated-subject authority
  * (`snapshotValidatedWorkUnitFormationResult`; every factor comes from the
@@ -52,9 +56,6 @@ const STRUCTURED_AUTHORITY_SIGNAL_KINDS: ReadonlySet<string> = new Set([
 ])
 /** Actor relations that assert responsibility without proving it. */
 const ASSERTED_ACTOR_RELATIONS: ReadonlySet<string> = new Set(["owner_claimed", "approver_claimed"])
-/** Contradiction-shaped pairs — reported as unresolved, never resolved. */
-const SETTLED_STATUS_MARKERS: ReadonlySet<string> = new Set(["approved", "merged"])
-const CONTESTED_STATUS_MARKERS: ReadonlySet<string> = new Set(["changes_requested", "cancelled"])
 
 // One constant sentence per reason code. Nothing is interpolated, so no value
 // from any source can travel into a sentence.
@@ -76,7 +77,7 @@ const NARRATIVE: Record<StatePredictionReasonCode, string> = {
   authority_structured_signal: "At least one source carries a recorded structural authority signal.",
   authority_asserted_only: "Authority is only asserted or inferred, never structurally recorded.",
   authority_absent: "No source carries an authority signal.",
-  unresolved_present: "At least one open item or contradiction-shaped signal is carried by the sources.",
+  unresolved_present: "At least one source records an unresolved item.",
   // RESERVED: unreachable until a contract can express uncertain unresolved evidence.
   unresolved_unknown: "Whether anything is unresolved is unknown.",
   unresolved_absent: "No source carries an open item.",
@@ -228,27 +229,20 @@ function classifyAuthority(sources: readonly FormationSourceCandidate[]): StateP
   return asserted ? "asserted" : "absent"
 }
 
-// Unresolved evidence is INDEPENDENT of change evidence, so this takes only the
-// sources: F1A models unresolvedMarkers, statusMarkers, versionInfo,
-// decisionMarkers and supersession as separate records and states no relation
-// between them. Uncertainty about whether something CHANGED is never uncertainty
-// about whether something is OPEN, and a previous-state baseline is an `update`
-// concern with no authority here. `unknown` is RESERVED: no current F1A input can
-// express inferred or uncertain unresolved evidence.
+// `unresolvedMarkers` is the ONLY current upstream record of an unresolved item,
+// so it is the only thing read here. F1C proves that every member is a validated
+// F1A source carrying an explicit caller-supplied role inside one aggregate — it
+// proves NOTHING about whether two members describe the same decision, the same
+// object, the same moment, or mutually exclusive outcomes. Cohabitation is not a
+// semantic relation, so no status pair, role, provider, object id, time or update
+// value may reach this factor; detecting status conflict belongs to F6 or to a
+// future explicit upstream contract. `unknown` is RESERVED: no current F1A input
+// can express inferred or uncertain unresolved evidence.
 function classifyUnresolved(sources: readonly FormationSourceCandidate[]): StatePredictionUnresolvedFactor {
-  let settled = false
-  let contested = false
   for (const source of sources) {
     if (list(field(source, "unresolvedMarkers")).length > 0) return "present"
-    for (const status of list(field(source, "statusMarkers"))) {
-      if (typeof status !== "string") continue
-      if (SETTLED_STATUS_MARKERS.has(status)) settled = true
-      if (CONTESTED_STATUS_MARKERS.has(status)) contested = true
-    }
   }
-  // Contradiction-shaped evidence is REPORTED, never resolved, and changes no
-  // membership. This is the ONLY status read left, and it never reaches `update`.
-  return settled && contested ? "present" : "absent"
+  return "absent"
 }
 
 function classifyMissing(candidate: WorkUnitFormationCandidate): StatePredictionMissingFactor {
