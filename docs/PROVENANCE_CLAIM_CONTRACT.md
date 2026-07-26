@@ -31,8 +31,8 @@ inherits the tag of the nearest enclosing tagged block or section heading.
 documentation, or by being cited elsewhere. Promotion requires a separate human-gated
 review. Conversely, nothing here downgrades an existing repository authority: where this
 document and a `[CONTRACT]` source disagree, the `[CONTRACT]` source wins and this document
-is the defect. Type shapes are illustrative only, are marked
-`[PROPOSAL — NOT IMPLEMENTED]`, and exist nowhere in the codebase.
+is the defect. Type shapes are illustrative only, marked `[PROPOSAL — NOT IMPLEMENTED]`, and
+exist nowhere in the codebase.
 
 ## 1. Purpose And Non-Goals
 
@@ -50,9 +50,8 @@ Establish one shared vocabulary, and the authority boundaries around it, for:
 - **future derived-state provenance** — regenerable projections that cite their inputs;
 - **shadow-only adoption** — the sole authorized early-adoption mode.
 
-Vocabulary is fixed *before* code so that every later HTPE module cites these terms rather
-than reinventing them, and names the existing authority it defers to rather than
-recomputing it.
+Vocabulary is fixed *before* code so every later HTPE module cites these terms rather than
+reinventing them, and names the authority it defers to rather than recomputing it.
 
 ### 1.2 Non-Goals — This Document Authorizes None Of The Following `[CONTRACT]`
 
@@ -105,18 +104,16 @@ flowchart TB
 
 ### 2.2 Layering Rules `[PROPOSAL]`
 
-1. **L0 and L1 are canonical.** They must never be discarded, compacted away, or
-   overwritten because a derived cache exists. A derived layer is an optimization; losing
-   it must never lose information.
+1. **L0 and L1 are canonical.** They must never be discarded, compacted away, or overwritten
+   because a derived cache exists. Losing the cache must never lose information.
 2. **L2 and L3 are regenerable.** Any stored derived state must be reproducible from its
-   cited claims plus an exact rule version. If it is not reproducible, it is a defect, and
-   the system fails closed rather than trusting the cache.
+   cited claims plus an exact rule version; if not, it is a defect and the system fails
+   closed rather than trusting the cache.
 3. **Attention is a query result**, computed at read time from L3. It is not a canonical
    layer and — in this proposal — is not stored. Whether it is ever materialized is
    `[PRODUCT_DECISION_REQUIRED]` (§17).
 4. **No derived layer may become a competing source of truth.** A derived state may not be
-   cited as evidence for a claim, may not feed back into L1, and may not be used to
-   overrule the canonical claims it was computed from.
+   cited as evidence, feed back into L1, or overrule the claims it was computed from.
 5. **Layer direction is one-way.** L0 → L1 → L2 → L3. There is no upward write path.
 
 ## 3. Provider Evidence (L0)
@@ -136,13 +133,12 @@ material a validating authority already accepted — on the formation branch, F1
   retained verbatim, never re-minted by HTPE.
 - **Validated evidence reference** — a reference to material that already passed validation.
 - **Capture/observation metadata** — when the material was observed and recorded (§7).
-- **No raw provider payload.** Message bodies, titles, HTML, and file contents are not
-  carried. This is not a style preference: `P0_FORBIDDEN_CONTEXT_KEYS` in
+- **No raw provider payload.** Not a style preference: `P0_FORBIDDEN_CONTEXT_KEYS` in
   `app/lib/application/safety/p0Policy.ts` already forbids `rawPayload`, `rawBody`, `body`,
   `html`, `message`, `text`, and `fileContent` in a context pack `[FACT]`.
 - **No tenant id in frontend-visible shapes.** `tenantId` is itself a forbidden context key
-  in the same list `[FACT]`. It lives in a server-side envelope only (§4.3).
-- **No authority derived from provider identity.** That a record came from a given provider
+  in the same list `[FACT]`; it lives in a server-side envelope only (§4.3).
+- **No authority derived from provider identity** — that a record came from a given provider
   establishes nothing about who may decide anything (§6.4).
 - **No trust upgrade caused by persistence or serialization.** Writing a record down, or
   round-tripping it through JSON, does not make it more true.
@@ -158,9 +154,9 @@ Two distinct integrity mechanisms are in play, and they are **additive, never su
   survives a process boundary.
 
 **Normative:** a digest must never weaken an exact-object in-process attestation gate. A
-future digest check is an *additional* requirement layered on top; it may never be accepted
-as a reason to admit an object the in-process gate would have rejected. Reconstructing an
-equal-looking object is not the same as holding the attested one.
+future digest check is an *additional* requirement layered on top, never a reason to admit
+an object the in-process gate would have rejected: reconstructing an equal-looking object is
+not the same as holding the attested one.
 
 ## 4. Canonical Claim (L1)
 
@@ -271,28 +267,26 @@ verified `[CONTRACT]`. `evidenceClass` is the claim-level analogue of source typ
 
 ### 5.3 Per-Class Boundaries `[PROPOSAL]`
 
-- **`attested_source`** records that source material was validated. It does **not**
-  automatically establish claim-specific authority. That a calendar event was validly read
-  says nothing about who may close a Done Condition.
+- **`attested_source`** records that source material was validated; it does **not**
+  automatically establish claim-specific authority.
 - **`asserted_provider`** records that an assertion was made. Assertion is not canonical
-  truth. This mirrors the existing treatment of `third_party_text`, which "is never promoted
-  to 'true' by default" (`docs/EVIDENCE_STANDARD.md` §7, `docs/PROVENANCE_MODEL.md` §9)
-  `[CONTRACT]`.
+  truth — mirroring `third_party_text`, "never promoted to 'true' by default"
+  (`docs/EVIDENCE_STANDARD.md` §7, `docs/PROVENANCE_MODEL.md` §9) `[CONTRACT]`.
 - **`derived_rule`** must cite the **exact rule id, rule version, and input claims**. A
   derived claim that cannot name its inputs is not reproducible and is therefore invalid.
 - **`inferred_llm`** is always proposal-only and is never promoted automatically, under any
   confidence value. Confidence is not evidence.
 - **`human_input`** must remain attributable and must not rewrite source history. A person
   may add a correcting claim; a person may not edit or delete the superseded one (§7.4).
-- **`feedback_signal`** describes feedback *about a suggestion* — it is a fact about a
-  reaction, not a fact about the world. Feedback that a suggestion was unhelpful is never
-  evidence that the underlying proposition is false.
+- **`feedback_signal`** describes feedback *about a suggestion* — a fact about a reaction,
+  not about the world. That a suggestion was unhelpful is never evidence that the underlying
+  proposition is false.
 
 ### 5.4 The Escalation Prohibition `[CONTRACT]`
 
-No evidence class may imply **approved**, **complete**, **executable**, or
-**authoritative** without the existing authority gate that owns that decision. Evidence
-class is an input to those gates, never a substitute for them.
+No evidence class may imply **approved**, **complete**, **executable**, or **authoritative**
+without the existing authority gate that owns that decision. Evidence class is an input to
+those gates, never a substitute for them.
 
 ## 6. Claim Binding
 
@@ -335,14 +329,13 @@ ClaimBinding {
 > A claim without a binding is **unbound** for that dimension.
 > **Absence must remain absence.** No default binding may be synthesized.
 
-This is the single most important rule here: an unbound dimension is a first-class,
-reportable state, never filled in with a plausible guess, a fallback, or "the only
-candidate available".
+The single most important rule here: an unbound dimension is a first-class, reportable
+state, never filled in with a plausible guess, a fallback, or "the only candidate available".
 
 ### 6.4 Explicitly Forbidden Bases `[CONTRACT]`
 
-Each of the following is forbidden as the basis for a binding. Each corresponds to a real
-defect shape already identified in this repository's formation work.
+Each is forbidden as the basis for a binding, and each corresponds to a real defect shape
+already identified in this repository's formation work.
 
 1. **Display-name equality as actor identity.** Two people may share a display name; one
    person may have several. A name is not an identity.
@@ -351,14 +344,14 @@ defect shape already identified in this repository's formation work.
 3. **Same-source co-presence as semantic relation.** Two things mentioned in one message are
    not thereby related.
 4. **Timestamp proximity as Goal identity.** Two events near in time are not the same Goal.
-5. **`SourceRole` alone as contradiction authority.** The `FORMATION_SOURCE_ROLES` vocabulary
+5. **`SourceRole` alone as contradiction authority.** `FORMATION_SOURCE_ROLES`
    (`app/lib/application/formation/workUnitFormationAggregate.ts`)
-   `[ACTIVE_UNMERGED_CHANGE]` classifies a member's role in a formation; it does not
-   establish that one member contradicts another.
-6. **Current status coexistence as event or conflict.** That two claims currently hold
-   different statuses is not an event, not a transition, and not a conflict. This is the F5
-   correction shape: coexistence, current state, and another factor's uncertainty never
-   establish a relation `[ACTIVE_UNMERGED_CHANGE]`.
+   `[ACTIVE_UNMERGED_CHANGE]` classifies a member's role; it does not establish that one
+   member contradicts another. See §15 on its relationship to `evidence_role`.
+6. **Current status coexistence as event or conflict.** Two claims currently holding
+   different statuses is not an event, a transition, or a conflict — the F5 correction
+   shape: coexistence, current state, and another factor's uncertainty never establish a
+   relation `[ACTIVE_UNMERGED_CHANGE]`.
 7. **`sourceObjectId` reuse as proof of immutable revision identity.** A provider reusing an
    object id does not prove the object is the same immutable revision; providers mutate
    objects in place.
@@ -372,8 +365,8 @@ defect shape already identified in this repository's formation work.
 | **Valid time** | `validFrom`, `validTo` | When the claim is asserted to hold **in the represented world**. |
 | **System time** | `observedAt`, `recordedAt` | When **Atra** observed or recorded the claim. |
 
-The axes are independent. Neither may be derived from the other. A claim may be recorded
-long after it became valid, and a claim may be recorded about a future validity.
+The axes are independent and neither may be derived from the other: a claim may be recorded
+long after it became valid, or recorded about a future validity.
 
 ### 7.2 `updatedAt` Is Forbidden `[PROPOSAL]`
 
@@ -397,20 +390,19 @@ implies mutation of an immutable record. Claims are appended, never updated.
 
 ### 7.4 Immutability And Correction `[PROPOSAL]`
 
-Correction is additive. A correcting claim is a new record; the corrected claim is retained
-and remains visible. This preserves the existing repository principle that transformation
-history is "appended, never overwritten" (`docs/PROVENANCE_MODEL.md` §7) `[CONTRACT]`, and
-that contradictions stay visible "with both sides' origins intact (never silently merged)"
-(`docs/PROVENANCE_MODEL.md` §10) `[CONTRACT]`.
+Correction is additive: a correcting claim is a new record and the corrected claim is
+retained and visible. This is the claim-level continuation of `transformation_history`,
+which `docs/PROVENANCE_MODEL.md` §7 requires be "appended, never overwritten", and of §10's
+rule that contradictions stay visible "with both sides' origins intact" `[CONTRACT]`.
 
 ### 7.5 The Ordering Boundary `[CONTRACT]`
 
 **No temporal ordering is inferred merely from array order, arrival order, provider
 identity, `sourceObjectId` reuse, or timestamp proximity.**
 
-A missing transition remains **missing evidence**. It is not an inferred transition, not a
-zero-length interval, and not a reason to assume continuity. Where the ordering evidence is
-absent, the correct output is an explicit unresolved dimension (§11).
+A missing transition remains **missing evidence** — not an inferred transition, not a
+zero-length interval, not a reason to assume continuity. Where ordering evidence is absent,
+the correct output is an explicit unresolved dimension (§11).
 
 ## 8. Supersession Policy Boundary
 
@@ -434,8 +426,7 @@ Until a **separately reviewed temporal-order contract** exists:
 - **latest-wins is forbidden**;
 - **authority-wins is forbidden** without claim-specific authority;
 - **timestamp-wins is forbidden** without a typed temporal binding;
-- **role mutation is forbidden** — resolving an ordering dispute by rewriting a member's
-  `SourceRole` is not a resolution;
+- **role mutation is forbidden** — rewriting a member's `SourceRole` is not a resolution;
 - **automatic resolution is forbidden**.
 
 ### 8.3 Relationship To PR #211 `[ACTIVE_UNMERGED_CHANGE]`
@@ -489,24 +480,23 @@ This paragraph discusses that policy and introduces no such field name.
 
 ### 9.4 Digest Requirements `[PROPOSAL]`
 
-- **canonical deterministic serialization** — a fixed field order and encoding, never
+- **canonical deterministic serialization** — fixed field order and encoding, never
   `JSON.stringify` over an unordered object;
 - **tenant-scoped identity where needed** — identity must not collide across tenants;
 - **constant-time verification** where a keyed digest is later introduced;
 - **no digest in an LLM context** (§9.3, §13);
-- **no digest as an authority signal** — matching a digest proves byte equality, not
-  permission;
+- **no digest as an authority signal** — a digest match proves byte equality, not permission;
 - **no digest as a replacement for attestation** (§3.3);
-- **no raw payload contribution** to a digest unless separately authorized — digesting a
-  raw body reintroduces the body.
+- **no raw payload contribution** unless separately authorized — digesting a raw body
+  reintroduces the body.
 
 ### 9.5 Keyed Digest Scheme `[PROPOSAL]`
 
-H0 does **not** select an exact persistent HMAC scheme. The repository has established work
-on keyed approval digests (`docs/APPROVAL_HASH_KEYING_PLAN.md`,
-`docs/APPROVAL_MAC_ROLLOUT_CONTRACT.md`, `docs/TENANT_SECRET_PROVIDER_DESIGN.md`) `[FACT]`,
-but it governs approvals, not claims, and does not extend to a claim ledger by implication.
-Any claim-digest scheme is `[PROPOSAL]` and requires its own review.
+H0 does **not** select an exact persistent HMAC scheme. The repository's established keyed
+approval-digest work (`docs/APPROVAL_HASH_KEYING_PLAN.md`,
+`docs/APPROVAL_MAC_ROLLOUT_CONTRACT.md`, `docs/TENANT_SECRET_PROVIDER_DESIGN.md`) `[FACT]`
+governs approvals, not claims, and does not extend to a claim ledger by implication. Any
+claim-digest scheme is `[PROPOSAL]` and requires its own review.
 
 ## 10. Authority Non-Duplication
 
@@ -580,23 +570,22 @@ DerivedState {
 2. **Stored state must be reproducible** from its `sourceClaimIds` plus the exact
    `ruleVersion`. Reproducibility is the definition of validity here.
 3. **Minority and conflicting claims must not disappear through summarization.** A derived
-   state that silently drops the dissenting claim has fabricated agreement. This extends the
-   existing rule that contradictions stay visible with both sides intact
+   state that silently drops the dissenting claim has fabricated agreement — extending the
+   rule that contradictions stay visible with both sides intact
    (`docs/PROVENANCE_MODEL.md` §10) `[CONTRACT]`.
-4. **Omitted and unresolved dimensions must be explicit.** `omittedDimensions` records what
-   the rule deliberately did not consider; `unresolvedDimensions` records what it could not
-   resolve. Neither may be represented as absence of a problem.
+4. **Omitted and unresolved dimensions must be explicit.** `omittedDimensions` = what the
+   rule deliberately did not consider; `unresolvedDimensions` = what it could not resolve.
+   Neither may be represented as absence of a problem.
 5. **A consistency mismatch fails closed.** If recomputation from the cited claims does not
-   reproduce the stored payload, the stored state is rejected — not preferred, not repaired
-   silently.
+   reproduce the stored payload, the stored state is rejected — not preferred, not silently
+   repaired.
 6. **No runtime or persistence implementation is authorized by H0.**
 
 ### 11.3 Project State `[PRODUCT_DECISION_REQUIRED]`
 
-L4 Project State is **DEFERRED — PRODUCT DECISION REQUIRED**. This document deliberately
-establishes no Project semantics: not its boundary, not its membership, not its lifecycle,
-and not its relationship to a WorkUnit. "Project" is used in this document only as the name
-of a deferred layer.
+L4 Project State is **DEFERRED — PRODUCT DECISION REQUIRED**. This document establishes no
+Project semantics: not its boundary, membership, lifecycle, or relationship to a WorkUnit.
+"Project" is used here only as the name of a deferred layer.
 
 ## 12. Shadow-Evaluation Doctrine
 
@@ -624,10 +613,7 @@ flowchart LR
 - existing formation and Done Condition authorities run **normally and unchanged**;
 - the HTPE projection **reads their attested outputs**;
 - HTPE **does not write back**;
-- HTPE **does not alter state**;
-- HTPE **does not alter membership**;
-- HTPE **does not alter ranking**;
-- HTPE **does not alter projection**;
+- HTPE **does not alter state**, **membership**, **ranking**, or **projection**;
 - HTPE **does not surface a contradictory runtime decision** — a shadow disagreement is
   never shown to a user as a competing answer;
 - fixture comparison is **deterministic and exact** — not approximate, not tolerance-based;
@@ -638,8 +624,7 @@ flowchart LR
 
 **No feature flag may silently make shadow output authoritative.** A configuration value,
 environment variable, or rollout percentage is not a human gate. Promotion is a reviewed
-decision with a recorded human sign-off, consistent with the repository's existing
-explicit-human-go convention.
+decision with a recorded human sign-off, per the existing explicit-human-go convention.
 
 ## 13. LLM Boundary
 
@@ -658,10 +643,9 @@ approval; execution; or feedback-to-fact promotion.
 
 ### 13.3 Failure Behavior `[CONTRACT]`
 
-Malformed or unavailable LLM output must fall back to **deterministic bounded templates**.
-A missing model response degrades wording, never correctness, and never blocks a
-deterministic result. This follows the existing candidate-only mock boundary and validation
-authorities (§10 rows 8–11).
+Malformed or unavailable LLM output must fall back to **deterministic bounded templates**. A
+missing model response degrades wording, never correctness, and never blocks a deterministic
+result — following the existing candidate-only mock boundary authorities (§10 rows 8–11).
 
 ### 13.4 No New Provider Path `[CONTRACT]`
 
@@ -677,7 +661,7 @@ repository, no `schemaVersion` change.
 
 ### 14.2 Required Before Any Migration Or Repository `[CONTRACT]`
 
-1. **retention** must be decided;
+1. **retention** must be decided (the value range of `retention_class` — §15);
 2. **compaction** must be decided;
 3. **rollback/recovery** must be decided;
 4. **tenant deletion cascade** must be decided;
@@ -686,12 +670,12 @@ repository, no `schemaVersion` change.
 7. a dedicated **persistence-gate ADR** must be **approved by the human owner**;
 8. the migration must ship in a **separate PR**.
 
-These are consistent with the existing persistence readiness criteria, which already require
-that redaction policy, schema version, idempotency key strategy, duplicate handling,
-rollback strategy, and audit strategy each be decided, with "explicit human review before
-implementation" (`docs/P6_I5_PERSISTENCE_IMPLEMENTATION_GATE.md` §9) `[CONTRACT]`. The
-target-class decision remains governed by `docs/P6_I5A_PERSISTENCE_TARGET_DECISION.md`,
-whose selected initial target is an in-memory test-only store `[CONTRACT]`.
+These match the existing persistence readiness criteria, which already require redaction
+policy, schema version, idempotency key strategy, duplicate handling, rollback strategy, and
+audit strategy each be decided, with "explicit human review before implementation"
+(`docs/P6_I5_PERSISTENCE_IMPLEMENTATION_GATE.md` §9) `[CONTRACT]`. The target class remains
+governed by `docs/P6_I5A_PERSISTENCE_TARGET_DECISION.md`, whose selected initial target is
+an in-memory test-only store `[CONTRACT]`.
 
 ### 14.3 Proposed Tables `[PROPOSAL]`
 
@@ -713,12 +697,31 @@ material**. The claim vocabulary must not overwrite it.
 | `docs/GRAPH_MODEL.md` | The conceptual node/edge model | **Documentation, not a runtime graph database** — that document itself states the graph is not a runtime graph database `[CONTRACT]` |
 | `docs/RELATIONSHIP_SCHEMA.md` | Relationship types and required properties | Conceptual relationship vocabulary; claims and bindings do not replace it |
 
+### Field Mapping To `PROVENANCE_MODEL.md` `[PROPOSAL]`
+
+This contract **refines** the P6.2 provenance record and replaces none of it. Its eleven
+required fields (`docs/PROVENANCE_MODEL.md` §4) map as follows.
+
+| Existing required field | HTPE counterpart | Relationship |
+| --- | --- | --- |
+| `source_id` | provider-native source identity (§3.2) | refines |
+| `source_type` | `evidenceClass` (§5) | **orthogonal** — analogue, not replacement (§5.1) |
+| `source_uri_or_reference` | `evidenceRef` (§3.2, §4.3) | refines |
+| `obtained_at` | `observedAt` **and** `recordedAt` (§7.1) | **refines, does not replace** — one instant split into two independent axes; not a third time vocabulary |
+| `tenant_id` | `tenantId` (§4.3) | same rule — context-derived, never caller-supplied |
+| `actor_or_system` | `actor` binding (§6.2) | refines — a binding adds its own basis and evidence class |
+| `trust_level` | **none** | **orthogonal** — sole authority for how far something is verified; `evidenceClass` never substitutes for it |
+| `transformation_history` | claim append/correction chain (§7.4) | refines — same append-only rule |
+| `redaction_state` | none | not applicable at claim level — stays on the provenance record |
+| `retention_class` | none | **owns** — claim retention is a value-range decision on this field, **not** a new field (§17 #1) |
+| `evidence_role` | F1C `SourceRole` is a **separate** vocabulary (§6.4 item 5) | **`[PRODUCT_DECISION_REQUIRED]`** — the relationship is unresolved and must not be merged by assumption |
+
 **Normative distinctions:**
 
 - **Implementation/review evidence is operational assurance material** — it evidences that
-  work was done correctly. It is not a proposition about the user's world.
+  work was done correctly; it is not a proposition about the user's world.
 - **Product claims represent source-derived or human-derived propositions** about the user's
-  world. They are not assurance material.
+  world; they are not assurance material.
 - **Graph-model documentation is not a runtime graph database**, and this contract does not
   make it one.
 - The new claim vocabulary **must not overwrite existing evidence terminology.** Where a term
@@ -726,8 +729,7 @@ material**. The claim vocabulary must not overwrite it.
 
 ## 16. Active-Unmerged Dependency Disclosure `[ACTIVE_UNMERGED_CHANGE]`
 
-This section is mandatory disclosure. It must be read before any claim in this document
-about a formation module is relied upon.
+Mandatory disclosure — read before relying on any claim here about a formation module.
 
 - **Formation F1A–F5 currently exist on the branch
   `plan/workunit-formation-provider-processing`.**
@@ -736,26 +738,25 @@ about a formation module is relied upon.
 - **PR #211 is a blocked Draft** (head `f84dd017`, branch `feat/f6-formation-findings`),
   and F6 exists only there — not on the plan branch, not on `main` `[FACT]`.
 - **This H0 document is based partly on forward references.** Every statement about a
-  formation module is tagged `[ACTIVE_UNMERGED_CHANGE]` and is a statement about a branch,
-  not about the shipped product.
-- **No `main` runtime code may import formation modules because of this document.** This
-  document grants no import permission and creates no dependency.
+  formation module is tagged `[ACTIVE_UNMERGED_CHANGE]` — a statement about a branch, not
+  about the shipped product.
+- **No `main` runtime code may import formation modules because of this document**, which
+  grants no import permission and creates no dependency.
 - **Future integration requires an explicit branch strategy**, which is unresolved (§17).
 - **This document remains valid as a vocabulary contract even when formation code changes**,
-  because it defines terms and boundaries rather than module internals. However, **exact
-  module claims must be revalidated** against the then-current branch state before being
-  relied upon.
+  because it defines terms rather than module internals. However, **exact module claims must
+  be revalidated** against the then-current branch state before being relied upon.
 
 No formation source code is copied into this document.
 
 ## 17. Unresolved Product Decisions
 
 Each item below is **`[PRODUCT_DECISION_REQUIRED]`**. No default is implied by its position,
-its wording, or its omission elsewhere in this document. Listing a decision is not making it.
+wording, or omission elsewhere. Listing a decision is not making it.
 
 | # | Decision | Why it cannot be defaulted |
 | --- | --- | --- |
-| 1 | **Claim retention** | How long claims are kept changes the storage model and the legal posture. |
+| 1 | **Claim retention** | Determining the value range of the **existing** `retention_class` field, not creating a new one (§15). Changes the storage model and legal posture. |
 | 2 | **Compaction** | Any compaction risks violating §2.2 rule 1 (canonical layers are never discarded). |
 | 3 | **Rollback and recovery** | Required by the existing persistence gate before implementation. |
 | 4 | **Tenant deletion** | Cascade semantics over an append-only ledger are not obvious. |
@@ -786,15 +787,14 @@ These record the **planning** decisions as they currently stand `[PROPOSAL]`.
 | **Deferred** | Decision-scope storage |
 
 **These are planning decisions.** They may require separate human review before runtime
-implementation, and a rejection recorded here does not by itself constitute an accepted
-architectural constraint on any other program.
+implementation, and a rejection recorded here is not by itself an accepted architectural
+constraint on any other program.
 
 ## 19. Non-Authorization Statement `[CONTRACT]`
 
 This document is a **proposed vocabulary contract**. It authorizes no runtime code, no type
 definition, no persistence, no migration, no `schemaVersion` change, no rule engine, no
-derived-state hierarchy, no LLM capability, no approval, and no execution.
-
-It grants no authority to any branch, and it does not make any active unmerged change
-integration-eligible. Its enforcement in code — if it is ever accepted — is governed by
-separate, future gates with recorded human decisions.
+derived-state hierarchy, no LLM capability, no approval, and no execution. It grants no
+authority to any branch and does not make any active unmerged change integration-eligible.
+Its enforcement in code — if it is ever accepted — is governed by separate, future gates
+with recorded human decisions.
