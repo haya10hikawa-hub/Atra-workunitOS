@@ -1,0 +1,19 @@
+{
+  "input": {
+    "eventType": "pull_request",
+    "repository": {
+      "owner": "example-org",
+      "name": "example-repo"
+    },
+    "number": 246,
+    "title": "PR #246: bootstrap manifest",
+    "summary": "Pull request merged into the plan branch",
+    "status": "merged",
+    "sourceUrl": "https://github.com/example-org/example-repo/pull/246",
+    "capturedAt": "2026-07-19T00:00:00Z",
+    "updatedAt": "2026-07-18T10:00:00Z",
+    "createdAt": "2026-07-17T09:00:00Z",
+    "actor": "hayato",
+    "assignee": "reviewer-a"
+  }
+}

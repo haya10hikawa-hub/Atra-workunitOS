@@ -1,0 +1,18 @@
+{
+  "input": {
+    "eventType": "issue",
+    "repository": {
+      "owner": "example-org",
+      "name": "example-repo"
+    },
+    "number": 301,
+    "title": "Issue: stale documentation link",
+    "summary": "A closed issue about a stale documentation link",
+    "status": "closed",
+    "sourceUrl": "https://github.com/example-org/example-repo/issues/301",
+    "capturedAt": "2026-07-19T00:00:00Z",
+    "updatedAt": "2026-07-18T10:00:00Z",
+    "createdAt": "2026-07-17T09:00:00Z",
+    "actor": "reporter-a"
+  }
+}

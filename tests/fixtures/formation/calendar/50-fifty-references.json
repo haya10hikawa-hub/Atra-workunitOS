@@ -1,0 +1,83 @@
+{
+  "config": {
+    "calendarHosts": [
+      "calendar.google.com"
+    ]
+  },
+  "input": {
+    "eventType": "deadline_approaching",
+    "calendarId": "team@group.calendar.google.com",
+    "eventId": "evt6a8b2c9d0e1f",
+    "title": "Please review the launch plan before the deadline",
+    "summary": "The launch plan needs a final review before it is due.",
+    "organizer": "Hayato",
+    "attendees": [
+      "Reviewer A",
+      "Reviewer B"
+    ],
+    "status": "confirmed",
+    "start": {
+      "kind": "date_time",
+      "value": "2026-08-20T17:00:00Z"
+    },
+    "end": {
+      "kind": "date_time",
+      "value": "2026-08-20T18:00:00Z"
+    },
+    "sourceUrl": "https://calendar.google.com/calendar/event?eid=evt6a8b2c9d0e1f",
+    "updatedAt": "2026-08-01T09:30:00Z",
+    "capturedAt": "2026-08-02T00:00:00Z",
+    "referencedUrls": [
+      "https://example.com/ref-0",
+      "https://example.com/ref-1",
+      "https://example.com/ref-2",
+      "https://example.com/ref-3",
+      "https://example.com/ref-4",
+      "https://example.com/ref-5",
+      "https://example.com/ref-6",
+      "https://example.com/ref-7",
+      "https://example.com/ref-8",
+      "https://example.com/ref-9",
+      "https://example.com/ref-10",
+      "https://example.com/ref-11",
+      "https://example.com/ref-12",
+      "https://example.com/ref-13",
+      "https://example.com/ref-14",
+      "https://example.com/ref-15",
+      "https://example.com/ref-16",
+      "https://example.com/ref-17",
+      "https://example.com/ref-18",
+      "https://example.com/ref-19",
+      "https://example.com/ref-20",
+      "https://example.com/ref-21",
+      "https://example.com/ref-22",
+      "https://example.com/ref-23",
+      "https://example.com/ref-24",
+      "https://example.com/ref-25",
+      "https://example.com/ref-26",
+      "https://example.com/ref-27",
+      "https://example.com/ref-28",
+      "https://example.com/ref-29",
+      "https://example.com/ref-30",
+      "https://example.com/ref-31",
+      "https://example.com/ref-32",
+      "https://example.com/ref-33",
+      "https://example.com/ref-34",
+      "https://example.com/ref-35",
+      "https://example.com/ref-36",
+      "https://example.com/ref-37",
+      "https://example.com/ref-38",
+      "https://example.com/ref-39",
+      "https://example.com/ref-40",
+      "https://example.com/ref-41",
+      "https://example.com/ref-42",
+      "https://example.com/ref-43",
+      "https://example.com/ref-44",
+      "https://example.com/ref-45",
+      "https://example.com/ref-46",
+      "https://example.com/ref-47",
+      "https://example.com/ref-48",
+      "https://example.com/ref-49"
+    ]
+  }
+}

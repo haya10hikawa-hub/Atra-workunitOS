@@ -1,0 +1,24 @@
+{
+  "config": {
+    "workspaces": [
+      {
+        "workspaceId": "T012ABCDEF",
+        "host": "example-workspace.slack.com"
+      }
+    ]
+  },
+  "input": {
+    "eventType": "mention_request",
+    "workspaceId": "T012ABCDEF",
+    "channelId": "C1234567890",
+    "messageTs": "1710000000.000100",
+    "title": "Please take a look at the launcher change",
+    "summary": "A teammate asked for eyes on the launcher ordering change.",
+    "sourceStatus": "closed",
+    "sourceUrl": "https://example-workspace.slack.com/archives/C1234567890/p1710000000000100",
+    "capturedAt": "2026-07-19T00:00:00Z",
+    "messageAt": "2026-07-18T10:00:00Z",
+    "updatedAt": "2026-07-18T10:00:00Z",
+    "actor": "hayato"
+  }
+}

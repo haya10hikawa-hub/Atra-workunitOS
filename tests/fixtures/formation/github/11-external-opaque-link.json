@@ -1,0 +1,22 @@
+{
+  "input": {
+    "eventType": "pull_request",
+    "repository": {
+      "owner": "example-org",
+      "name": "example-repo"
+    },
+    "number": 249,
+    "title": "PR #249: links an external design doc",
+    "summary": "Pull request linking one external and one internal object",
+    "status": "open",
+    "sourceUrl": "https://github.com/example-org/example-repo/pull/249",
+    "capturedAt": "2026-07-19T00:00:00Z",
+    "updatedAt": "2026-07-18T10:00:00Z",
+    "createdAt": "2026-07-17T09:00:00Z",
+    "actor": "hayato",
+    "referencedUrls": [
+      "https://example.com/design/overview",
+      "https://github.com/example-org/example-repo/issues/238"
+    ]
+  }
+}

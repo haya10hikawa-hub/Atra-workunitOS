@@ -8,6 +8,7 @@ import type { SourceRef } from "../../domain/types.ts"
 import { classifyDecompositionCandidate } from "./decompositionClassifier.ts"
 import { createStaticMockDecompositionLlm, validateMockDecompositionLlmOutput, type MockDecompositionLlm } from "./mockDecompositionLlm.ts"
 import { evaluateLlmProviderBoundary, type LlmProviderRuntimeControls } from "../llmProvider/llmProviderBoundary.ts"
+import { containsForbiddenSummaryText } from "../safety/p0Policy.ts"
 import { runRuleGate, type RuleGateResult } from "./ruleGate.ts"
 import type { DecompositionResult, DecompositionTarget } from "./types.ts"
 
@@ -52,9 +53,6 @@ type SummaryBoundaryFinding = {
   readonly valuePreview: string
   readonly reason: "forbidden_summary_text"
 }
-
-const FORBIDDEN_SUMMARY_TEXT =
-  /\b(hash|role|approvalId|targetHash|payloadHash|tenantId|userId|actorUserId|rawPayload|rawBody|providerPayload|sendableBody|approvedOutboundPayload|approvedOutboundBody|dbUpdatePayload)\b|raw\s+(provider|slack|gmail|notion|drive|calendar)\s+(payload|body)|provider\s*(raw\s*)?(payload|body)|provider-ready\s+payload|sendable\s+(provider\s+)?(payload|body)|approved\s+outbound\s+(payload|body)/i
 
 export type DecompositionOrchestrationResult =
   | {
@@ -163,5 +161,5 @@ function blocked(reason: DecompositionOrchestrationBlockedReason, mockCalled: bo
 }
 
 function scanSummaryBoundary(entries: readonly (readonly [string, string | undefined])[]): readonly SummaryBoundaryFinding[] {
-  return entries.flatMap(([path, value]) => value && FORBIDDEN_SUMMARY_TEXT.test(value) ? [{ path, valuePreview: value.slice(0, 80), reason: "forbidden_summary_text" as const }] : [])
+  return entries.flatMap(([path, value]) => value && containsForbiddenSummaryText(value) ? [{ path, valuePreview: value.slice(0, 80), reason: "forbidden_summary_text" as const }] : [])
 }

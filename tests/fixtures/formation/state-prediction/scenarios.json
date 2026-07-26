@@ -1,0 +1,23 @@
+{
+  "_note": "F5 permanent counterexamples. Every subject is compiled through the REAL F1A/F1B/F1C boundaries, so each formationResult is a genuinely ATTESTED object, never a clone. F5 is subject-scoped: there is deliberately no pair, comparison input, or grouping outcome here — those remain owned by F4. `update` requires an explicit non-inferred change EVENT: a current status marker and a single current version value are current STATE and never qualify, and `unchanged` is RESERVED and unreachable because no trusted previous-state baseline exists. `unresolved` is independent of change evidence, requires an actual unresolvedMarker (status cohabitation across members is never a contradiction — that is F6), and `unknown` is RESERVED and unreachable.",
+  "subjectScenarios": [
+    { "name": "A_asserted_actor_structured_authority_explicit_limit_status_only", "doneCondition": "complete", "independentClosure": "independent",
+      "sources": [{ "externalId": "a1", "sourceObjectId": "org/repo#101", "actors": [{ "name": "Dana" }], "deadline": { "value": "2026-08-01T00:00:00Z", "inferred": false }, "authoritySignals": [{ "kind": "owner_of_record", "inferred": false }], "statusMarkers": ["approved"] }],
+      "expect": { "actor": "asserted", "limit": "explicit", "eventTime": "known", "update": "unknown", "authority": "structured", "unresolved": "absent", "missing": "absent", "subjectState": "formal_candidate" } },
+    { "name": "C_unknown_actor_no_limit_no_authority", "doneCondition": "complete", "independentClosure": "independent",
+      "sources": [{ "externalId": "c1", "sourceObjectId": "org/repo#103" }],
+      "expect": { "actor": "unknown", "limit": "absent", "eventTime": "known", "update": "unknown", "authority": "absent", "unresolved": "absent", "missing": "absent", "subjectState": "formal_candidate" } },
+    { "name": "E_uncertain_event_time_capture_precedes_event", "doneCondition": "complete", "independentClosure": "independent",
+      "sources": [{ "externalId": "e1", "sourceObjectId": "org/repo#105", "occurredAt": "2026-07-20T00:00:00Z", "capturedAt": "2026-07-19T00:00:00Z" }],
+      "expect": { "actor": "unknown", "limit": "absent", "eventTime": "uncertain", "update": "unknown", "authority": "absent", "unresolved": "absent", "missing": "absent", "subjectState": "formal_candidate" } },
+    { "name": "F2_meaningful_update_recorded_decision", "doneCondition": "complete", "independentClosure": "independent",
+      "sources": [{ "externalId": "f2", "sourceObjectId": "org/repo#107", "decisionMarkers": [{ "kind": "decision_recorded", "summary": "The rollout decision was recorded.", "inferred": false }] }],
+      "expect": { "actor": "unknown", "limit": "absent", "eventTime": "known", "update": "meaningful", "authority": "absent", "unresolved": "absent", "missing": "absent", "subjectState": "formal_candidate" } },
+    { "name": "H_missing_present_clarification_needed", "goalFields": "missing_timeHorizon", "doneCondition": "partial", "independentClosure": "unknown",
+      "sources": [{ "externalId": "h1", "sourceObjectId": "org/repo#110" }],
+      "expect": { "actor": "unknown", "limit": "absent", "eventTime": "known", "update": "unknown", "authority": "absent", "unresolved": "absent", "missing": "present", "subjectState": "clarification_needed" } },
+    { "name": "K_context_only_parent_bounded", "doneCondition": "complete", "independentClosure": "parent_bounded",
+      "sources": [{ "externalId": "k1", "sourceObjectId": "org/repo#111" }],
+      "expect": { "actor": "unknown", "limit": "absent", "eventTime": "known", "update": "unknown", "authority": "absent", "unresolved": "absent", "missing": "absent", "subjectState": "context_only" } }
+  ]
+}

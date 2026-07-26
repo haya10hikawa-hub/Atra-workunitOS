@@ -1,0 +1,19 @@
+{
+  "input": {
+    "eventType": "pull_request",
+    "repository": { "owner": "Example-Org", "name": "Example-Repo" },
+    "number": 262,
+    "title": "PR #262: mixed-case owner/repo",
+    "summary": "Owner and repository casing differ from canonical",
+    "status": "open",
+    "sourceUrl": "https://github.com/Example-Org/Example-Repo/pull/262",
+    "capturedAt": "2026-07-19T00:00:00Z",
+    "updatedAt": "2026-07-18T10:00:00Z",
+    "createdAt": "2026-07-17T09:00:00Z",
+    "actor": "hayato",
+    "referencedUrls": [
+      "https://github.com/EXAMPLE-ORG/EXAMPLE-REPO/pull/238",
+      "https://github.com/example-org/example-repo/pull/238"
+    ]
+  }
+}
