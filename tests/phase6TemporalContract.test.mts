@@ -25,14 +25,10 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url))
 const H1A_BASE_SHA = "83a536fd0714e1fa0757223e21d4a22ff8493583"
 const H0_DOC_SHA256 = "f2ac89f35735756358105d0c6cba2055face10397e5c71b8c9b15220147ef00f"
 
-const [T0, T1, T2, T3, T4, T5, T6, T7] = [1, 2, 3, 4, 5, 6, 7, 8].map(
-  (day) => `2026-01-0${day}T00:00:00.000Z`,
-)
-const obs = (
-  validFrom: string | null, validTo: string | null, observedAt: string, recordedAt: string,
-): TemporalObservationInput => ({ validFrom, validTo, observedAt, recordedAt })
-const pair = (left: TemporalObservationInput, right: TemporalObservationInput): TemporalRelationInput =>
-  ({ left, right })
+const [T0, T1, T2, T3, T4, T5, T6, T7] = [1, 2, 3, 4, 5, 6, 7, 8].map((day) => `2026-01-0${day}T00:00:00.000Z`)
+const obs = (validFrom: string | null, validTo: string | null, observedAt: string, recordedAt: string): TemporalObservationInput =>
+  ({ validFrom, validTo, observedAt, recordedAt })
+const pair = (left: TemporalObservationInput, right: TemporalObservationInput): TemporalRelationInput => ({ left, right })
 const swap = (input: TemporalRelationInput): TemporalRelationInput => pair(input.right, input.left)
 
 function okOf(input: TemporalRelationInput): TemporalRelationSuccess {
@@ -84,12 +80,13 @@ const SENTENCE: Record<string, string> = {
   left_late_arriving: "The left observation arrived after the right observation despite representing an earlier valid interval.",
   right_late_arriving: "The right observation arrived after the left observation despite representing an earlier valid interval.",
 }
-const H1A_SCOPE = ["app/lib/phase6/temporalContract/evaluate.ts", "app/lib/phase6/temporalContract/types.ts",
+// Cumulative PR #213 scope. `.github/workflows/ci.yml` is CI PROOF INFRASTRUCTURE only: it makes the exact base commit
+// available so this scope proof can run, authorizes no consumer and carries no H1A semantics. This human-ratified
+// five-file variance is one-time and sets no precedent for H1B or any later HTPE slice.
+const H1A_SCOPE = [".github/workflows/ci.yml", "app/lib/phase6/temporalContract/evaluate.ts", "app/lib/phase6/temporalContract/types.ts",
   "docs/HTPE_H1A_TEMPORAL_CONTRACT.md", "tests/phase6TemporalContract.test.mts"]
 const git = (...args: string[]): string => execFileSync("git", args, { cwd: ROOT, encoding: "utf8" }).trim()
-const revokedProxy = (target: object): object => {
-  const { proxy, revoke } = Proxy.revocable(target, {}); revoke(); return proxy
-}
+const revokedProxy = (target: object): object => { const { proxy, revoke } = Proxy.revocable(target, {}); revoke(); return proxy }
 
 // Reference scenarios: strict orders, tie cases, and unresolved boundaries.
 const LBR_IN_ORDER = pair(obs(T0, T1, T4, T4), obs(T2, T3, T5, T5))
