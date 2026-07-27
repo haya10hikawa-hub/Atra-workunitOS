@@ -22,7 +22,6 @@ import type {
 } from "../app/lib/phase6/temporalContract/types.ts"
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url))
-const H1A_BASE_SHA = "83a536fd0714e1fa0757223e21d4a22ff8493583"
 const H0_DOC_SHA256 = "f2ac89f35735756358105d0c6cba2055face10397e5c71b8c9b15220147ef00f"
 
 const [T0, T1, T2, T3, T4, T5, T6, T7] = [1, 2, 3, 4, 5, 6, 7, 8].map((day) => `2026-01-0${day}T00:00:00.000Z`)
@@ -80,11 +79,10 @@ const SENTENCE: Record<string, string> = {
   left_late_arriving: "The left observation arrived after the right observation despite representing an earlier valid interval.",
   right_late_arriving: "The right observation arrived after the left observation despite representing an earlier valid interval.",
 }
-// Cumulative PR #213 scope. `.github/workflows/ci.yml` is CI PROOF INFRASTRUCTURE only: it makes the exact base commit
-// available so this scope proof can run, authorizes no consumer and carries no H1A semantics. This human-ratified
-// five-file variance is one-time and sets no precedent for H1B or any later HTPE slice.
-const H1A_SCOPE = [".github/workflows/ci.yml", "app/lib/phase6/temporalContract/evaluate.ts", "app/lib/phase6/temporalContract/types.ts",
-  "docs/HTPE_H1A_TEMPORAL_CONTRACT.md", "tests/phase6TemporalContract.test.mts"]
+// H1A's own files: a durable module-identity fact, not a release-diff fact. Used to exempt H1A from its own
+// consumer scan. Release scope (which paths a PR changed) belongs to review and merge authorization, never here.
+const H1A_OWN_FILES = ["app/lib/phase6/temporalContract/evaluate.ts", "app/lib/phase6/temporalContract/types.ts",
+  "tests/phase6TemporalContract.test.mts"]
 const git = (...args: string[]): string => execFileSync("git", args, { cwd: ROOT, encoding: "utf8" }).trim()
 const revokedProxy = (target: object): object => { const { proxy, revoke } = Proxy.revocable(target, {}); revoke(); return proxy }
 
@@ -457,7 +455,7 @@ test("h1a: no production consumer anywhere in the repository (t55,t56)", () => {
   // electron/, prototypes/, root configs and any future directory — not only app/.
   const sources = git("ls-files").split("\n").filter((path) => /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(path))
   assert.equal(sources.length > 0, true)
-  const own = new Set(H1A_SCOPE)
+  const own = new Set(H1A_OWN_FILES)
   // Any reference form — static import, export-from, dynamic import(), require(),
   // or a bare path — must spell the module directory to reach it from outside.
   const offenders = sources.filter((path) => !own.has(path) && readFileSync(`${ROOT}${path}`, "utf8").includes("temporalContract"))
@@ -479,7 +477,10 @@ test("h1a: no production consumer anywhere in the repository (t55,t56)", () => {
   }
 })
 
-test("h1a: exact module surface, exact four-file scope, contract documents intact (t57,t58)", () => {
+// Durable module invariants only. Which paths a given PR changed is a one-time release
+// condition owned by review and merge authorization, never by the permanent suite: pinning
+// it here would fail every later unrelated change to the repository.
+test("h1a: exact module surface, contract documents, and H0 integrity (t57,t58)", () => {
   assert.deepEqual(readdirSync(`${ROOT}app/lib/phase6/temporalContract`).sort(), ["evaluate.ts", "types.ts"])
   const h0 = createHash("sha256").update(readFileSync(`${ROOT}docs/PROVENANCE_CLAIM_CONTRACT.md`)).digest("hex")
   assert.equal(h0, H0_DOC_SHA256)
@@ -490,12 +491,4 @@ test("h1a: exact module surface, exact four-file scope, contract documents intac
   const contract = readFileSync(contractPath, "utf8")
   assert.match(contract, /^# HTPE H1A Temporal Relation Contract$/m)
   for (const required of ["SHADOW ONLY", "**Authority:** NONE", "**Production consumer:** NONE"]) assert.equal(contract.includes(required), true)
-  // The exact base object MUST be present. When it is not, this fails loudly
-  // instead of returning and claiming the scope assertion passed.
-  assert.doesNotThrow(() => git("cat-file", "-e", `${H1A_BASE_SHA}^{commit}`), "exact H1A base commit unavailable: release scope cannot be proven (fetch the base, do not skip)")
-  // Base -> working tree: catches committed AND working-tree adds, edits and deletes.
-  const changed = git("diff", "--name-only", H1A_BASE_SHA, "--").split("\n").filter((line) => line !== "").sort()
-  // EXACT set equality, never subset membership: a fifth path fails, and a
-  // missing required path fails just as loudly.
-  assert.deepEqual(changed, [...H1A_SCOPE].sort())
 })
