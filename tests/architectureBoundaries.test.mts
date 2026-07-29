@@ -1,130 +1,184 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { readdir, readFile } from "node:fs/promises"
-import path from "node:path"
 import { fileURLToPath } from "node:url"
+import {
+  extractModuleReferences,
+  isCodeFilePath,
+  resolveModuleTarget,
+  scanModuleGraph,
+  type ModuleEdge,
+} from "../scripts/lib/typescriptModuleGraph.mjs"
 
 const rootDir = fileURLToPath(new URL("../", import.meta.url))
 
-async function listCodeFiles(dir: string): Promise<string[]> {
-  try {
-    const entries = await readdir(dir, { withFileTypes: true })
-    const nested = await Promise.all(entries.map(async (entry) => {
-      const fullPath = path.join(dir, entry.name)
-      if (entry.name === "node_modules" || entry.name === ".open-next" || entry.name === ".next") return []
-      if (entry.isDirectory()) return listCodeFiles(fullPath)
-      if (!/\.(ts|tsx|mts)$/.test(entry.name)) return []
-      return [fullPath]
-    }))
-    return nested.flat()
-  } catch {
-    return []
-  }
+function isBareModule(specifier: string, name: string): boolean {
+  return specifier === name || specifier.startsWith(`${name}/`)
 }
 
-function extractImports(source: string): string[] {
-  const matches = source.matchAll(/^\s*import(?:\s+type)?(?:[\s\w{},*]+from\s+)?["']([^"']+)["']/gm)
-  return Array.from(matches, (match) => match[1])
-}
-
-function resolveImport(filePath: string, specifier: string): string {
-  if (specifier.startsWith("@/")) return path.join(rootDir, specifier.slice(2))
-  if (specifier.startsWith(".")) return path.resolve(path.dirname(filePath), specifier)
-  return specifier
-}
-
-function isBareModule(resolved: string, name: string): boolean {
-  return resolved === name || resolved.startsWith(`${name}/`)
-}
-
-function hasForbiddenResolvedPath(resolved: string, fragments: string[]): boolean {
-  const normalized = resolved.split(path.sep).join("/")
+function hasForbiddenResolvedPath(resolvedTarget: string, fragments: string[]): boolean {
+  const normalized = `/${resolvedTarget.replace(/^\/+/, "")}`
   return fragments.some((fragment) => normalized.includes(fragment))
 }
 
+function violatesDomain(edge: ModuleEdge): boolean {
+  return isBareModule(edge.specifier, "react")
+    || isBareModule(edge.specifier, "next")
+    || hasForbiddenResolvedPath(edge.resolvedTarget, [
+      "/app/api/", "/app/components/", "/app/lib/persistence/d1/",
+      "/app/lib/infrastructure/persistence/d1/", "/app/lib/workunitInbox/sources/",
+      "/app/lib/infrastructure/external/",
+    ])
+}
+
+function violatesApplication(edge: ModuleEdge): boolean {
+  return isBareModule(edge.specifier, "react")
+    || isBareModule(edge.specifier, "next")
+    || hasForbiddenResolvedPath(edge.resolvedTarget, ["/app/components/", "/app/api/"])
+}
+
+function violatesComponents(edge: ModuleEdge): boolean {
+  return hasForbiddenResolvedPath(edge.resolvedTarget, [
+    "/app/lib/persistence/d1/", "/app/lib/infrastructure/persistence/d1/",
+    "/app/lib/persistence/repositoryResolver.ts", "/app/lib/persistence/routeRepositories.ts",
+    "/app/lib/workunitInbox/sources/", "/app/lib/infrastructure/external/",
+  ])
+}
+
+function violatesUiDependency(edge: ModuleEdge): boolean {
+  return isBareModule(edge.specifier, "react")
+    || hasForbiddenResolvedPath(edge.resolvedTarget, ["/app/components/", "/app/api/"])
+}
+
+function violatesApi(edge: ModuleEdge): boolean {
+  return isBareModule(edge.specifier, "react")
+    || hasForbiddenResolvedPath(edge.resolvedTarget, ["/app/components/"])
+}
+
 async function assertNoForbiddenImports(
-  files: string[],
+  scanRoots: string[],
   ruleName: string,
-  forbidden: (resolved: string) => boolean,
+  forbidden: (edge: ModuleEdge) => boolean,
 ) {
-  const violations: string[] = []
-  for (const filePath of files) {
-    const source = await readFile(filePath, "utf8")
-    for (const specifier of extractImports(source)) {
-      const resolved = resolveImport(filePath, specifier)
-      if (forbidden(resolved)) {
-        violations.push(`${path.relative(rootDir, filePath)} -> ${specifier}`)
-      }
-    }
-  }
+  const violations = (await scanModuleGraph(rootDir, scanRoots))
+    .filter(forbidden)
+    .map((edge) => `${edge.file} -> ${edge.kind} ${edge.specifier}`)
   assert.deepEqual(violations, [], `${ruleName} violations:\n${violations.join("\n")}`)
 }
 
+test("architecture scanner covers every module-loading syntax", () => {
+  const source = [
+    'import type { A } from "./type.ts"',
+    'import "./value.ts"',
+    'export * from "./export.ts"',
+    'const dynamic = import("./dynamic.ts")',
+    'const required = require("./required.ts")',
+    'type Lazy = import("./type-expression.ts").Lazy',
+    'import Equal = require("./equals.ts")',
+  ].join("\n")
+  assert.deepEqual(extractModuleReferences(source, "control.mts"), [
+    { kind: "import-type", specifier: "./type.ts" },
+    { kind: "import", specifier: "./value.ts" },
+    { kind: "export", specifier: "./export.ts" },
+    { kind: "dynamic-import", specifier: "./dynamic.ts" },
+    { kind: "require", specifier: "./required.ts" },
+    { kind: "import-type-expression", specifier: "./type-expression.ts" },
+    { kind: "import-equals", specifier: "./equals.ts" },
+  ])
+  assert.throws(
+    () => extractModuleReferences('const path = "./x.ts"; import(path)', "nonliteral.mts"),
+    /Non-literal dynamic-import is forbidden/,
+  )
+})
+
+test("architecture scanner covers every supported source extension and ScriptKind", () => {
+  for (const extension of ["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"]) {
+    assert.equal(isCodeFilePath(`module.${extension}`), true, extension)
+  }
+  assert.equal(isCodeFilePath("module.json"), false)
+  assert.deepEqual(extractModuleReferences("const view = <main />", "view.jsx"), [])
+  assert.deepEqual(extractModuleReferences("const view: unknown = <main />", "view.tsx"), [])
+})
+
+test("architecture scanner follows createRequire aliases and ignores shadowed require", () => {
+  const source = [
+    'import { createRequire as makeRequire } from "node:module"',
+    "const load = makeRequire(import.meta.url)",
+    'load("./loaded.cjs")',
+    "function local(require: (value: string) => void, value: string) { require(value) }",
+  ].join("\n")
+  assert.deepEqual(extractModuleReferences(source, "loader.mts"), [
+    { kind: "import", specifier: "node:module" },
+    { kind: "require", specifier: "./loaded.cjs" },
+  ])
+  assert.throws(
+    () => extractModuleReferences(`${source}\nconst target = "./x.cjs"\nload(target)`, "nonliteral-loader.mts"),
+    /Non-literal require is forbidden/,
+  )
+  const dynamicFactory = [
+    'const { createRequire: factory } = await import("node:module")',
+    "const localLoad = factory(import.meta.url)",
+    'localLoad("./dynamic-loaded.cjs")',
+  ].join("\n")
+  assert.deepEqual(extractModuleReferences(dynamicFactory, "dynamic-loader.mts"), [
+    { kind: "dynamic-import", specifier: "node:module" },
+    { kind: "require", specifier: "./dynamic-loaded.cjs" },
+  ])
+})
+
+test("architecture scanner fails closed and follows tsconfig aliases", async () => {
+  await assert.rejects(() => scanModuleGraph(rootDir, ["missing-architecture-root"]), /ENOENT/)
+  const importer = fileURLToPath(new URL("./architectureBoundaries.test.mts", import.meta.url))
+  assert.equal(
+    resolveModuleTarget(rootDir, importer, "@/scripts/lib/typescriptModuleGraph.mjs"),
+    "scripts/lib/typescriptModuleGraph.d.mts",
+  )
+})
+
+test("every architecture policy rejects a positive control", () => {
+  const edge = (specifier: string, resolvedTarget: string): ModuleEdge => ({
+    file: "control.ts", kind: "import", specifier, resolvedTarget,
+  })
+  const controls: Array<[(value: ModuleEdge) => boolean, ModuleEdge]> = [
+    [violatesDomain, edge("react", "node_modules/@types/react/index.d.ts")],
+    [violatesApplication, edge("next/server", "node_modules/next/server.d.ts")],
+    [violatesComponents, edge("@/lib/persistence/d1/types", "app/lib/persistence/d1/types.ts")],
+    [violatesApi, edge("@/components/x", "app/components/x.tsx")],
+    [violatesUiDependency, edge("@/components/x", "app/components/x.tsx")],
+  ]
+  for (const [policy, forbidden] of controls) {
+    assert.equal(policy(forbidden), true)
+    assert.equal(policy(edge("@/lib/domain/types", "app/lib/domain/types.ts")), false)
+  }
+})
+
 test("domain modules do not import UI, routes, Next/React, D1 implementations, or raw external clients", async () => {
-  const files = await listCodeFiles(path.join(rootDir, "app/lib/domain"))
-  await assertNoForbiddenImports(files, "domain", (resolved) =>
-    isBareModule(resolved, "react")
-    || isBareModule(resolved, "next")
-    || hasForbiddenResolvedPath(resolved, [
-      "/app/api/",
-      "/app/components/",
-      "/app/lib/persistence/d1/",
-      "/app/lib/infrastructure/persistence/d1/",
-      "/app/lib/workunitInbox/sources/",
-      "/app/lib/infrastructure/external/",
-    ]))
+  await assertNoForbiddenImports(["app/lib/domain"], "domain", violatesDomain)
 })
 
 test("application auth modules do not import React, components, or API routes", async () => {
-  const files = await listCodeFiles(path.join(rootDir, "app/lib/application/auth"))
-  await assertNoForbiddenImports(files, "application-auth", (resolved) =>
-    isBareModule(resolved, "react")
-    || isBareModule(resolved, "next")
-    || hasForbiddenResolvedPath(resolved, ["/app/components/", "/app/api/"]))
+  await assertNoForbiddenImports(["app/lib/application/auth"], "application-auth", violatesApplication)
 })
 
 test("application modules do not import React, components, or API routes", async () => {
-  const files = await listCodeFiles(path.join(rootDir, "app/lib/application"))
-  await assertNoForbiddenImports(files, "application", (resolved) =>
-    isBareModule(resolved, "react")
-    || isBareModule(resolved, "next")
-    || hasForbiddenResolvedPath(resolved, ["/app/components/", "/app/api/"]))
+  await assertNoForbiddenImports(["app/lib/application"], "application", violatesApplication)
 })
 
 test("components do not import D1 implementations, raw external clients, or server-only repository resolvers", async () => {
-  const files = await listCodeFiles(path.join(rootDir, "app/components"))
-  await assertNoForbiddenImports(files, "components", (resolved) =>
-    hasForbiddenResolvedPath(resolved, [
-      "/app/lib/persistence/d1/",
-      "/app/lib/infrastructure/persistence/d1/",
-      "/app/lib/persistence/repositoryResolver.ts",
-      "/app/lib/persistence/routeRepositories.ts",
-      "/app/lib/workunitInbox/sources/",
-      "/app/lib/infrastructure/external/",
-    ]))
+  await assertNoForbiddenImports(["app/components"], "components", violatesComponents)
 })
 
 test("API routes do not import React components", async () => {
-  const files = await listCodeFiles(path.join(rootDir, "app/api"))
-  await assertNoForbiddenImports(files, "api", (resolved) =>
-    isBareModule(resolved, "react")
-    || hasForbiddenResolvedPath(resolved, ["/app/components/"]))
+  await assertNoForbiddenImports(["app/api"], "api", violatesApi)
 })
 
 test("D1 repositories do not import React, components, or API routes", async () => {
-  const files = await listCodeFiles(path.join(rootDir, "app/lib/persistence/d1"))
-  await assertNoForbiddenImports(files, "d1", (resolved) =>
-    isBareModule(resolved, "react")
-    || hasForbiddenResolvedPath(resolved, ["/app/components/", "/app/api/"]))
+  await assertNoForbiddenImports(["app/lib/persistence/d1"], "d1", violatesUiDependency)
 })
 
 test("external source clients do not import React, components, or API routes", async () => {
-  const files = [
-    ...(await listCodeFiles(path.join(rootDir, "app/lib/workunitInbox/sources"))),
-    ...(await listCodeFiles(path.join(rootDir, "app/lib/infrastructure/external"))),
-    ...(await listCodeFiles(path.join(rootDir, "app/lib/integrations"))),
-  ]
-  await assertNoForbiddenImports(files, "external-clients", (resolved) =>
-    isBareModule(resolved, "react")
-    || hasForbiddenResolvedPath(resolved, ["/app/components/", "/app/api/"]))
+  await assertNoForbiddenImports([
+    "app/lib/workunitInbox/sources",
+    "app/lib/infrastructure/external",
+    "app/lib/integrations",
+  ], "external-clients", violatesUiDependency)
 })

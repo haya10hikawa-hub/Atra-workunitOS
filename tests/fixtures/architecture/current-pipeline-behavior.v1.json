@@ -1,0 +1,243 @@
+{
+  "sourceSha": "066a43c3df07f3da10a2fc93ff7d90157c732114",
+  "sourceShaRole": "refactor_base_only_not_tree_attestation",
+  "defaultAndInbox": {
+    "inbox": [
+      { "id": "wu:github-7", "signalId": "github-7", "tenantId": "tenant-ratchet", "sourceProvider": "github", "kind": "blocker", "priority": "high", "sourceUrl": "https://github.test/acme/repo/issues/7", "status": "open" },
+      { "id": "wu:slack-9", "signalId": "slack-9", "tenantId": "tenant-ratchet", "sourceProvider": "slack", "kind": "missed_response", "priority": "medium", "sourceUrl": "https://slack.test/archives/release/p9", "status": "open" }
+    ],
+    "bridge": {
+      "source": "mock_candidate_pipeline",
+      "mode": "candidate_only",
+      "safety": { "externalExecutionEnabled": false, "approvalCreationEnabled": false, "providerCallsEnabled": false, "humanReviewRequired": true, "containsRawPayload": false },
+      "candidates": [
+        { "id": "candidate:github-7", "source": "GitHub", "status": "BLOCKED", "priority": "high", "candidateType": "work_unit_candidate", "humanReviewRequired": true, "candidateOnly": true, "graphNodeIds": ["source", "evidence", "next-step"], "hasSourceUrl": false, "hasMissingFields": false },
+        { "id": "candidate:slack-9", "source": "Slack", "status": "NEEDS REVIEW", "priority": "medium", "candidateType": "work_unit_candidate", "humanReviewRequired": true, "candidateOnly": true, "graphNodeIds": ["source", "evidence", "next-step"], "hasSourceUrl": false, "hasMissingFields": false }
+      ]
+    },
+    "launcher": [
+      { "id": "candidate:github-7", "source": "GitHub", "status": "BLOCKED", "priority": "high", "hasGraph": false, "hasEvidenceSummary": false, "hasHumanReviewRequired": false },
+      { "id": "candidate:slack-9", "source": "Slack", "status": "NEEDS REVIEW", "priority": "medium", "hasGraph": false, "hasEvidenceSummary": false, "hasHumanReviewRequired": false }
+    ]
+  },
+  "defaultMockToLauncher": {
+    "bridge": {
+      "source": "mock_candidate_pipeline",
+      "mode": "candidate_only",
+      "safety": { "externalExecutionEnabled": false, "approvalCreationEnabled": false, "providerCallsEnabled": false, "humanReviewRequired": true, "containsRawPayload": false },
+      "candidateIds": [
+        "candidate:signal:github:pr:review:1",
+        "candidate:signal:github:issue:blocked:1",
+        "candidate:signal:github:issue:assigned:1",
+        "candidate:signal:slack:mention:1",
+        "candidate:signal:calendar:deadline:1"
+      ]
+    },
+    "launcher": [
+      {
+        "id": "candidate:signal:github:pr:review:1",
+        "title": "PR #142: Add rate limiting middleware",
+        "source": "GitHub",
+        "status": "NEEDS REVIEW",
+        "roi": 9.4,
+        "summary": "Your review is requested on the rate limiting middleware PR. The team needs sign-off by EOD.",
+        "objective": "Review this pull request review request and decide the next PM-owned step.",
+        "kind": "review waiting",
+        "priority": "high",
+        "ownerLabel": "alice",
+        "sourceIcon": { "id": "github", "label": "GitHub", "assetPath": "/workunit-source-icons/github.svg", "fallbackBadge": "GH", "sourceType": "local_asset" },
+        "statusTone": "green",
+        "sourceDetail": "GitHub · pull request review request",
+        "urgency": "High impact",
+        "nextStep": "Review the changes and leave sign-off comments"
+      },
+      {
+        "id": "candidate:signal:github:issue:blocked:1",
+        "title": "Issue #289: Admin dashboard shows stale data",
+        "source": "GitHub",
+        "status": "BLOCKED",
+        "roi": 7.9,
+        "summary": "This issue is blocked pending the database schema migration. The team can't proceed.",
+        "objective": "Review this blocked issue and decide the next PM-owned step.",
+        "kind": "blocker",
+        "priority": "medium",
+        "ownerLabel": "you",
+        "sourceIcon": { "id": "github", "label": "GitHub", "assetPath": "/workunit-source-icons/github.svg", "fallbackBadge": "GH", "sourceType": "local_asset" },
+        "statusTone": "yellow",
+        "sourceDetail": "GitHub · blocked issue",
+        "urgency": "Normal priority",
+        "nextStep": "Identify the blocker owner and unblock the dependency"
+      },
+      {
+        "id": "candidate:signal:github:issue:assigned:1",
+        "title": "Issue #301: Implement email digest feature",
+        "source": "GitHub",
+        "status": "READY",
+        "roi": 7.6,
+        "summary": "You have been assigned this feature. Sprint ends Friday.",
+        "objective": "Review this assigned issue and decide the next PM-owned step.",
+        "kind": "assigned issue",
+        "priority": "medium",
+        "ownerLabel": "you",
+        "sourceIcon": { "id": "github", "label": "GitHub", "assetPath": "/workunit-source-icons/github.svg", "fallbackBadge": "GH", "sourceType": "local_asset" },
+        "statusTone": "blue",
+        "sourceDetail": "GitHub · assigned issue",
+        "urgency": "Normal priority",
+        "nextStep": "Scope the issue and plan the implementation"
+      },
+      {
+        "id": "candidate:signal:slack:mention:1",
+        "title": "Slack message from @charlie in #ops",
+        "source": "Slack",
+        "status": "NEEDS REVIEW",
+        "roi": 9,
+        "summary": "Charlie asked: \"Can someone review the deployment config? We need to ship today.\"",
+        "objective": "Review this mention request and decide the next PM-owned step.",
+        "kind": "missed response",
+        "priority": "high",
+        "ownerLabel": "charlie",
+        "sourceIcon": { "id": "slack", "label": "Slack", "assetPath": "/workunit-source-icons/slack.svg", "fallbackBadge": "SL", "sourceType": "local_asset" },
+        "statusTone": "green",
+        "sourceDetail": "Slack · mention request",
+        "urgency": "High impact",
+        "nextStep": "Reply to the request or delegate the next action"
+      },
+      {
+        "id": "candidate:signal:calendar:deadline:1",
+        "title": "Quarterly review presentation due",
+        "source": "Calendar",
+        "status": "READY",
+        "roi": 9,
+        "summary": "Your quarterly review presentation is due in 2 days.",
+        "objective": "Review this deadline and decide the next PM-owned step.",
+        "kind": "deadline",
+        "priority": "high",
+        "ownerLabel": "PM",
+        "sourceIcon": { "id": "google-calendar", "label": "Google Calendar", "assetPath": "/workunit-source-icons/google-calendar.svg", "fallbackBadge": "CA", "sourceType": "local_asset" },
+        "statusTone": "blue",
+        "sourceDetail": "Calendar · deadline",
+        "urgency": "High impact",
+        "nextStep": "Prepare the deliverable before the deadline"
+      }
+    ]
+  },
+  "launcherCompositionSourceHashes": {
+    "app/page.tsx": "8e83d9fab112a19e92d29b2e86c58664de46b35e1fe96b6131fa8c299b074aea",
+    "app/components/workunit-os/WorkUnitOSDashboard.tsx": "3e20aa0df1b068fae4342f67cfb7750f63c2485e57fbe134961efdea56d28476",
+    "app/components/workunit-os/launcher/WorkUnitLauncher.tsx": "1a06c4d0f56d8b83c7f20b3856d50287178895f80ff084118c1ff2f35fb708c2"
+  },
+  "inboxRoute": {
+    "status": 200,
+    "body": {
+      "workUnits": [
+        {
+          "id": "wu:signal:github:pr:review:1",
+          "signalId": "signal:github:pr:review:1",
+          "tenantId": "dev-tenant",
+          "title": "PR #142: Add rate limiting middleware",
+          "kind": "review_waiting",
+          "priority": "high",
+          "sourceProvider": "github",
+          "reason": "review waiting",
+          "evidence": "PR \"PR #142: Add rate limiting middleware\" is waiting for review",
+          "nextAction": "Review PR: PR #142: Add rate limiting middleware",
+          "sourceUrl": "https://github.com/acme/api/pull/142",
+          "actor": "alice",
+          "repository": "acme/api",
+          "createdAt": "2026-07-01T08:00:00.000Z",
+          "status": "open"
+        },
+        {
+          "id": "wu:signal:slack:mention:1",
+          "signalId": "signal:slack:mention:1",
+          "tenantId": "dev-tenant",
+          "title": "Slack message from @charlie in #ops",
+          "kind": "missed_response",
+          "priority": "high",
+          "sourceProvider": "slack",
+          "reason": "missed response",
+          "evidence": "charlie asked: \"Charlie asked: \"Can someone review the deployment config? We need to ship today.\"\"",
+          "nextAction": "Respond to charlie on Slack",
+          "sourceUrl": "https://acme.slack.com/archives/ops/p123456",
+          "actor": "charlie",
+          "createdAt": "2026-07-01T07:00:00.000Z",
+          "status": "open"
+        },
+        {
+          "id": "wu:signal:github:issue:blocked:1",
+          "signalId": "signal:github:issue:blocked:1",
+          "tenantId": "dev-tenant",
+          "title": "Issue #289: Admin dashboard shows stale data",
+          "kind": "blocker",
+          "priority": "high",
+          "sourceProvider": "github",
+          "reason": "blocker",
+          "evidence": "Blocked: This issue is blocked pending the database schema migration. The team can't proceed.",
+          "nextAction": "Unblock or clarify blocker for Issue #289: Admin dashboard shows stale data",
+          "sourceUrl": "https://github.com/acme/admin/issues/289",
+          "actor": "bob",
+          "assignee": "you",
+          "repository": "acme/admin",
+          "createdAt": "2026-07-01T06:00:00.000Z",
+          "status": "open"
+        },
+        {
+          "id": "wu:signal:calendar:deadline:1",
+          "signalId": "signal:calendar:deadline:1",
+          "tenantId": "dev-tenant",
+          "title": "Quarterly review presentation due",
+          "kind": "deadline",
+          "priority": "high",
+          "sourceProvider": "calendar",
+          "reason": "deadline",
+          "evidence": "Deadline approaching: Your quarterly review presentation is due in 2 days.",
+          "nextAction": "Prepare for Quarterly review presentation due",
+          "sourceUrl": "https://calendar.google.com/event?eid=abc123",
+          "dueAt": "2026-07-03T10:00:00.000Z",
+          "createdAt": "2026-06-30T10:00:00.000Z",
+          "status": "open"
+        },
+        {
+          "id": "wu:signal:github:issue:assigned:1",
+          "signalId": "signal:github:issue:assigned:1",
+          "tenantId": "dev-tenant",
+          "title": "Issue #301: Implement email digest feature",
+          "kind": "assigned_issue",
+          "priority": "medium",
+          "sourceProvider": "github",
+          "reason": "assigned issue",
+          "evidence": "Assigned to you: You have been assigned this feature. Sprint ends Friday.",
+          "nextAction": "Start working on Issue #301: Implement email digest feature",
+          "sourceUrl": "https://github.com/acme/api/issues/301",
+          "assignee": "you",
+          "repository": "acme/api",
+          "createdAt": "2026-07-01T02:00:00.000Z",
+          "status": "open"
+        }
+      ]
+    },
+    "persistence": {
+      "rows": [
+        { "id": "wu:signal:calendar:deadline:1", "tenantId": "dev-tenant", "sourceSignalId": "signal:calendar:deadline:1", "status": "open" },
+        { "id": "wu:signal:github:issue:assigned:1", "tenantId": "dev-tenant", "sourceSignalId": "signal:github:issue:assigned:1", "status": "open" },
+        { "id": "wu:signal:github:issue:blocked:1", "tenantId": "dev-tenant", "sourceSignalId": "signal:github:issue:blocked:1", "status": "open" },
+        { "id": "wu:signal:github:pr:review:1", "tenantId": "dev-tenant", "sourceSignalId": "signal:github:pr:review:1", "status": "open" },
+        { "id": "wu:signal:slack:mention:1", "tenantId": "dev-tenant", "sourceSignalId": "signal:slack:mention:1", "status": "open" }
+      ],
+      "usageCount": 1,
+      "audit": { "eventKind": "workunit.inbox.fetch", "reason": "mock", "metadata": { "source": "mock", "count": 5 } }
+    }
+  },
+  "llm": {
+    "providerCalls": 3,
+    "candidate": { "sourceSignalIds": ["llm-11"], "sourceType": "slack", "trustLevel": "sanitized_candidate", "hasSourceRef": false },
+    "draft": { "sourceCandidateIds": ["candidate:llm-11"], "status": "draft", "trustLevel": "draft", "missingFields": [] },
+    "evaluation": { "isComplete": true, "isExecutable": true, "missingFields": [] },
+    "hasReviewedWorkUnit": false,
+    "hasExecution": false
+  },
+  "toolsRouteMockLlm": {
+    "status": 500,
+    "body": { "ok": false, "requestId": "ratchet-tools-ingest", "error": "internal_error" }
+  }
+}
