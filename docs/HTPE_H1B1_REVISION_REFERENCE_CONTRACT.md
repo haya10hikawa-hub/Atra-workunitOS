@@ -121,7 +121,24 @@ network, no environment-variable access, no persistence.
 
 **Production consumer: NONE.** Pinned repository-wide over tracked source files against static
 import, export-from, dynamic `import()`, `require()` and bare paths, together with an exact
-module-surface assertion that also catches a same-directory sibling.
+module-surface assertion that also catches a same-directory sibling. **Persistence remains
+NONE.**
+
+**Exact reviewed internal consumer (HTPE H1B2A):** `app/lib/phase6/temporalAssociation/` —
+precisely `types.ts` and `evaluate.ts`, and no other file. H1B1 previously had no internal source
+consumer; this is the one bounded transition, reviewed in the H1B2A slice
+(`docs/HTPE_H1B2A_DECLARED_TEMPORAL_ASSOCIATION_CONTRACT.md`). No route, UI, provider,
+formation, persistence, ranking, candidate-pipeline or external integration consumer is
+authorized.
+
+**H1B1's authority and semantics are unchanged by that transition.** H1B2A consumes this
+contract and does not reinterpret it: it adds no reference rule, removes none, re-implements no
+reference pattern or basis vocabulary, and never reads `same_declared_ref` as identity. Under
+H1B2A's construction both compared sides are detached copies of the same captured values, so the
+three relations are constant by construction, are used only as a self-signature and are never
+emitted. The permanent guard is narrowed and strengthened — from "zero occurrences anywhere" to
+"zero occurrences outside the named files, whose import sets are pinned exactly" — never
+deleted.
 
 ## 9. Out of scope
 
