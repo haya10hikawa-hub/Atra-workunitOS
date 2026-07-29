@@ -147,10 +147,26 @@ string, duration, count, index, score, priority, confidence, rank, conflict, app
 execution data; no numeric value at all; no field name ending in `hash`. There is no LLM
 context path and no provider import.
 
-## 12. No production consumer
+## 12. Consumers
 
-Nothing imports this module. It is not wired into routes, hopper, formation, ranking,
-decomposition, persistence or any candidate pipeline. A permanent test pins this.
+**Production consumer: NONE.** This module is not wired into routes, hopper, formation,
+ranking, decomposition, persistence or any candidate pipeline, and **persistence remains
+NONE**. A permanent test pins this.
+
+**Exact reviewed internal consumer (HTPE H1B2A):** `app/lib/phase6/temporalAssociation/` —
+precisely `types.ts` and `evaluate.ts`, and no other file. H1A previously had no internal source
+consumer; this is the one bounded transition, reviewed in the H1B2A slice
+(`docs/HTPE_H1B2A_DECLARED_TEMPORAL_ASSOCIATION_CONTRACT.md`). No route, UI, provider,
+formation, persistence, ranking, candidate-pipeline or external integration consumer is
+authorized.
+
+**H1A's authority and semantics are unchanged by that transition.** H1B2A consumes this
+contract and does not reinterpret it: it adds no temporal rule, removes none, re-implements no
+instant pattern or interval rule, and derives its one temporal output from H1A's own verdict.
+H1A remains the sole owner of canonical instant validation, null semantics, `validFrom <=
+validTo` and `recordedAt >= observedAt`. The permanent guard is narrowed and strengthened —
+from "zero occurrences anywhere" to "zero occurrences outside the named files, whose import sets
+are pinned exactly" — never deleted.
 
 ## 13. Deferred H1B capabilities
 

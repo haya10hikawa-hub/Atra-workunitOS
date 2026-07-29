@@ -83,6 +83,36 @@ const SENTENCE: Record<string, string> = {
 // consumer scan. Release scope (which paths a PR changed) belongs to review and merge authorization, never here.
 const H1A_OWN_FILES = ["app/lib/phase6/temporalContract/evaluate.ts", "app/lib/phase6/temporalContract/types.ts",
   "tests/phase6TemporalContract.test.mts"]
+// EXACT reviewed internal consumer transition (HTPE H1B2A): H1A moves from zero
+// internal consumers to exactly these two module files. No route, UI, provider,
+// formation, persistence, ranking, candidate-pipeline or external consumer is
+// authorized; the PRODUCTION pipeline consumer stays NONE; H1A's semantics are
+// unchanged. The exemption is PINNED, not a hole: each consumer's ENTIRE import
+// set is fixed, so it cannot grow an edge without failing here.
+const H1B2A_CONSUMERS = ["app/lib/phase6/temporalAssociation/evaluate.ts",
+  "app/lib/phase6/temporalAssociation/types.ts"]
+// CONCATENATED: spelling H1B1's token literally would make this file an offender
+// in H1B1's own permanent substring scan.
+const H1B1_MOD = `revision${"Reference"}`
+const H1B2A_IMPORTS: Record<string, string[]> = {
+  "app/lib/phase6/temporalAssociation/evaluate.ts":
+    ["./types.ts", `../${H1B1_MOD}/evaluate.ts`, "../temporalContract/evaluate.ts"],
+  "app/lib/phase6/temporalAssociation/types.ts":
+    [`../${H1B1_MOD}/types.ts`, "../temporalContract/types.ts"],
+}
+// An exempted consumer must exist, import exactly its reviewed specifiers, and
+// reach nothing through a dynamic, re-exported, computed or split specifier.
+function assertPinnedConsumer(root: string, tracked: string[], consumer: string): void {
+  assert.equal(tracked.includes(consumer), true, `stale exemption: ${consumer}`)
+  const source = readFileSync(`${root}${consumer}`, "utf8")
+  const specifiers = [...source.matchAll(/(?:from|^\s*import)\s+"([^"]+)"/gm)].map((match) => match[1])
+  assert.deepEqual(specifiers, H1B2A_IMPORTS[consumer], consumer)
+  assert.doesNotMatch(source, /\bimport\s*\(/)
+  assert.doesNotMatch(source, /\brequire\s*\(/)
+  assert.doesNotMatch(source, /^\s*export\s[^=]*\sfrom\s/m)
+  assert.doesNotMatch(source, /from\s+"[^"]*"\s*\+/)
+  assert.doesNotMatch(source, /from\s+`/)
+}
 const git = (...args: string[]): string => execFileSync("git", args, { cwd: ROOT, encoding: "utf8" }).trim()
 const revokedProxy = (target: object): object => { const { proxy, revoke } = Proxy.revocable(target, {}); revoke(); return proxy }
 
@@ -449,17 +479,23 @@ test("h1a: snapshots never alias and survive public mutation (t53,t54)", () => {
   if (after.ok) assert.equal(JSON.stringify(after.snapshot), before)
 })
 
-test("h1a: no production consumer anywhere in the repository (t55,t56)", () => {
+test("h1a: exactly one reviewed internal consumer, no production consumer (t55,t56)", () => {
   const moduleDir = `${ROOT}app/lib/phase6/temporalContract`
   // Every TRACKED executable source file in the repository — app/, scripts/,
   // electron/, prototypes/, root configs and any future directory — not only app/.
   const sources = git("ls-files").split("\n").filter((path) => /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(path))
   assert.equal(sources.length > 0, true)
-  const own = new Set(H1A_OWN_FILES)
+  const own = new Set([...H1A_OWN_FILES, ...H1B2A_CONSUMERS])
   // Any reference form — static import, export-from, dynamic import(), require(),
   // or a bare path — must spell the module directory to reach it from outside.
+  // The guard is NARROWED, not deleted: from "zero occurrences anywhere" to
+  // "zero occurrences outside these named files, whose import sets are pinned".
   const offenders = sources.filter((path) => !own.has(path) && readFileSync(`${ROOT}${path}`, "utf8").includes("temporalContract"))
   assert.deepEqual(offenders, [])
+  for (const consumer of H1B2A_CONSUMERS) assertPinnedConsumer(ROOT, sources, consumer)
+  // Non-vacuity: the needle really does match its one legitimate importer, so
+  // the scan is not silently searching for something that is never present.
+  assert.equal(readFileSync(`${ROOT}${H1B2A_CONSUMERS[0]}`, "utf8").includes("temporalContract"), true)
   const evaluateSource = readFileSync(`${moduleDir}/evaluate.ts`, "utf8")
   // The module itself may not reach outward dynamically either.
   for (const source of [evaluateSource, readFileSync(`${moduleDir}/types.ts`, "utf8")]) {

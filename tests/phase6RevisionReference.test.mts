@@ -115,6 +115,20 @@ const H1A_OWN_FILES = [
   `app/lib/phase6/${H1A_TOKEN}/types.ts`,
   "tests/phase6TemporalContract.test.mts",
 ]
+// EXACT reviewed internal consumer transition (HTPE H1B2A): H1B1 and H1A each
+// move from zero internal consumers to exactly these two module files. No route,
+// UI, provider, formation, persistence, ranking, candidate-pipeline or external
+// consumer is authorized; the PRODUCTION pipeline consumer stays NONE; both
+// predecessors' semantics are unchanged. The exemption is PINNED, not a hole:
+// each consumer's ENTIRE import set is fixed below.
+const H1B2A_CONSUMERS = ["app/lib/phase6/temporalAssociation/evaluate.ts",
+  "app/lib/phase6/temporalAssociation/types.ts"]
+const H1B2A_IMPORTS: Record<string, string[]> = {
+  "app/lib/phase6/temporalAssociation/evaluate.ts":
+    ["./types.ts", `../${"revisionReference"}/evaluate.ts`, `../${H1A_TOKEN}/evaluate.ts`],
+  "app/lib/phase6/temporalAssociation/types.ts":
+    [`../${"revisionReference"}/types.ts`, `../${H1A_TOKEN}/types.ts`],
+}
 const git = (...args: string[]): string => execFileSync("git", args, { cwd: ROOT, encoding: "utf8" }).trim()
 const trackedSources = (): string[] => {
   const files = git("ls-files").split("\n").filter((path) => /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(path))
@@ -457,16 +471,18 @@ test("h1b1: snapshots never alias and survive public mutation", () => {
 
 // ─── H. architecture ────────────────────────────────────────────
 
-test("h1b1: no production consumer anywhere in the repository, for H1B1 or H1A", () => {
+test("h1b1: exactly one reviewed internal consumer for H1B1 and H1A, no production consumer", () => {
   const sources = trackedSources()
   // Any reference form — static import, export-from, dynamic import(), require(),
   // or a bare path — must spell the module directory to reach it from outside.
   // A SAME-DIRECTORY sibling would not, which is why the exact module surface is
-  // pinned in the next test: together they close both routes.
+  // pinned in the next test: together they close both routes. The guard is
+  // NARROWED, not deleted: from "zero occurrences anywhere" to "zero occurrences
+  // outside these named files, whose import sets are pinned exactly".
   const offendersFor = (token: string, own: string[]): string[] =>
     sources.filter((path) => !own.includes(path) && readFileSync(`${ROOT}${path}`, "utf8").includes(token))
-  assert.deepEqual(offendersFor("revisionReference", OWN_FILES), [])
-  assert.deepEqual(offendersFor(H1A_TOKEN, H1A_OWN_FILES), [])
+  assert.deepEqual(offendersFor("revisionReference", [...OWN_FILES, ...H1B2A_CONSUMERS]), [])
+  assert.deepEqual(offendersFor(H1A_TOKEN, [...H1A_OWN_FILES, ...H1B2A_CONSUMERS]), [])
   // Non-vacuity, both directions: each needle DOES match the one importer that
   // legitimately spells it, so neither scan is silently searching for nothing,
   // and every own file is a real tracked path rather than a stale exemption.
@@ -476,6 +492,22 @@ test("h1b1: no production consumer anywhere in the repository, for H1B1 or H1A",
   ] as const) {
     assert.equal(readFileSync(`${ROOT}${importer}`, "utf8").includes(needle), true)
     for (const path of own) assert.equal(sources.includes(path), true, `stale exemption: ${path}`)
+  }
+  // Each authorized consumer must import exactly its reviewed specifier set, and
+  // reach nothing dynamic, re-exported, computed or split.
+  for (const consumer of H1B2A_CONSUMERS) {
+    assert.equal(sources.includes(consumer), true, `stale exemption: ${consumer}`)
+    const source = readFileSync(`${ROOT}${consumer}`, "utf8")
+    const specifiers = [...source.matchAll(/(?:from|^\s*import)\s+"([^"]+)"/gm)].map((match) => match[1])
+    assert.deepEqual(specifiers, H1B2A_IMPORTS[consumer], consumer)
+    assert.doesNotMatch(source, /\bimport\s*\(/)
+    assert.doesNotMatch(source, /\brequire\s*\(/)
+    assert.doesNotMatch(source, /^\s*export\s[^=]*\sfrom\s/m)
+    assert.doesNotMatch(source, /from\s+"[^"]*"\s*\+/)
+    assert.doesNotMatch(source, /from\s+`/)
+    for (const needle of ["revisionReference", H1A_TOKEN]) {
+      assert.equal(source.includes(needle), true, `${consumer} must reach ${needle}`)
+    }
   }
 })
 
