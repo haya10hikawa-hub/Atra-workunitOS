@@ -355,3 +355,15 @@ WorkUnit OS は、知識労働のための意思決定 OS を目指す。
 - `ActorWeight` は最初から固定値で完成させようとしない
 
 以上を前提に、Hopper は UI 施策ではなく、WorkUnit OS 全体の学習基盤として扱う。
+
+## Archived Launcher input assumptions
+
+入力インターフェースは以下を前提とする。
+
+- iOS / Android の共有シート
+- ブラウザ拡張またはブックマークレット
+- X ブックマーク同期
+- GitHub Star 同期
+- RSS / ニュースレター同期
+
+スクリーンショット由来の入力は補助ルートとして扱う。主要導線は共有シートと既存行動同期である。
