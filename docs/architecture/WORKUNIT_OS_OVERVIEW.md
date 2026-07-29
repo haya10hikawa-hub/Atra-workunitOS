@@ -11,11 +11,11 @@ WorkUnit OS は、情報過多とアプリケーション分断によって発�
 目的は単なるタスク管理ではない。  
 `情報 -> 判断 -> 計画 -> 実行` の流れを、AIとユーザー編集権の組み合わせで再設計することにある。
 
-## 2. Current scope
+## 2. 現行スコープ
 
-The current product is a candidate-only, human-reviewable WorkUnit OS. Canonical UI and authority boundaries are defined by [Canonical Decision Index](../CANONICAL_DECISION_INDEX.md) and [Atra Doctrine](../ATRA_DOCTRINE.md).
+現行プロダクトは、候補のみを扱い、人間がレビューするWorkUnit OSである。UIと権限境界の正本は、[Canonical Decision Index](../CANONICAL_DECISION_INDEX.md) と [Atra Doctrine](../ATRA_DOCTRINE.md) に置く。
 
-The former Hopper/MVP roadmap, including n8n, live-provider, and ranking assumptions, is isolated in [Hopper MVP Roadmap](../research/HOPPER_MVP_ROADMAP.md). It is historical research, not a current capability claim.
+旧Hopper/MVPロードマップ、n8n、ライブ提供元、ランキングの前提は [Hopper MVP Roadmap](../research/HOPPER_MVP_ROADMAP.md) に隔離する。これは歴史的な研究資料であり、現行機能の主張ではない。
 
 ## 3. UI 構成
 
