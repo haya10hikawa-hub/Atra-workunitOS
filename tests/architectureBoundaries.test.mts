@@ -412,8 +412,67 @@ const WU10_GATE_CONDITIONS = [
   "PM decisions recorded for dormant research and prototypes",
 ]
 
+const GO_TOKEN = "WU00_EXACT_HEAD_INDEPENDENT_ARCHITECTURE_EVIDENCE_GO"
+
+// Review chronology. Each state owns one section and one ratchet count; the counts are historical
+// state labels, never one timeless result. Sections are located by heading, never by line number.
+const REVIEW_STATES = [
+  { heading: "Review 1 —", count: "228", must: ["`BLOCK`", "superseded"] },
+  { heading: "Review 2 — exact head `37b9411d5279826ecdeaedcbab6bb20effb1d11e`", count: "234",
+    must: [GO_TOKEN, "PM_REVIEW_ELIGIBLE_ONLY"] },
+  { heading: "Review 3 — exact head `4c87ec0f90fa199883fe572de27e192728939a5a`", count: "240",
+    must: ["WU00_CORRECTION_MUTATION_SURVIVOR", "WU00_PR211_BOUNDARY_INCOMPLETE",
+      "e44fdc4f024fac189c9edc57fc1bf6e09b9873f9d1a9d1f1dee6e4069e80aff4"] },
+  { heading: "Final governance-pin closure candidate", count: "242",
+    must: ["has not received an independent GO", "requires a fresh exact-head independent review",
+      "Ready, merge and WU-01 remain unauthorized"] },
+]
+
+const ACCEPTANCE_STATE_SEQUENCE = [
+  "- **228** at the first reviewed WU-00 state (Review 1);",
+  "- **234** at reviewed exact head `37b9411d` (Review 2);",
+  "- **240** at reviewed exact head `4c87ec0f` (Review 3);",
+  "- **242** at this final governance-pin closure candidate, which is not yet independently reviewed.",
+]
+
+// PR #211's exact family, plus every way it could return under a different name.
+const PR211_FAMILY = [
+  "app/lib/application/formation/findings.ts",
+  "app/lib/application/formation/findingsTypes.ts",
+  "tests/formationFindings.test.mts",
+  "tests/fixtures/formation/findings/scenarios.json",
+]
+
+const PR211_DEPENDENCY_TOKENS = ["formation/findings", "formationFindings", "feat/f6-formation-findings"]
+
+const PR211_REQUIRED = [
+  "UNMERGED_NON_AUTHORITY_INPUT", "does not modify it", "does not consume it", "does not copy it",
+  "does not authorize merging it", "is not an authority input", "F6A is not a WU-03 authority input",
+]
+
+// Lowercased promotions. Each is an affirmative grant, so none can appear inside a negation above.
+const PR211_FORBIDDEN_PROMOTIONS = [
+  "approved input", "approved wu-03", "wu-03 dependency", "consume f6",
+  "copy findings", "copied into", "may be copied", "merge authorized",
+]
+
 async function readProgramDoc(): Promise<string> {
   return readFile(path.join(rootDir, PROGRAM_DOC), "utf8")
+}
+
+function documentSections(doc: string): Map<string, string> {
+  const sections = new Map<string, string>()
+  const parts = doc.split(/^(#{2,4} .+)$/m)
+  for (let index = 1; index < parts.length; index += 2) {
+    sections.set(parts[index].replace(/^#+\s*/, "").trim(), `${parts[index]}\n${parts[index + 1] ?? ""}`)
+  }
+  return sections
+}
+
+function programSection(sections: Map<string, string>, startsWith: string): string {
+  const heading = [...sections.keys()].find((key) => key.startsWith(startsWith))
+  if (heading === undefined) assert.fail(`program document must keep the section "${startsWith}"`)
+  return sections.get(heading) ?? ""
 }
 
 function assertDocDeclares(doc: string, phrases: string[], label: string): void {
@@ -535,4 +594,62 @@ test("governance: declared debt ledger is a review-governed registry, not a mach
     "domain_tenant_hybrid_boundary",
     "infrastructure_application_signal_contract",
   ], "declared debt is exactly two entries pending a separate PM/architecture decision")
+})
+
+test("governance: review chronology and exact-head assurance remain bound", async () => {
+  const doc = await readProgramDoc()
+  const sections = documentSections(doc)
+
+  // Every state keeps its own section, and no state may present another state's count as its own.
+  for (const state of REVIEW_STATES) {
+    const body = programSection(sections, state.heading)
+    assertDocDeclares(body, [...state.must, `**${state.count}`], `${state.heading} record`)
+    const borrowed = REVIEW_STATES
+      .filter((other) => other.count !== state.count && body.includes(`**${other.count}`))
+      .map((other) => other.count)
+    assert.deepEqual(borrowed, [], `${state.heading} must not present ${borrowed.join("/")} as its own count`)
+  }
+
+  // A GO binds to one exact head: it occurs once, inside Review 2, and never reaches a later state.
+  assert.equal(doc.split(GO_TOKEN).length - 1, 1, "the GO token must appear exactly once")
+  assert.ok(programSection(sections, "Review 2 — exact head").includes(GO_TOKEN),
+    "the single GO token must stay inside the Review 2 record")
+  const candidate = programSection(sections, "Final governance-pin closure candidate")
+  const inherited = [GO_TOKEN, "independently approved"].filter((claim) => candidate.includes(claim))
+  assert.deepEqual(inherited, [], `the closure candidate must not claim: ${inherited.join(", ")}`)
+  assertDocDeclares(doc, [
+    "A GO is bound to the exact head it names. It must not be carried forward to a later head.",
+  ], "assurance binding")
+
+  // The acceptance record keeps the exact state sequence 228 -> 234 -> 240 -> 242.
+  assertDocDeclares(doc, ACCEPTANCE_STATE_SEQUENCE, "ratchet count state sequence")
+})
+
+test("governance: PR #211 family and authority remain isolated", async () => {
+  // The exact four-file family stays absent, as does the directory an alternate member would need.
+  for (const relative of [...PR211_FAMILY, "app/lib/application/formation"]) {
+    assert.equal(await stat(path.join(rootDir, relative)).catch(() => null), null,
+      `PR #211 must not be reintroduced at ${relative}`)
+  }
+
+  // No tracked runtime, operator, configuration or test module may reference the family by import,
+  // export, dynamic import, require or path string. This file names the tokens, so it is excluded.
+  const selfPath = path.join(rootDir, "tests/architectureBoundaries.test.mts")
+  const dependencies: string[] = []
+  for (const root of ["app", "scripts", "tests", "electron", "prototypes", "contracts"]) {
+    for (const file of await collectCodeFiles(path.join(rootDir, root))) {
+      if (file === selfPath) continue
+      const source = await readFile(file, "utf8")
+      for (const token of PR211_DEPENDENCY_TOKENS) {
+        if (source.includes(token)) dependencies.push(`${path.relative(rootDir, file)} references ${token}`)
+      }
+    }
+  }
+  assert.deepEqual(dependencies, [], `PR #211 must stay unmerged non-authority input:\n${dependencies.join("\n")}`)
+
+  // The recorded boundary keeps every non-authority statement and admits no promotion to authority.
+  const section = programSection(documentSections(await readProgramDoc()), "PR #211 is")
+  assertDocDeclares(section, PR211_REQUIRED, "PR #211 boundary")
+  const promotions = PR211_FORBIDDEN_PROMOTIONS.filter((phrase) => section.toLowerCase().includes(phrase))
+  assert.deepEqual(promotions, [], `PR #211 section must not promote it to authority: ${promotions.join(", ")}`)
 })

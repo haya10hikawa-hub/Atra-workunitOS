@@ -171,7 +171,7 @@ WU-00 does not start WU-01. No canonical record family, persistence, provider in
 
 ### PR #211 is `UNMERGED_NON_AUTHORITY_INPUT`
 
-PR #211 (`feat/f6-formation-findings`) is unmerged, blocked, non-authority input. This program does not modify it, does not reference it as authority, and does not authorize merging it. Its module family is absent at this head.
+PR #211 (`feat/f6-formation-findings`) is unmerged, blocked, non-authority input. This program does not modify it, does not consume it, does not copy it, does not reference it as authority, and does not authorize merging it. It is not an authority input for any WorkUnit, and F6A is not a WU-03 authority input. Its exact four-file family is absent at this head, and no alternate module path, re-export or branch token reintroduces it.
 
 ### H1B3 and downstream work are not authorized
 
@@ -217,7 +217,8 @@ A module is not eligible for deletion merely because it has no static importer. 
 - `npm run test:canonical-pipeline-ratchets` passes. Exact count by state, so no single number is read as timeless:
   - **228** at the first reviewed WU-00 state (Review 1);
   - **234** at reviewed exact head `37b9411d` (Review 2);
-  - **240** after this bounded governance-correction commit, which adds six permanent governance pins and changes no product behavior.
+  - **240** at reviewed exact head `4c87ec0f` (Review 3);
+  - **242** at this final governance-pin closure candidate, which is not yet independently reviewed.
 - `node scripts/report-legacy-surface.mjs` reports 62 exact edges, 28 files, and zero drift.
 - Full tests, safety gate, lint, builds, and diff check run with pre-existing failures distinguished from regressions.
 - Draft PR only; no merge and no subsequent WorkUnit.
@@ -235,7 +236,7 @@ Stop after the WU-00 Draft PR. PM authorization is required before WU-01.
 
 ## Independent Review
 
-Two independent reviews have been recorded. They are **distinct events at different heads**. The first review's verdict is history and must not be read as a verdict on the current head.
+Three independent reviews have been recorded. They are **distinct events at different heads**. An earlier review's verdict is history and must not be read as a verdict on a later head.
 
 ### Review 1 — first reviewed WU-00 state (superseded)
 
@@ -254,10 +255,28 @@ Two independent reviews have been recorded. They are **distinct events at differ
 - Legacy surface: 62 edges, 28 files, zero drift.
 - The two declared architecture-debt entries recorded above were surfaced by independent review; the exact ledger and the target-boundary policies are that remediation.
 
+### Review 3 — exact head `4c87ec0f90fa199883fe572de27e192728939a5a`
+
+- Scope: independent review of the bounded governance-correction commit at that exact head.
+- Decision: `NOT_READY — WU00_CORRECTION_MUTATION_SURVIVOR`.
+- Secondary decision: `WU00_PR211_BOUNDARY_INCOMPLETE`.
+- Review report SHA-256: `e44fdc4f024fac189c9edc57fc1bf6e09b9873f9d1a9d1f1dee6e4069e80aff4`.
+- Dedicated ratchet suite at that head: **240/240**.
+- Eight of eighteen counterexamples survived: the review chronology was pinned by no test, and the PR #211 boundary admitted an alternate module family and a documentary authority promotion.
+- All local gates and exact-head CI were green. Green gates did not override the surviving counterexamples.
+
+### Final governance-pin closure candidate
+
+- Adds exactly two permanent governance tests: review chronology and assurance binding, and PR #211 family and authority isolation.
+- Dedicated ratchet suite at this candidate: **242/242**.
+- This candidate has not received an independent GO. No earlier verdict applies to it.
+- It requires a fresh exact-head independent review.
+- Ready, merge and WU-01 remain unauthorized.
+
 ### Review boundary
 
 - `PM_REVIEW_ELIGIBLE_ONLY` means the PR is eligible for PM review. It is **not** Ready, **not** approved for merge, and does **not** authorize WU-01.
-- A GO is bound to the exact head it names. It must not be carried forward to a later head. The bounded governance-correction commit that follows Review 2 changes the head, and therefore **requires a fresh independent review at the new head**.
+- A GO is bound to the exact head it names. It must not be carried forward to a later head. Every commit recorded after a review changes the head, and therefore **requires a fresh independent review at the new head**.
 - Explicit evidence limits are unchanged: safe-handler transitive effects, deployed headers, custom loaders/eval, and indirect CommonJS export patterns.
 
 ## Risks
