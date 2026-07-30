@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { readFile, stat } from "node:fs/promises"
+import { readFile, readdir, stat } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import {
@@ -385,4 +385,154 @@ test("debt reconciliation rejects new, moved, upgraded and stale violations", as
   // An undeclared equivalent violation in another layer is not covered by this record.
   const otherLayer = syntheticEdge("app/lib/infrastructure/external/slack/other.ts", "app/lib/application/example.ts")
   assert.equal(reconcile([otherLayer], declared).undeclared.length, 1)
+})
+
+// ─── Governance boundaries (WU-00 scope, authority and evidence limits) ──────────
+//
+// These pins exist because each boundary below is a *claim about what WU-00 does not do*.
+// Such claims decay silently: nothing fails when a reader starts assuming the opposite.
+// Each test therefore pairs the recorded statement in the program document with a
+// structural check, so the boundary cannot quietly become untrue.
+
+const PROGRAM_DOC = "docs/architecture/CANONICAL_WORKUNIT_PIPELINE_REFACTOR_PROGRAM.md"
+
+const PROPOSED_CANONICAL_TYPES = [
+  "CanonicalSourceRecordV1", "CorrelationGroupV1", "WorkUnitCandidateV1", "WorkUnitCorrectionV1",
+  "WorkUnitReviewV1", "ReviewedWorkUnitV1", "ActionPreparationV1",
+]
+
+const WU10_GATE_CONDITIONS = [
+  "legacy edge baseline = 0",
+  "legacy file baseline = 0",
+  "production entry-point reachability classified",
+  "test-only reachability classified",
+  "operator entry points classified",
+  "non-import references checked",
+  "remaining unreachable modules explicitly classified",
+  "PM decisions recorded for dormant research and prototypes",
+]
+
+async function readProgramDoc(): Promise<string> {
+  return readFile(path.join(rootDir, PROGRAM_DOC), "utf8")
+}
+
+function assertDocDeclares(doc: string, phrases: string[], label: string): void {
+  const missing = phrases.filter((phrase) => !doc.includes(phrase))
+  assert.deepEqual(missing, [], `${label} must stay declared in ${PROGRAM_DOC}:\n${missing.join("\n")}`)
+}
+
+async function collectCodeFiles(dir: string): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
+  const files: string[] = []
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) files.push(...(await collectCodeFiles(full)))
+    else if (isCodeFilePath(entry.name)) files.push(full)
+  }
+  return files
+}
+
+test("governance: proposed canonical records are proposal terminology, not runtime authority", async () => {
+  assertDocDeclares(await readProgramDoc(), [
+    "### Proposal terminology is not runtime authority",
+    "They are not current runtime product-data authority.",
+    "WU-00 does not implement runtime product-data authority.",
+  ], "proposal terminology boundary")
+
+  // Structural: no proposed canonical name is *declared* anywhere in shipped or operator code.
+  // Naming a type "canonical" in a document does not make it authority; declaring it would be
+  // the first step of WU-01, which this PR does not authorize.
+  const declarations: string[] = []
+  for (const root of ["app", "scripts"]) {
+    for (const file of await collectCodeFiles(path.join(rootDir, root))) {
+      const source = await readFile(file, "utf8")
+      for (const name of PROPOSED_CANONICAL_TYPES) {
+        if (new RegExp(`\\b(?:type|interface|class|enum|const|function)\\s+${name}\\b`).test(source)) {
+          declarations.push(`${path.relative(rootDir, file)} declares ${name}`)
+        }
+      }
+    }
+  }
+  assert.deepEqual(declarations, [], `proposal terminology must not become a runtime declaration:\n${declarations.join("\n")}`)
+})
+
+test("governance: WU-01 is not authorized by WU-00 or by debt ownership", async () => {
+  assertDocDeclares(await readProgramDoc(), [
+    "### WU-01 is not authorized",
+    "WU-00 does not start WU-01.",
+    "Debt ownership records who *would* own the fix, not permission to begin.",
+    "It does **not** authorize starting, implementing, or merging those WorkUnits.",
+  ], "WU-01 non-authorization")
+
+  // Structural: an owner_workunit field records a prospective owner, never progress or approval.
+  // Every declared debt therefore stays open and stays barred from WU-00 production change.
+  const ledger = await readDebtLedger()
+  for (const debt of ledger.debts) {
+    assert.equal(debt.status, "known_open", `${debt.id}: ownership must not imply the work started`)
+    assert.equal(debt.production_change_allowed_in_wu00, false, `${debt.id}: WU-00 may not change production`)
+  }
+})
+
+test("governance: PR #211 is unmerged non-authority input", async () => {
+  assertDocDeclares(await readProgramDoc(), [
+    "### PR #211 is `UNMERGED_NON_AUTHORITY_INPUT`",
+    "does not reference it as authority, and does not authorize merging it",
+  ], "PR #211 boundary")
+
+  // Structural: PR #211's formation-findings module family must be absent at this head, so the
+  // program cannot depend on blocked, unmerged work.
+  const findings = await stat(path.join(rootDir, "app/lib/application/formation/findings.ts")).catch(() => null)
+  assert.equal(findings, null, "PR #211 formation findings module must not exist in WU-00")
+})
+
+test("governance: reachability evidence limit is pinned to static module syntax", async () => {
+  assertDocDeclares(await readProgramDoc(), [
+    "## Reachability Evidence Limit",
+    "must **not** be read as `unreachable code = 0`",
+    "A reachability and non-import-reference gate is required before WU-10 can complete.",
+  ], "reachability evidence limit")
+
+  // Executable proof of the limit rather than a restatement of it: a real existing file path used
+  // as a string, a documented operator command, and a configuration-style reference all produce
+  // no edge. The graph is therefore structurally incapable of speaking to these reference kinds.
+  assert.deepEqual(extractModuleReferences([
+    'const source = "app/lib/tenant/types.ts"',
+    'await readFile("app/lib/domain/types.ts", "utf8")',
+    'const command = "npm run test:canonical-pipeline-ratchets"',
+    'const configured = { entry: "app/api/workunit/inbox/route.ts" }',
+  ].join("\n"), "reachability-limit-control.mts"), [],
+    "path-string, command and configuration references must stay invisible to the static graph")
+})
+
+test("governance: WU-10 baseline zero is necessary but not sufficient", async () => {
+  const doc = await readProgramDoc()
+  assertDocDeclares(doc, [
+    "### WU-10 cleanup exit gate",
+    "necessary but not sufficient",
+    "A module is not eligible for deletion merely because it has no static importer.",
+    "the legacy edge/file baseline alone is not sufficient",
+  ], "WU-10 exit gate")
+
+  // Every non-baseline condition must remain in the gate. Dropping one would silently reduce
+  // WU-10 to the baseline measure the gate exists to reject.
+  assertDocDeclares(doc, WU10_GATE_CONDITIONS, "WU-10 gate conditions")
+})
+
+test("governance: declared debt ledger is a review-governed registry, not a machine-closed ratchet", async () => {
+  assertDocDeclares(await readProgramDoc(), [
+    "The declared-architecture-debt ledger is a `REVIEW_GOVERNED_DEBT_REGISTRY`.",
+    "It is **not** a `MACHINE_CLOSED_RATCHET`.",
+    "Ledger expansion requires a separate PM/architecture decision recorded before the change.",
+    "it is never evidence that the expansion was authorized",
+  ], "debt registry classification")
+
+  // Structural: the accepted debt ids are a source-controlled constant, not a fixture value, so a
+  // fixture edit alone cannot expand the ledger — a reviewer must change this file too. That is
+  // exactly the review gate; it is a human decision point, not a machine-closed guarantee.
+  const ledger = await readDebtLedger()
+  assert.deepEqual(ledger.debts.map((debt) => debt.id).sort(), [...DEBT_IDS].sort())
+  assert.deepEqual([...DEBT_IDS].sort(), [
+    "domain_tenant_hybrid_boundary",
+    "infrastructure_application_signal_contract",
+  ], "declared debt is exactly two entries pending a separate PM/architecture decision")
 })

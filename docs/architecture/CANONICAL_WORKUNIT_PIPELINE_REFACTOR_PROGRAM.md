@@ -128,6 +128,19 @@ The ledger is exact-path based and is deliberately not an allowlist. Reconciliat
 
 The existing 62-edge / 28-file legacy fixture is unchanged and remains a characterization of the exact legacy compatibility surface only. It is not a storage location for architecture debt.
 
+### Debt mechanism classification
+
+The declared-architecture-debt ledger is a `REVIEW_GOVERNED_DEBT_REGISTRY`. It is **not** a `MACHINE_CLOSED_RATCHET`.
+
+The distinction is operational, not cosmetic. Reconciliation is machine-checked in both directions, so no violation is silently absorbed and no entry can be a glob, prefix or basename. But the registry cannot decide whether a new violation is *acceptable*. Adding a new violation together with a matching ledger entry — and the matching `DEBT_IDS` entry in `tests/architectureBoundaries.test.mts` — is technically possible and would produce a green suite. **That path is not approved.** Ledger expansion requires a separate PM/architecture decision recorded before the change. A green suite is evidence that the registry reconciled; it is never evidence that the expansion was authorized.
+
+The current declared debt is exactly these two entries and no others:
+
+- `domain_tenant_hybrid_boundary`
+- `infrastructure_application_signal_contract`
+
+Recording `WU-01` or `WU-02` as debt owner assigns prospective ownership only. It does **not** authorize starting, implementing, or merging those WorkUnits.
+
 ## Reachability Evidence Limit
 
 The WU-00 graph models supported static module syntax. It does not establish runtime reachability, operator-entry reachability, path-string references, configuration references, documentation-command references, or zero dead code.
@@ -143,6 +156,26 @@ Concretely, WU-00 does **not** prove:
 - orphan or dead-code absence
 
 Therefore `legacy edge/file baseline = 0` must **not** be read as `unreachable code = 0`. A module with no static importer may still be reached by a path string in a source-reading contract test, a documented operator command, a package script, or configuration; and a module outside the four legacy roots is not covered by the legacy file inventory at all. WU-00 does not implement reachability analysis, and no claim in this program should be read as though it does. A reachability and non-import-reference gate is required before WU-10 can complete.
+
+## Non-Authority Boundaries
+
+These boundaries are pinned by permanent tests in `tests/architectureBoundaries.test.mts`, so they cannot decay into assumption.
+
+### Proposal terminology is not runtime authority
+
+`CanonicalSourceRecordV1`, `CorrelationGroupV1`, `WorkUnitCandidateV1`, `WorkUnitCorrectionV1`, `WorkUnitReviewV1`, `ReviewedWorkUnitV1` and `ActionPreparationV1` are proposal terminology in this document. They are not current runtime product-data authority. No such type is declared anywhere in the repository at this head, and WU-00 does not implement runtime product-data authority.
+
+### WU-01 is not authorized
+
+WU-00 does not start WU-01. No canonical record family, persistence, provider integration, or runtime implementation is authorized by this PR, and none is authorized by a debt-ownership entry naming WU-01. Debt ownership records who *would* own the fix, not permission to begin.
+
+### PR #211 is `UNMERGED_NON_AUTHORITY_INPUT`
+
+PR #211 (`feat/f6-formation-findings`) is unmerged, blocked, non-authority input. This program does not modify it, does not reference it as authority, and does not authorize merging it. Its module family is absent at this head.
+
+### H1B3 and downstream work are not authorized
+
+WU-00 authorizes no H1B3 restart, no runtime implementation, no persistence, and no provider integration.
 
 ## Bounded WorkUnits and Draft PRs
 
@@ -181,7 +214,10 @@ A module is not eligible for deletion merely because it has no static importer. 
 ## WU-00 Acceptance
 
 - No changes under `app/**`, `migrations/**`, or runtime configuration.
-- `npm run test:canonical-pipeline-ratchets` passes (234 tests after the declared-architecture-debt remediation; 228 at the first reviewed WU-00 state).
+- `npm run test:canonical-pipeline-ratchets` passes. Exact count by state, so no single number is read as timeless:
+  - **228** at the first reviewed WU-00 state (Review 1);
+  - **234** at reviewed exact head `37b9411d` (Review 2);
+  - **240** after this bounded governance-correction commit, which adds six permanent governance pins and changes no product behavior.
 - `node scripts/report-legacy-surface.mjs` reports 62 exact edges, 28 files, and zero drift.
 - Full tests, safety gate, lint, builds, and diff check run with pre-existing failures distinguished from regressions.
 - Draft PR only; no merge and no subsequent WorkUnit.
@@ -199,10 +235,30 @@ Stop after the WU-00 Draft PR. PM authorization is required before WU-01.
 
 ## Independent Review
 
-- Initial verdict: `BLOCK`; seven P1 false-green paths were identified across module scanning, legacy exports, route discovery, safe-method writes, runtime characterization, headers, and architecture controls.
+Two independent reviews have been recorded. They are **distinct events at different heads**. The first review's verdict is history and must not be read as a verdict on the current head.
+
+### Review 1 — first reviewed WU-00 state (superseded)
+
+- Verdict: `BLOCK`; seven P1 false-green paths were identified across module scanning, legacy exports, route discovery, safe-method writes, runtime characterization, headers, and architecture controls.
 - Remediation: all seven were closed inside WU-00 without production changes; adversarial positive controls were added.
-- Final verdict: `NO BLOCKING FINDINGS`; 228/228 dedicated ratchet tests pass, with 62 legacy edges and 28 legacy files at zero drift.
-- Review boundary: merge and WU-01 remain blocked pending PM review. Safe-handler transitive effects, deployed headers, custom loaders/eval, and indirect CommonJS export patterns remain explicit evidence limits.
+- Dedicated ratchet suite at that state: **228/228**.
+- This verdict is superseded. It is not a review of the current head.
+
+### Review 2 — exact head `37b9411d5279826ecdeaedcbab6bb20effb1d11e`
+
+- Scope: independent architecture and evidence review of that exact commit.
+- Verdict token: `WU00_EXACT_HEAD_INDEPENDENT_ARCHITECTURE_EVIDENCE_GO`.
+- Program disposition: `PM_REVIEW_ELIGIBLE_ONLY`.
+- Review report SHA-256: `b419937133e4fe01bdfea5b492f5c5aa0b6ae9cf70bbacec45ace94bd511d2d0`.
+- Dedicated ratchet suite at that head: **234/234**.
+- Legacy surface: 62 edges, 28 files, zero drift.
+- The two declared architecture-debt entries recorded above were surfaced by independent review; the exact ledger and the target-boundary policies are that remediation.
+
+### Review boundary
+
+- `PM_REVIEW_ELIGIBLE_ONLY` means the PR is eligible for PM review. It is **not** Ready, **not** approved for merge, and does **not** authorize WU-01.
+- A GO is bound to the exact head it names. It must not be carried forward to a later head. The bounded governance-correction commit that follows Review 2 changes the head, and therefore **requires a fresh independent review at the new head**.
+- Explicit evidence limits are unchanged: safe-handler transitive effects, deployed headers, custom loaders/eval, and indirect CommonJS export patterns.
 
 ## Risks
 
