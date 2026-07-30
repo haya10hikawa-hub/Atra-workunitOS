@@ -107,6 +107,43 @@ Ratchet fixtures may change only with a labeled behavior/architecture decision a
 
 Evidence limits are explicit: fixture `sourceSha` values identify the refactor base and are not Git-tree attestations; arbitrary `eval` or custom loaders are outside the static graph; safe-handler hashes do not infer imported dependency side effects; Next header configuration is not deployed-response evidence.
 
+## Declared Architecture Debt
+
+Independent review found two dependency-direction violations that exist at the refactor base and that the previous architecture policy did not forbid, so the boundary tests were green while the violations were live. They are now recorded exactly in `tests/fixtures/architecture/declared-boundary-debt.v1.json` and enforced by target-boundary policies in `tests/architectureBoundaries.test.mts`.
+
+**These are known violations, not approved target architecture.** WU-00 records them; WU-00 does not fix them, because WU-00 changes no `app/**` file.
+
+| Debt ID | Exact violation | Edge kind | Owner |
+| --- | --- | --- | --- |
+| `domain_tenant_hybrid_boundary` | `app/lib/domain/{types,workUnitLifecycle}.ts` → `app/lib/tenant/types.ts` | type-only | WU-01 |
+| `infrastructure_application_signal_contract` | `app/lib/infrastructure/external/{calendar,github,slack}/toNormalizedToolSignal.ts` → `app/lib/application/workunitInbox/types.ts` | type-only | WU-02 |
+
+`app/lib/tenant/types.ts` is not a pure compatibility shim. It re-exports canonical tenant identity types from `app/lib/domain/tenant/types.ts` while also being the sole physical owner of `Actor`, `TenantContext`, `TenantBoundaryResult`, `assertTenantBoundary`, `requireTenantContext` and `createAnonymousDevelopmentTenantContext`. Domain therefore depends upward on a compatibility module. It has the highest fan-in in the repository, every observed edge is type-only, and the runtime helpers have no verified call sites.
+
+**WU-01 may not introduce the new canonical domain record family on top of the tenant hybrid** without first resolving it or recording an explicit PM re-scope. Building `ReviewedWorkUnitV1` and `WorkUnitCandidateV1` over the current shape would propagate the inversion into the canonical family.
+
+**WU-02 owns relocation of the normalized signal contract** into a domain or port boundary, so provider adapters stop depending on an application-layer type.
+
+The ledger is exact-path based and is deliberately not an allowlist. Reconciliation asserts set equality in both directions against the live scan, so each of the following fails rather than being absorbed: an undeclared equivalent violation, a new importer of a declared target, a moved or different path, a declared type-only edge upgraded to a value edge, a stale entry whose source or target no longer exists, and any attempt to declare a directory prefix, glob or basename instead of a concrete file. Removing a debt requires the live edge to be gone, not the record to be edited.
+
+The existing 62-edge / 28-file legacy fixture is unchanged and remains a characterization of the exact legacy compatibility surface only. It is not a storage location for architecture debt.
+
+## Reachability Evidence Limit
+
+The WU-00 graph models supported static module syntax. It does not establish runtime reachability, operator-entry reachability, path-string references, configuration references, documentation-command references, or zero dead code.
+
+Concretely, WU-00 does **not** prove:
+
+- runtime entry-point reachability
+- test-only reachability
+- operator-command reachability
+- configuration references
+- documentation command references
+- path-string source-reading references
+- orphan or dead-code absence
+
+Therefore `legacy edge/file baseline = 0` must **not** be read as `unreachable code = 0`. A module with no static importer may still be reached by a path string in a source-reading contract test, a documented operator command, a package script, or configuration; and a module outside the four legacy roots is not covered by the legacy file inventory at all. WU-00 does not implement reachability analysis, and no claim in this program should be read as though it does. A reachability and non-import-reference gate is required before WU-10 can complete.
+
 ## Bounded WorkUnits and Draft PRs
 
 | WorkUnit | Draft PR scope | Production cutover | Exit gate |
@@ -121,14 +158,30 @@ Evidence limits are explicit: fixture `sourceSha` values identify the refactor b
 | WU-07 | Default Launcher reads canonical projection; mock becomes explicit fixture mode | Flagged cutover | Browser/runtime evidence, rollback flag, no raw or server-owned fields |
 | WU-08 | Persist corrections, missing-information resolution, and human review | Gated | Actor/time/reason replay, unresolved hard fields cannot promote |
 | WU-09 | Bind reviewed WorkUnit to responsible first-action preparation | Gated | CSRF, IDOR, preview/approval/authorization binding, atomic single decision, four-eyes, CAS, outbound SSRF policy, durable rate/cost limits, external-effect idempotency, kill switch |
-| WU-10 | Delete alternate constructors, compatibility wrappers, dead rows and old UI paths | Final cleanup | Legacy edge/file baseline reaches zero; full behavior/security suite and rollback decision |
+| WU-10 | Delete alternate constructors, compatibility wrappers, dead rows and old UI paths | Final cleanup | See the WU-10 cleanup exit gate below; the legacy edge/file baseline alone is not sufficient |
 
 Each WorkUnit is one Draft PR. No WorkUnit merges or starts its successor until a differently biased reviewer records a written handoff.
+
+### WU-10 cleanup exit gate
+
+WU-10 completes only when **all** of the following hold. The legacy edge/file baseline is necessary but not sufficient, because it is a static-syntax measure over four legacy roots and says nothing about reachability.
+
+- legacy edge baseline = 0
+- legacy file baseline = 0
+- production entry-point reachability classified
+- test-only reachability classified
+- operator entry points classified
+- non-import references checked, covering path strings, configuration, package scripts and documentation commands
+- remaining unreachable modules explicitly classified
+- PM decisions recorded for dormant research and prototypes
+- declared architecture-debt ledger contains no `known_open` entry, or each remaining entry has a recorded PM re-scope
+
+A module is not eligible for deletion merely because it has no static importer. WU-10 requires a reachability and non-import-reference instrument, which WU-00 does not provide.
 
 ## WU-00 Acceptance
 
 - No changes under `app/**`, `migrations/**`, or runtime configuration.
-- `npm run test:canonical-pipeline-ratchets` passes (228 tests at the reviewed WU-00 state).
+- `npm run test:canonical-pipeline-ratchets` passes (234 tests after the declared-architecture-debt remediation; 228 at the first reviewed WU-00 state).
 - `node scripts/report-legacy-surface.mjs` reports 62 exact edges, 28 files, and zero drift.
 - Full tests, safety gate, lint, builds, and diff check run with pre-existing failures distinguished from regressions.
 - Draft PR only; no merge and no subsequent WorkUnit.
