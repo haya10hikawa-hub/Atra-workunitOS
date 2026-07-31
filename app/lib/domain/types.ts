@@ -5,7 +5,7 @@
  * Follows WORKUNIT_DOMAIN_MODEL.md — this file is the canonical type source.
  */
 
-import type { TenantId, UserId } from "../tenant/types.ts"
+import type { TenantId, UserId } from "./tenant/types.ts"
 
 // ─── Trust Levels ───────────────────────────────────────────────
 

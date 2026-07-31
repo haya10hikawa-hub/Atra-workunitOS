@@ -13,7 +13,13 @@ import {
 
 const rootDir = fileURLToPath(new URL("../", import.meta.url))
 const REFACTOR_BASE_SHA = "066a43c3df07f3da10a2fc93ff7d90157c732114"
-const DEBT_IDS = ["domain_tenant_hybrid_boundary", "infrastructure_application_signal_contract"]
+const DEBT_IDS = ["infrastructure_application_signal_contract"]
+// The domain -> app/lib/tenant inversion recorded as `domain_tenant_hybrid_boundary` is resolved:
+// both domain modules now consume the canonical declarations in app/lib/domain/tenant/types.ts
+// directly. The entry was removed only after the live edges disappeared — the record was never the
+// mechanism of closure. Reintroduction is not absorbed: `violatesDomainTarget` still forbids
+// /app/lib/tenant/, and the declared set is now empty, so any such edge reconciles as undeclared.
+const RESOLVED_DEBT_IDS = ["domain_tenant_hybrid_boundary"]
 const DEBT_FIELDS = [
   "id", "status", "introduced_by", "source_sha", "exact_sources", "exact_targets",
   "edge_kind", "risk", "owner_workunit", "removal_gate", "production_change_allowed_in_wu00",
@@ -326,12 +332,29 @@ test("target external-client policy forbids the application layer", () => {
   )
 })
 
-test("live domain boundary violations are exactly the declared tenant-hybrid debt", async () => {
-  const ledger = await readDebtLedger()
+// T1 — the domain layer now has zero live boundary violations, reconciled against an EMPTY
+// declared set. This is strictly stronger than the previous form, which reconciled against the
+// two declared tenant-hybrid edges. Nothing is allowlisted: the declared side is [].
+test("live domain boundary violations are empty and no domain debt remains declared", async () => {
   const observed = (await scanModuleGraph(rootDir, ["app/lib/domain"])).filter(violatesDomainTarget)
-  const { undeclared, stale } = reconcile(observed, declaredDebtKeys(debtById(ledger, "domain_tenant_hybrid_boundary")))
+  assert.deepEqual(
+    observed.map((edge) => `${edge.file} -> ${edge.kind} ${edge.specifier}`),
+    [],
+    "app/lib/domain must have no target-policy violation",
+  )
+
+  const { undeclared, stale } = reconcile(observed, [])
   assert.deepEqual(undeclared, [], `undeclared domain boundary violation:\n${undeclared.join("\n")}`)
-  assert.deepEqual(stale, [], `declared domain debt no longer observed:\n${stale.join("\n")}`)
+  assert.deepEqual(stale, [], `stale declared domain debt:\n${stale.join("\n")}`)
+
+  // The record may only be absent because the edges are absent, never the other way round.
+  const ledger = await readDebtLedger()
+  for (const id of RESOLVED_DEBT_IDS) {
+    assert.equal(
+      ledger.debts.some((debt) => debt.id === id), false,
+      `${id} was resolved and must not be re-declared`,
+    )
+  }
 })
 
 test("live external-client boundary violations are exactly the declared signal-contract debt", async () => {
@@ -347,9 +370,12 @@ test("live external-client boundary violations are exactly the declared signal-c
   assert.deepEqual(stale, [], `declared external-client debt no longer observed:\n${stale.join("\n")}`)
 })
 
+// T6 — reconcile() is a pure function; its unit test must not depend on the live ledger, or the
+// stale-entry, new-importer and value-upgrade rejections would all vanish the moment the last
+// domain debt was closed. The declared set is therefore a literal synthetic record with the exact
+// shape the removed debt had, so every rejection below stays permanently exercised.
 test("debt reconciliation rejects new, moved, upgraded and stale violations", async () => {
-  const ledger = await readDebtLedger()
-  const declared = declaredDebtKeys(debtById(ledger, "domain_tenant_hybrid_boundary"))
+  const declared = ["app/lib/domain/types.ts | type-only | app/lib/tenant/types.ts"]
   const live = syntheticEdge("app/lib/domain/types.ts", "app/lib/tenant/types.ts")
   assert.deepEqual(reconcile([live], declared).undeclared, [], "declared edge must reconcile cleanly")
 
@@ -385,6 +411,135 @@ test("debt reconciliation rejects new, moved, upgraded and stale violations", as
   // An undeclared equivalent violation in another layer is not covered by this record.
   const otherLayer = syntheticEdge("app/lib/infrastructure/external/slack/other.ts", "app/lib/application/example.ts")
   assert.equal(reconcile([otherLayer], declared).undeclared.length, 1)
+})
+
+// ─── Domain tenant identity import direction (WU-01A closure) ────────────────────
+//
+// Permanent guards. Closing the debt removed a record; it must not remove the enforcement.
+// Every test asserts on a RESOLVED target, never on specifier text: the same string
+// "../tenant/types.ts" denotes the canonical module from app/lib/domain/auth/ and the
+// compatibility module from app/lib/domain/. That is the likeliest misreading of this slice.
+
+const CANONICAL_TENANT = "app/lib/domain/tenant/types.ts"
+const COMPAT_TENANT = "app/lib/tenant/types.ts"
+const PHASE6_TENANT_ALIAS = "app/lib/phase6/artifacts/types.ts"
+const IDENTITY_SYMBOLS = ["Tenant", "TenantId", "UserId", "WorkUnitId"]
+const COMPAT_EXPORTS = [...IDENTITY_SYMBOLS, "Actor", "TenantContext", "TenantBoundaryResult",
+  "assertTenantBoundary", "requireTenantContext", "createAnonymousDevelopmentTenantContext"]
+
+// T2 — the consumed identity is the canonical BRANDED declaration. A silent widening to the
+// structurally different unbranded Phase 6 alias would not fail loudly everywhere.
+test("domain tenant identity resolves to the canonical branded declarations", async () => {
+  const canonical = await readFile(path.join(rootDir, CANONICAL_TENANT), "utf8")
+  for (const brand of ["TenantId", "UserId", "WorkUnitId"]) {
+    assert.ok(canonical.includes(`export type ${brand} = string & { readonly __brand: "${brand}" }`),
+      `${CANONICAL_TENANT} must declare ${brand} as a branded type`)
+  }
+
+  const domainEdges = await scanModuleGraph(rootDir, ["app/lib/domain"])
+  assert.deepEqual(domainEdges.filter((edge) => edge.resolvedTarget === PHASE6_TENANT_ALIAS), [],
+    "no domain file may resolve an identity import to the unbranded Phase 6 alias")
+
+  for (const file of ["app/lib/domain/types.ts", "app/lib/domain/workUnitLifecycle.ts"]) {
+    const identity = domainEdges.filter((edge) =>
+      edge.file === file && edge.resolvedTarget.endsWith("tenant/types.ts"))
+    assert.deepEqual(identity.map((edge) => edge.resolvedTarget), [CANONICAL_TENANT],
+      `${file} must consume canonical tenant identity directly`)
+    assert.deepEqual(identity.map((edge) => edge.kind), ["import-type"],
+      `${file} must keep its tenant identity import type-only`)
+  }
+})
+
+// T3 — structural sweep over every reference kind the graph can express: a re-export, dynamic
+// import, require or `import =` back to the compatibility module is equally a violation.
+test("no domain file imports or re-exports the compatibility tenant module", async () => {
+  const offenders = (await scanModuleGraph(rootDir, ["app/lib/domain"]))
+    .filter((edge) => edge.resolvedTarget === COMPAT_TENANT)
+    .map((edge) => `${edge.file} -> ${edge.kind} ${edge.specifier}`)
+  assert.deepEqual(offenders, [], `app/lib/domain must not reach upward into ${COMPAT_TENANT}`)
+})
+
+// T4 — the compatibility module is NOT dead and NOT removable: it keeps a live value edge.
+// Drift either way fails — silently migrating consumers is also an undeclared architecture change.
+test("compatibility tenant module keeps its consumers and its full export surface", async () => {
+  const edges = (await scanModuleGraph(rootDir, ["app", "tests", "scripts", "electron"]))
+    .filter((edge) => edge.resolvedTarget === COMPAT_TENANT)
+  const files = [...new Set(edges.map((edge) => edge.file))]
+
+  assert.equal(files.length, 89, "compatibility importer file count drifted")
+  assert.equal(edges.length, 91, "compatibility importer edge count drifted")
+  assert.deepEqual(files.filter((file) => file.startsWith("app/lib/domain/")), [],
+    "no domain file may appear among the compatibility consumers")
+  assert.deepEqual(
+    edges.filter((edge) => edgeKindClass(edge.kind) === "value").map((edge) => edge.file),
+    ["tests/saasSecurity.test.mts"], "the single remaining value consumer must stay accounted for")
+
+  const source = await readFile(path.join(rootDir, COMPAT_TENANT), "utf8")
+  for (const symbol of COMPAT_EXPORTS) {
+    assert.ok(source.includes(symbol), `${COMPAT_TENANT} must still export ${symbol}`)
+  }
+  // The identity types stay pure re-exports: the façade gains no canonical authority.
+  assert.ok(source.includes(`export type { ${IDENTITY_SYMBOLS.join(", ")} } from "../domain/tenant/types.ts"`),
+    "identity types must remain re-exports, never competing declarations")
+})
+
+// T5 — closing one debt must not silently weaken the other.
+test("remaining declared debt is exactly the infrastructure signal contract, intact", async () => {
+  const ledger = await readDebtLedger()
+  assert.deepEqual(ledger.debts.map((debt) => debt.id), ["infrastructure_application_signal_contract"])
+
+  const debt = debtById(ledger, "infrastructure_application_signal_contract")
+  assert.deepEqual(debt.exact_sources, [
+    "app/lib/infrastructure/external/calendar/toNormalizedToolSignal.ts",
+    "app/lib/infrastructure/external/github/toNormalizedToolSignal.ts",
+    "app/lib/infrastructure/external/slack/toNormalizedToolSignal.ts",
+  ])
+  assert.deepEqual(debt.exact_targets, ["app/lib/application/workunitInbox/types.ts"])
+  assert.equal(debt.edge_kind, "type-only")
+  assert.equal(debt.owner_workunit, "WU-02")
+})
+
+// T7 — reintroduction fails closed: the policy is unweakened and the declared set is now empty,
+// so a returning edge is both forbidden AND undeclared.
+test("reintroducing a domain to compatibility tenant edge fails closed", () => {
+  const returning = syntheticEdge("app/lib/domain/types.ts", COMPAT_TENANT)
+  assert.equal(violatesDomainTarget(returning), true,
+    "the forbidden-path policy must still reject the compatibility module")
+  assert.deepEqual(reconcile([returning], []).undeclared,
+    ["app/lib/domain/types.ts | type-only | app/lib/tenant/types.ts"],
+    "with an empty declared set the edge must surface as undeclared, not be absorbed")
+  assert.equal(violatesDomainTarget(syntheticEdge("app/lib/domain/new.ts", COMPAT_TENANT)), true)
+})
+
+// T8 — classification is by resolved path, not name similarity, and the same specifier text
+// resolves differently by directory. app/lib/domain/auth/types.ts is already canonical.
+test("tenant path lookalikes are classified by resolved target, not by name", () => {
+  assert.equal(violatesDomainTarget(syntheticEdge("app/lib/domain/x.ts", COMPAT_TENANT)), true)
+  for (const benign of [CANONICAL_TENANT, "app/lib/domain/tenantTypes.ts", PHASE6_TENANT_ALIAS]) {
+    assert.equal(violatesDomainTarget(syntheticEdge("app/lib/domain/x.ts", benign)), false,
+      `${benign} must not be treated as the forbidden compatibility module`)
+  }
+  assert.equal(
+    resolveModuleTarget(rootDir, path.join(rootDir, "app/lib/domain/auth/types.ts"), "../tenant/types.ts"),
+    CANONICAL_TENANT, "app/lib/domain/auth/types.ts is already canonical and must stay untouched")
+  assert.equal(
+    resolveModuleTarget(rootDir, path.join(rootDir, "app/lib/domain/types.ts"), "../tenant/types.ts"),
+    COMPAT_TENANT, "from app/lib/domain/ the same string denotes the compatibility module")
+})
+
+// T9 — runtime neutrality made executable rather than asserted: `import type` is fully erased,
+// so both specifier forms must emit byte-identical JavaScript.
+test("the import direction change emits byte-identical JavaScript", async () => {
+  const ts = (await import("typescript")).default
+  const options = { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2017, isolatedModules: true }
+  const emit = (specifier: string): string => ts.transpileModule(
+    `import type { TenantId } from "${specifier}"\nexport type X = { a: TenantId }\n`,
+    { compilerOptions: options, fileName: "probe.ts" }).outputText
+
+  assert.equal(emit("./tenant/types.ts"), emit("../tenant/types.ts"),
+    "a type-only specifier change must not alter emitted JavaScript")
+  assert.equal(emit("./tenant/types.ts").includes("tenant/types"), false,
+    "the erased import must leave no runtime reference")
 })
 
 // ─── Governance boundaries (WU-00 scope, authority and evidence limits) ──────────
@@ -591,9 +746,13 @@ test("governance: declared debt ledger is a review-governed registry, not a mach
   const ledger = await readDebtLedger()
   assert.deepEqual(ledger.debts.map((debt) => debt.id).sort(), [...DEBT_IDS].sort())
   assert.deepEqual([...DEBT_IDS].sort(), [
-    "domain_tenant_hybrid_boundary",
     "infrastructure_application_signal_contract",
-  ], "declared debt is exactly two entries pending a separate PM/architecture decision")
+  ], "declared debt is exactly one entry, infrastructure_application_signal_contract, pending a separate PM/architecture decision")
+
+  // Contraction is governed the same way expansion is. A satisfied removal_gate is the only route
+  // out of the ledger, and it requires this source-controlled literal to change too.
+  const removed = RESOLVED_DEBT_IDS.filter((id) => ledger.debts.some((debt) => debt.id === id))
+  assert.deepEqual(removed, [], "a resolved debt id must not reappear in the ledger")
 })
 
 test("governance: review chronology and exact-head assurance remain bound", async () => {

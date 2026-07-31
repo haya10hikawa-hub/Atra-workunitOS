@@ -109,18 +109,19 @@ Evidence limits are explicit: fixture `sourceSha` values identify the refactor b
 
 ## Declared Architecture Debt
 
-Independent review found two dependency-direction violations that exist at the refactor base and that the previous architecture policy did not forbid, so the boundary tests were green while the violations were live. They are now recorded exactly in `tests/fixtures/architecture/declared-boundary-debt.v1.json` and enforced by target-boundary policies in `tests/architectureBoundaries.test.mts`.
+Independent review found two dependency-direction violations that exist at the refactor base and that the previous architecture policy did not forbid, so the boundary tests were green while the violations were live. They are recorded exactly in `tests/fixtures/architecture/declared-boundary-debt.v1.json` and enforced by target-boundary policies in `tests/architectureBoundaries.test.mts`. One of the two has since been resolved by WU-01A; the record was removed only after its live edges disappeared.
 
 **These are known violations, not approved target architecture.** WU-00 records them; WU-00 does not fix them, because WU-00 changes no `app/**` file.
 
 | Debt ID | Exact violation | Edge kind | Owner |
 | --- | --- | --- | --- |
-| `domain_tenant_hybrid_boundary` | `app/lib/domain/{types,workUnitLifecycle}.ts` → `app/lib/tenant/types.ts` | type-only | WU-01 |
 | `infrastructure_application_signal_contract` | `app/lib/infrastructure/external/{calendar,github,slack}/toNormalizedToolSignal.ts` → `app/lib/application/workunitInbox/types.ts` | type-only | WU-02 |
 
-`app/lib/tenant/types.ts` is not a pure compatibility shim. It re-exports canonical tenant identity types from `app/lib/domain/tenant/types.ts` while also being the sole physical owner of `Actor`, `TenantContext`, `TenantBoundaryResult`, `assertTenantBoundary`, `requireTenantContext` and `createAnonymousDevelopmentTenantContext`. Domain therefore depends upward on a compatibility module. It has the highest fan-in in the repository, every observed edge is type-only, and the runtime helpers have no verified call sites.
+**Resolved by WU-01A:** `domain_tenant_hybrid_boundary` — `app/lib/domain/{types,workUnitLifecycle}.ts` → `app/lib/tenant/types.ts`, type-only. Both modules now import the canonical declarations in `app/lib/domain/tenant/types.ts` directly, so the `app/lib/domain` → `app/lib/tenant` dependency inversion no longer exists. WU-01A changed those two import specifiers and nothing else; it is not WU-01 and introduces no canonical record family.
 
-**WU-01 may not introduce the new canonical domain record family on top of the tenant hybrid** without first resolving it or recording an explicit PM re-scope. Building `ReviewedWorkUnitV1` and `WorkUnitCandidateV1` over the current shape would propagate the inversion into the canonical family.
+`app/lib/tenant/types.ts` is still not a pure compatibility shim, and WU-01A did not make it one. It re-exports canonical tenant identity types from `app/lib/domain/tenant/types.ts` while remaining the sole physical owner of `Actor`, `TenantContext`, `TenantBoundaryResult`, `assertTenantBoundary`, `requireTenantContext` and `createAnonymousDevelopmentTenantContext`. What changed is only the direction of dependency: the domain layer no longer reaches upward into it. It retains the highest fan-in in the repository — **89 importer files across 91 edges**, of which 90 are type-only and **one is a live value import** (`tests/saasSecurity.test.mts`). The runtime helpers have no verified *production* call sites; that is a narrower claim than "no call sites", and the module is therefore neither dead, unreachable nor removable. Relocating those six symbols remains open, unowned and deferred: `Actor`, `TenantContext` and `TenantBoundaryResult` have no consumers anywhere outside the module itself, so their home is a genuine product decision, and `createAnonymousDevelopmentTenantContext` collides by name with a different function in `app/lib/security/session.ts` that returns a `Session`.
+
+**WU-01 may not introduce the new canonical domain record family on top of the tenant hybrid** without first resolving it or recording an explicit PM re-scope. WU-01A closed the dependency-direction half of that gate only; the hybrid module itself is unchanged, and building `ReviewedWorkUnitV1` and `WorkUnitCandidateV1` still requires the separate authorization WU-01 has not been given.
 
 **WU-02 owns relocation of the normalized signal contract** into a domain or port boundary, so provider adapters stop depending on an application-layer type.
 
@@ -134,10 +135,13 @@ The declared-architecture-debt ledger is a `REVIEW_GOVERNED_DEBT_REGISTRY`. It i
 
 The distinction is operational, not cosmetic. Reconciliation is machine-checked in both directions, so no violation is silently absorbed and no entry can be a glob, prefix or basename. But the registry cannot decide whether a new violation is *acceptable*. Adding a new violation together with a matching ledger entry — and the matching `DEBT_IDS` entry in `tests/architectureBoundaries.test.mts` — is technically possible and would produce a green suite. **That path is not approved.** Ledger expansion requires a separate PM/architecture decision recorded before the change. A green suite is evidence that the registry reconciled; it is never evidence that the expansion was authorized.
 
-The current declared debt is exactly these two entries and no others:
+Contraction is governed exactly as expansion is. A debt leaves the ledger only when its live edges are already gone, and the source-controlled `DEBT_IDS` literal in `tests/architectureBoundaries.test.mts` must be changed by a human in the same review. Removing the record is never the mechanism of closure, and a resolved id may not reappear.
 
-- `domain_tenant_hybrid_boundary`
+The current declared debt is exactly this one entry and no others:
+
 - `infrastructure_application_signal_contract`
+
+Previously declared and now resolved: `domain_tenant_hybrid_boundary` (closed by WU-01A).
 
 Recording `WU-01` or `WU-02` as debt owner assigns prospective ownership only. It does **not** authorize starting, implementing, or merging those WorkUnits.
 
