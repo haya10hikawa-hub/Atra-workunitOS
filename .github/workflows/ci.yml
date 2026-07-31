@@ -35,6 +35,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Canonical pipeline and security ratchets
+        run: npm run test:canonical-pipeline-ratchets
+
       - name: Test
         run: npm test
 

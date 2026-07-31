@@ -14,7 +14,10 @@ import { join } from "node:path"
 import { deriveAuditActorLabel, redactAuditMetadata } from "../app/lib/application/audit/auditLogDisplayModel.ts"
 
 const PANEL = readFileSync(join(process.cwd(), "app/components/workunit-os/AuditLogPanel.tsx"), "utf-8")
-const LEGACY_TEST = readFileSync(join(process.cwd(), "tests/architectureLegacySurface.test.mts"), "utf-8")
+const LEGACY_CONTRACT = JSON.parse(readFileSync(join(process.cwd(), "tests/fixtures/architecture/legacy-surface.v1.json"), "utf-8")) as {
+  legacyEdges: string[]
+  legacyFiles: string[]
+}
 
 // ─── Model ────────────────────────────────────────────────────
 test("deriveAuditActorLabel returns a safe label, never the raw id", () => {
@@ -59,11 +62,10 @@ test("3. AuditLogPanel renders no forbidden id/hash copy", () => {
   }
 })
 
-test("4. legacy hash/approval surface is isolated by the legacy-surface test (residual risk)", () => {
-  // Legacy WorkUnitActionField renders targetHash/payloadHash/approvalId but is
-  // not on an active route; the legacy-surface test pins it out of the entry chain.
-  assert.ok(LEGACY_TEST.includes("/app/components/legacy/workunitInbox/"))
-  assert.ok(LEGACY_TEST.includes("WorkUnitActionField"))
+test("4. legacy hash/approval component remains explicitly inventoried (residual risk)", () => {
+  // This pins inventory only; active-entry reachability is a separate architecture claim.
+  assert.ok(LEGACY_CONTRACT.legacyFiles.includes("app/components/legacy/workunitInbox/WorkUnitActionField.tsx"))
+  assert.ok(LEGACY_CONTRACT.legacyEdges.some((edge) => edge.includes("WorkUnitActionField")))
 })
 
 test("5. AuditLogPanel introduces no /api/workunit/tools call", () => {

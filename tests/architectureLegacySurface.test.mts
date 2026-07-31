@@ -1,19 +1,46 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { readdir, readFile } from "node:fs/promises"
+import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import {
+  extractModuleReferences,
+  findLegacyEdges,
+  legacyEdgeKey,
+  listFiles,
+  multisetDifference,
+  scanModuleGraph,
+} from "../scripts/lib/typescriptModuleGraph.mjs"
 
 const rootDir = fileURLToPath(new URL("../", import.meta.url))
-const LEGACY_IMPORT_BASELINE = 37
-const ignoredDirs = new Set(["node_modules", ".next", ".open-next", "dist", "coverage"])
-const importPattern = /^\s*import(?:\s+type)?(?:[\s\w{},*]+from\s+)?["']([^"']+)["']/gm
-const legacyFragments = [
-  "/app/lib/workunitInbox/",
-  "/app/lib/actionField/",
-  "/app/components/workunitInbox/",
-  "/app/components/legacy/workunitInbox/",
+const fixturePath = path.join(rootDir, "tests/fixtures/architecture/legacy-surface.v1.json")
+const legacyRoots = [
+  "app/lib/workunitInbox",
+  "app/lib/actionField",
+  "app/components/workunitInbox",
+  "app/components/legacy/workunitInbox",
 ]
+const INITIAL_LEGACY_EDGE_CEILING = 62
+
+type LegacyContract = {
+  sourceSha: string
+  sourceShaRole: "refactor_base_only_not_tree_attestation"
+  edgeCeiling: number
+  legacyEdges: string[]
+  legacyFiles: string[]
+}
+
+function violatesAdoptedDashboard(edge: { resolvedTarget: string }): boolean {
+  return [
+    "app/lib/persistence/d1/",
+    "app/lib/infrastructure/persistence/",
+    "app/lib/persistence/repositoryResolver",
+    "app/lib/persistence/routeRepositories",
+    "app/api/",
+    "app/lib/infrastructure/external/",
+    "app/lib/security/session",
+  ].some((fragment) => edge.resolvedTarget.includes(fragment))
+}
 
 test("root page remains the canonical WorkUnitOSDashboard entry", async () => {
   const source = await readFile(path.join(rootDir, "app/page.tsx"), "utf8")
@@ -24,79 +51,90 @@ test("root page remains the canonical WorkUnitOSDashboard entry", async () => {
 })
 
 test("no editor swap artifacts exist under app", async () => {
-  const files = await listFiles(path.join(rootDir, "app"))
-  const artifacts = files
+  const artifacts = (await listFiles(path.join(rootDir, "app")))
     .map((file) => path.relative(rootDir, file))
     .filter((file) => /\.(swp|swo)$/.test(file) || /\/\.[^/]+\.(swp|swo)$/.test(file))
   assert.deepEqual(artifacts, [])
 })
 
-test("legacy import count does not exceed the current baseline", async () => {
-  const files = [
-    ...(await listCodeFiles(path.join(rootDir, "app"))),
-    ...(await listCodeFiles(path.join(rootDir, "tests"))),
-  ]
-  const imports = await findLegacyImports(files)
-  assert.ok(
-    imports.length <= LEGACY_IMPORT_BASELINE,
-    `Legacy imports increased above ${LEGACY_IMPORT_BASELINE}:\n${imports.join("\n")}`,
-  )
+test("working-tree legacy module edges match the reviewed AST baseline", async () => {
+  const contract = await readContract()
+  const edges = findLegacyEdges(await scanModuleGraph(rootDir, ["app", "tests"]))
+    .map(legacyEdgeKey)
+    .sort()
+  assert.equal(contract.sourceSha, "066a43c3df07f3da10a2fc93ff7d90157c732114")
+  assert.equal(contract.sourceShaRole, "refactor_base_only_not_tree_attestation")
+  assert.equal(contract.edgeCeiling, contract.legacyEdges.length)
+  assert.ok(contract.edgeCeiling <= INITIAL_LEGACY_EDGE_CEILING)
+  assert.deepEqual(edges, [...contract.legacyEdges].sort())
+})
+
+test("legacy file inventory matches the exact baseline", async () => {
+  const contract = await readContract()
+  const files = (await Promise.all(legacyRoots.map(async (root) => listFiles(path.join(rootDir, root)))))
+    .flat()
+    .map((file) => path.relative(rootDir, file).split(path.sep).join("/"))
+    .sort()
+  assert.deepEqual(files, [...contract.legacyFiles].sort())
 })
 
 test("adopted dashboard does not import server-only or infrastructure modules", async () => {
-  const source = await readFile(path.join(rootDir, "app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.tsx"), "utf8")
-  const imports = Array.from(source.matchAll(importPattern), (match) => match[1])
-  const forbidden = imports.filter((specifier) => {
-    const resolved = resolveImport(path.join(rootDir, "app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.tsx"), specifier)
-    const normalized = resolved.split(path.sep).join("/")
-    return [
-      "/app/lib/persistence/d1/",
-      "/app/lib/infrastructure/persistence/",
-      "/app/lib/persistence/repositoryResolver",
-      "/app/lib/persistence/routeRepositories",
-      "/app/api/",
-      "/app/lib/infrastructure/external/",
-      "/app/lib/security/session",
-    ].some((fragment) => normalized.includes(fragment))
-  })
+  const file = "app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.tsx"
+  await readFile(path.join(rootDir, file), "utf8")
+  const edges = (await scanModuleGraph(rootDir, ["app/components/workunit-os/adopted"]))
+    .filter((edge) => edge.file === file)
+  const forbidden = edges.filter(violatesAdoptedDashboard)
   assert.deepEqual(forbidden, [])
 })
 
-async function listFiles(dir: string): Promise<string[]> {
-  const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
-  const nested = await Promise.all(entries.map(async (entry) => {
-    if (ignoredDirs.has(entry.name)) return []
-    const fullPath = path.join(dir, entry.name)
-    if (entry.isDirectory()) return listFiles(fullPath)
-    return [fullPath]
+test("legacy scanner sees import plus local compatibility exports", () => {
+  const file = "app/lib/workunitInbox/wrapper.ts"
+  const references = extractModuleReferences([
+    'import { value } from "../application/value.ts"',
+    "export { value }",
+  ].join("\n"), file)
+  assert.deepEqual(references, [
+    { kind: "import", specifier: "../application/value.ts" },
+    { kind: "export", specifier: "../application/value.ts" },
+  ])
+  const edges = references.map((reference) => ({
+    ...reference, file, resolvedTarget: "app/lib/application/value.ts",
   }))
-  return nested.flat()
-}
+  assert.deepEqual(findLegacyEdges(edges).map((edge) => edge.category), [
+    "legacy-surface", "legacy-surface",
+  ])
 
-async function listCodeFiles(dir: string): Promise<string[]> {
-  const files = await listFiles(dir)
-  return files.filter((file) => /\.(ts|tsx|mts)$/.test(file))
-}
+  const aliasReferences = extractModuleReferences([
+    'import { value } from "../application/value.ts"',
+    "const alias = value",
+    "export { alias }",
+  ].join("\n"), file)
+  const aliasEdges = aliasReferences.map((reference) => ({
+    ...reference, file, resolvedTarget: "app/lib/application/value.ts",
+  }))
+  assert.equal(findLegacyEdges(aliasEdges).length, 1, "the compatibility import itself remains inventoried")
+})
 
-async function findLegacyImports(files: string[]): Promise<string[]> {
-  const violations: string[] = []
-  for (const file of files) {
-    const source = await readFile(file, "utf8")
-    for (const match of source.matchAll(importPattern)) {
-      const resolved = resolveImport(file, match[1]).split(path.sep).join("/")
-      if (legacyFragments.some((fragment) => resolved.includes(fragment))) {
-        violations.push(`${path.relative(rootDir, file)} -> ${match[1]}`)
-      }
-    }
-  }
-  return violations
-}
+test("legacy report comparison preserves duplicate drift", () => {
+  assert.deepEqual(multisetDifference(["edge", "edge"], ["edge"]), ["edge"])
+  assert.deepEqual(multisetDifference(["edge"], ["edge", "edge"]), [])
+})
 
-function resolveImport(filePath: string, specifier: string): string {
-  if (specifier.startsWith("@/")) {
-    const aliasPath = specifier.slice(2)
-    return path.join(rootDir, aliasPath.startsWith("app/") ? aliasPath : path.join("app", aliasPath))
-  }
-  if (specifier.startsWith(".")) return path.resolve(path.dirname(filePath), specifier)
-  return specifier
+test("adopted dashboard policy rejects a positive control", () => {
+  assert.equal(violatesAdoptedDashboard({ resolvedTarget: "app/lib/security/session.ts" }), true)
+  assert.equal(violatesAdoptedDashboard({ resolvedTarget: "app/lib/domain/workUnit.ts" }), false)
+})
+
+async function readContract(): Promise<LegacyContract> {
+  const parsed: unknown = JSON.parse(await readFile(fixturePath, "utf8"))
+  assert.ok(parsed && typeof parsed === "object")
+  const contract = parsed as LegacyContract
+  assert.equal(typeof contract.sourceSha, "string")
+  assert.equal(contract.sourceShaRole, "refactor_base_only_not_tree_attestation")
+  assert.equal(typeof contract.edgeCeiling, "number")
+  assert.ok(Array.isArray(contract.legacyEdges) && contract.legacyEdges.every((item) => typeof item === "string"))
+  assert.ok(Array.isArray(contract.legacyFiles) && contract.legacyFiles.every((item) => typeof item === "string"))
+  assert.equal(new Set(contract.legacyEdges).size, contract.legacyEdges.length)
+  assert.equal(new Set(contract.legacyFiles).size, contract.legacyFiles.length)
+  return contract
 }

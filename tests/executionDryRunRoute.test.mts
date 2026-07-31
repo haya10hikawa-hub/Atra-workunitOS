@@ -27,7 +27,7 @@ async function withPersistence(testFn: (opts: { db: FakeD1Database }) => Promise
     EXTERNAL_ACTIONS_ENABLED: process.env.EXTERNAL_ACTIONS_ENABLED,
   }
   try {
-    process.env.NODE_ENV = "development"
+    Object.assign(process.env, { NODE_ENV: "development" })
     process.env.AUTH_ADAPTER = "dev"
     process.env.ALLOW_DEV_SESSION = "true"
     process.env.ALLOW_DEV_WORKSPACE_BOOTSTRAP = "true"
@@ -119,12 +119,16 @@ function makeRequest(workUnitId: string, body: unknown): Request {
 // ─── Session / RBAC ────────────────────────────────────────────
 
 test("dry-run rejects unauthenticated request", async () => {
-  // Session behavior is tested extensively in phase1cRoutes — the dry-run
-  // route's session check is structurally identical. This test validates
-  // the route loads without session errors.
   await withPersistence(async () => {
-    // Route requires session; structural coverage verified by other tests
-    assert.ok(true)
+    process.env.AUTH_ADAPTER = "none"
+    delete process.env.ALLOW_DEV_SESSION
+    const response = await POST(makeRequest(workUnitId, {
+      workUnitId,
+      previewRefs: [],
+      requestedActionType: null,
+    }), { params: Promise.resolve({ id: workUnitId }) })
+    assert.equal(response.status, 401)
+    assert.equal((await response.json()).error, "unauthorized")
   })
 })
 
