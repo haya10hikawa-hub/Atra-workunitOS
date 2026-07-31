@@ -14,7 +14,7 @@ import type {
   ExecutionResult,
   TrustLevel,
 } from "./types.ts"
-import type { UserId } from "../tenant/types.ts"
+import type { UserId } from "./tenant/types.ts"
 
 // ─── Lifecycle Events ───────────────────────────────────────────
 
