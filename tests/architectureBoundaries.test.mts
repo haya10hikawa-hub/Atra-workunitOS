@@ -556,6 +556,27 @@ const PROPOSED_CANONICAL_TYPES = [
   "WorkUnitReviewV1", "ReviewedWorkUnitV1", "ActionPreparationV1",
 ]
 
+// WU-01B: the additive authorized-declaration registry. The seven names above stay forbidden;
+// this literal records the one versioned record the owner ratified, and the exact path it may be
+// declared at. Absence from the forbidden list is NOT permission — an unlisted `*RecordV1` under
+// a fresh name is exactly how WU-00 Review 3 recorded `WU00_PR211_BOUNDARY_INCOMPLETE`, so the
+// check below is a closed allowlist rather than an open denylist. Expanding it requires a human
+// edit to this source-controlled literal in the same review, as `DEBT_IDS` does.
+const AUTHORIZED_CANONICAL_RECORD_DECLARATIONS = [
+  { name: "SourceRecordV1", path: "app/lib/domain/source/types.ts" },
+]
+
+// The record's sole validator is a function, not a record, but its name necessarily ends in a
+// family suffix. It is listed separately so the allowlist stays honest about what each entry is,
+// and just as narrowly: one name, one path, so a second validator anywhere else still fails.
+const AUTHORIZED_RECORD_VALIDATOR_DECLARATIONS = [
+  { name: "validateSourceRecordV1", path: "app/lib/domain/source/validateSourceRecord.ts" },
+]
+
+const VERSIONED_RECORD_FAMILY_SUFFIXES = [
+  "RecordV1", "CandidateV1", "ReviewV1", "CorrectionV1", "GroupV1", "PreparationV1",
+]
+
 const WU10_GATE_CONDITIONS = [
   "legacy edge baseline = 0",
   "legacy file baseline = 0",
@@ -668,6 +689,35 @@ test("governance: proposed canonical records are proposal terminology, not runti
     }
   }
   assert.deepEqual(declarations, [], `proposal terminology must not become a runtime declaration:\n${declarations.join("\n")}`)
+})
+
+// T15 — WU-01B. The guard above is a denylist, so a versioned record under an unlisted name would
+// pass it silently. This pairs it with a closed allowlist over the whole versioned-record family:
+// exactly the ratified declarations, at exactly the ratified paths, and nothing else.
+test("governance: only ratified canonical record names are declared, at exactly one path each", async () => {
+  assertDocDeclares(await readProgramDoc(), [
+    "### WU-01B source record re-scope",
+    "`SourceRecordV1` is the only authorized canonical record declaration",
+    "The seven proposal names remain forbidden.",
+  ], "WU-01B authorized declaration")
+
+  const pattern = new RegExp(
+    `\\b(?:type|interface|class|enum|const|function)\\s+(\\w*(?:${VERSIONED_RECORD_FAMILY_SUFFIXES.join("|")}))\\b`,
+    "g")
+  const declarations: string[] = []
+  for (const root of ["app", "scripts"]) {
+    for (const file of await collectCodeFiles(path.join(rootDir, root))) {
+      const source = await readFile(file, "utf8")
+      for (const found of source.matchAll(pattern)) {
+        declarations.push(`${path.relative(rootDir, file)} declares ${found[1]}`)
+      }
+    }
+  }
+  const authorized = [
+    ...AUTHORIZED_CANONICAL_RECORD_DECLARATIONS, ...AUTHORIZED_RECORD_VALIDATOR_DECLARATIONS,
+  ].map((entry) => `${entry.path} declares ${entry.name}`)
+  assert.deepEqual(declarations.sort(), authorized.sort(),
+    `only ratified canonical record declarations may exist:\n${declarations.join("\n")}`)
 })
 
 test("governance: WU-01 is not authorized by WU-00 or by debt ownership", async () => {
