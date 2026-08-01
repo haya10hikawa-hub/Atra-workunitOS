@@ -401,3 +401,26 @@ must never be committed.
 - Docs tree reorganization
 - Production auth hardening
 - Limited, approved, auditable external execution design
+
+## License
+
+Atra WorkUnit OS is source-available under the Elastic License 2.0.
+
+Use, modification, and redistribution are permitted subject to the terms in
+`LICENSE`.
+
+Uses not permitted under the Elastic License 2.0, and uses requiring additional
+commercial rights or contractual commitments, may be available through a
+separate written commercial agreement.
+
+Commercial licensing inquiries:
+
+haya10hikawa@gmail.com
+
+See:
+
+- `LICENSE`
+- `NOTICE`
+- `COMMERCIAL_LICENSE.md`
+- `TRADEMARKS.md`
+- `THIRD_PARTY_NOTICES.md`
