@@ -41,6 +41,8 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# A committed, secret-free template is the one intentional exception.
+!.env.example
 
 # vercel
 .vercel
@@ -61,3 +63,65 @@ next-env.d.ts
 # values) and local D1 evidence artifacts. Generated only; never committed.
 /bootstrap.control*.sql
 /.d1-evidence/
+
+# ---------------------------------------------------------------------------
+# Public-repository boundary (docs/release/PUBLIC_REPOSITORY_POLICY.md).
+#
+# This file is a security contract, not a convenience list. Every pattern below
+# keeps a class of private, generated, or secret-bearing material out of a
+# repository that is intended to become publicly exportable. Do not add broad
+# patterns (`/docs/`, `/scripts/`, `*.json`, `*.md`) here: they would silently
+# hide legitimate public source instead of protecting private state.
+# `tests/publicRepositoryBoundary.test.mts` asserts these rules stay in force.
+# ---------------------------------------------------------------------------
+
+# Private keys, certificates, and keystores. `*.pem` is covered above.
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.jks
+*.keystore
+
+# Local databases and SQL dumps. D1/SQLite state is local operator data and is
+# never the canonical definition of a schema — `migrations/` is.
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.dump.sql
+
+# Cloudflare local runtime state (miniflare/wrangler caches, local D1 shards).
+/.wrangler/
+/.wrangler-state/
+
+# Operator evidence bundles and execution artifacts. Evidence *schemas* and
+# synthetic fixtures are public; real execution evidence carries tenant,
+# operator, and environment context and is not.
+/evidence/
+/.loop-reports/
+*.report.json
+test-results.json
+result-manifest.json
+context-manifest.json
+exact-head.diff
+
+# Public-export staging. The exporter writes to an invocation-owned temporary
+# directory; these are the in-repo fallbacks and must never be committed.
+/public-export/
+/release-staging/
+
+# Agent- and session-local state. `.hermes/` was tracked until the public
+# boundary work; it is local planning state with no runtime, build, test, or CI
+# consumer, and it must not return. See PUBLIC_REPOSITORY_POLICY.md.
+/.hermes/
+/.atra/
+/.claude/
+/.codex/
+
+# Editor and OS metadata beyond the swap files covered above.
+.idea/
+Thumbs.db
