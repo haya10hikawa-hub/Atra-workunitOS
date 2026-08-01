@@ -173,6 +173,14 @@ These boundaries are pinned by permanent tests in `tests/architectureBoundaries.
 
 WU-00 does not start WU-01. No canonical record family, persistence, provider integration, or runtime implementation is authorized by this PR, and none is authorized by a debt-ownership entry naming WU-01. Debt ownership records who *would* own the fix, not permission to begin.
 
+### WU-01B source record re-scope
+
+The product owner recorded one bounded, written re-scope of the tenant-hybrid gate, limited to a single record. `SourceRecordV1` is the only authorized canonical record declaration, and it is authorized at exactly one path, `app/lib/domain/source/types.ts`. The seven proposal names remain forbidden. Both statements are enforced by a closed allowlist over the whole versioned-record family, so a second record under a fresh, unlisted name fails rather than passing by omission.
+
+The re-scope authorizes nothing else. It does not authorize `WorkUnitCandidateV1`, `ReviewedWorkUnitV1`, any proposer or reviewer contract, any `Actor` or `TenantContext` dependency, or the canonical record family as a whole. It does not resolve the tenant hybrid, which is unchanged: the record consumes only the canonical branded `TenantId`, and needs none of the six symbols still physically owned by `app/lib/tenant/types.ts`. It adds no production consumer, no persistence, no migration, no provider call, no adapter, no composition root, no UI and no API route, and it neither changes nor replaces the live unversioned domain family. `infrastructure_application_signal_contract` stays `known_open` and unchanged, owned by WU-02.
+
+The remaining WU-01 scope — candidate, correction, review, reviewed WorkUnit and action preparation — stays unstarted and unauthorized, as do WU-01C, WU-02, WU-03, H1B3, formation, correlation, persistence and provider integration.
+
 ### PR #211 is `UNMERGED_NON_AUTHORITY_INPUT`
 
 PR #211 (`feat/f6-formation-findings`) is unmerged, blocked, non-authority input. This program does not modify it, does not consume it, does not copy it, does not reference it as authority, and does not authorize merging it. It is not an authority input for any WorkUnit, and F6A is not a WU-03 authority input. Its exact four-file family is absent at this head, and no alternate module path, re-export or branch token reintroduces it.
