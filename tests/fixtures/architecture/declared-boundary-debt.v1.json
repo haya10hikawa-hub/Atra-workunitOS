@@ -3,25 +3,5 @@
   "sourceShaRole": "refactor_base_only_not_tree_attestation",
   "purpose": "Exact declared architecture-debt ledger. Each entry enumerates concrete file paths for a dependency-direction violation that exists at the refactor base and that the target boundary policy forbids. This ledger is not an allowlist: reconciliation asserts exact set equality against the live scan, so an undeclared equivalent violation, a new importer, a different path, a value-edge upgrade, or a stale entry all fail.",
   "notAnAllowlist": true,
-  "debts": [
-    {
-      "id": "infrastructure_application_signal_contract",
-      "status": "known_open",
-      "introduced_by": "pre_wu00_snapshot",
-      "source_sha": "066a43c3df07f3da10a2fc93ff7d90157c732114",
-      "exact_sources": [
-        "app/lib/infrastructure/external/calendar/toNormalizedToolSignal.ts",
-        "app/lib/infrastructure/external/github/toNormalizedToolSignal.ts",
-        "app/lib/infrastructure/external/slack/toNormalizedToolSignal.ts"
-      ],
-      "exact_targets": [
-        "app/lib/application/workunitInbox/types.ts"
-      ],
-      "edge_kind": "type-only",
-      "risk": "Provider read-boundary mappers depend on an application-layer type, inverting the intended direction infrastructure -> ports/domain. The shared normalized signal contract currently has no domain or port home, so every new provider adapter would reproduce the inversion.",
-      "owner_workunit": "WU-02",
-      "removal_gate": "Relocate the normalized signal contract into a domain or port boundary, repoint the three provider mappers and any application consumers, and remove this entry so the external-client policy passes with no declared debt.",
-      "production_change_allowed_in_wu00": false
-    }
-  ]
+  "debts": []
 }

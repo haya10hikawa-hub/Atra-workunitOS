@@ -22,6 +22,9 @@ Current active structure is still hybrid:
   - `application/auth/` now owns auth adapter resolution and session resolution
   - `application/dashboard/` owns legacy-named client-safe UI fetch helpers and view-model mapping
   - `application/workunitInbox/` now owns inbox-facing transforms, read models, and persistence mapping
+- `app/lib/ports/`
+  - neutral boundary contracts shared by adapters and the application layer
+  - `ports/toolSignal/` owns the normalized provider-ingress signal contract
 - `app/lib/domain/`
   - pure domain types and lifecycle/state-machine logic
 - `app/lib/domain/auth/`
@@ -91,7 +94,8 @@ Allowed:
 - `app/lib/application` → domain + repository/external interfaces
 - `app/lib/domain` → pure types / pure logic only
 - `app/lib/persistence/d1` → persistence row helpers and D1-like interfaces only
-- `app/lib/infrastructure/external` → normalized source models and external fetch clients
+- `app/lib/infrastructure/external` → port contracts, normalized source models and external fetch clients
+- `app/lib/ports` → `app/lib/ports` and `app/lib/domain` only; never application, infrastructure, persistence, components or routes
 
 ## 4. Forbidden dependencies
 
@@ -123,7 +127,8 @@ Forbidden:
 | Legacy standalone Action Field UI | `app/components/legacy/workunitInbox/WorkUnitActionField.tsx` | Physical home; old path re-exports remain |
 | Canonical inbox application logic | `app/lib/application/workunitInbox/*` | Active signal->inbox mapping and persistence mapping |
 | Legacy inbox compatibility paths | `app/lib/workunitInbox/*` and `app/components/workunitInbox/*` | Re-export surface only |
-| Inbox read boundary | `app/lib/application/workunitInbox/*` | Normalized source → InboxWorkUnit |
+| Normalized signal contract | `app/lib/ports/toolSignal/types.ts` | Sole declaration of the provider-ingress signal family; `app/lib/application/workunitInbox/types.ts` keeps a type-only compatibility re-export |
+| Inbox read boundary | `app/lib/application/workunitInbox/*` | Normalized source (from the port contract) → InboxWorkUnit |
 | Route persistence access | `app/lib/persistence/repositoryResolver.ts` and `routeRepositories.ts` | Canonical persistence entry |
 | Execution approval adapter | `app/lib/persistence/approvalStoreAdapter.ts` | Wraps tenant-scoped approval repository for execution-time verification |
 | Tenant DB repository implementations | `app/lib/persistence/d1/` | Infrastructure implementation |

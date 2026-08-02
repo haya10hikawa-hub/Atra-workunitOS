@@ -1,42 +1,20 @@
 /**
  * WorkUnit Inbox Types
  *
- * Defines the normalized signal and inbox WorkUnit models.
- * These are independent of raw external API responses.
- * Real integrations will produce NormalizedToolSignal objects.
+ * Owns the inbox WorkUnit projection model. The normalized signal family is
+ * declared by the provider-ingress port at app/lib/ports/toolSignal/types.ts;
+ * the re-export below is a type-only compatibility surface for existing
+ * consumers, never a second declaration.
  */
 
-// ─── Providers ──────────────────────────────────────────────────
+import type { NormalizedToolProvider, WorkUnitPriority } from "../../ports/toolSignal/types.ts"
 
-export type NormalizedToolProvider = "github" | "slack" | "calendar"
-
-export type NormalizedToolSignalType =
-  | "github_pr_review_requested"
-  | "github_issue_assigned"
-  | "github_issue_blocked"
-  | "slack_mention_request"
-  | "calendar_deadline"
-
-// ─── Signal ─────────────────────────────────────────────────────
-
-export type WorkUnitPriority = "low" | "medium" | "high"
-
-export type NormalizedToolSignal = {
-  id: string
-  tenantId: string
-  provider: NormalizedToolProvider
-  signalType: NormalizedToolSignalType
-  title: string
-  summary: string
-  sourceUrl?: string
-  actor?: string
-  assignee?: string
-  repository?: string
-  priorityHint?: WorkUnitPriority
-  dueAt?: string
-  createdAt: string
-  updatedAt: string
-}
+export type {
+  NormalizedToolProvider,
+  NormalizedToolSignalType,
+  WorkUnitPriority,
+  NormalizedToolSignal,
+} from "../../ports/toolSignal/types.ts"
 
 // ─── Inbox WorkUnit ─────────────────────────────────────────────
 

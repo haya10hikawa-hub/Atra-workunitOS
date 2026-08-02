@@ -2,7 +2,7 @@
  * Calendar Event → NormalizedToolSignal Mapper
  */
 
-import type { NormalizedToolSignal } from "../../../application/workunitInbox/types.ts"
+import type { NormalizedToolSignal } from "../../../ports/toolSignal/types.ts"
 import type { CalendarNormalizedEvent } from "./types.ts"
 
 const ONE_DAY_MS = 86400_000

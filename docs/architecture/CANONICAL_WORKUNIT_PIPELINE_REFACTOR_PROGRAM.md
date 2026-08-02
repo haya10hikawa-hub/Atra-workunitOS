@@ -109,13 +109,15 @@ Evidence limits are explicit: fixture `sourceSha` values identify the refactor b
 
 ## Declared Architecture Debt
 
-Independent review found two dependency-direction violations that exist at the refactor base and that the previous architecture policy did not forbid, so the boundary tests were green while the violations were live. They are recorded exactly in `tests/fixtures/architecture/declared-boundary-debt.v1.json` and enforced by target-boundary policies in `tests/architectureBoundaries.test.mts`. One of the two has since been resolved by WU-01A; the record was removed only after its live edges disappeared.
+Independent review found two dependency-direction violations that exist at the refactor base and that the previous architecture policy did not forbid, so the boundary tests were green while the violations were live. They are recorded exactly in `tests/fixtures/architecture/declared-boundary-debt.v1.json` and enforced by target-boundary policies in `tests/architectureBoundaries.test.mts`. Both have since been resolved — the first by WU-01A, the second by WU-02 — and in each case the record was removed only after its live edges disappeared.
 
 **These are known violations, not approved target architecture.** WU-00 records them; WU-00 does not fix them, because WU-00 changes no `app/**` file.
 
 | Debt ID | Exact violation | Edge kind | Owner |
 | --- | --- | --- | --- |
-| `infrastructure_application_signal_contract` | `app/lib/infrastructure/external/{calendar,github,slack}/toNormalizedToolSignal.ts` → `app/lib/application/workunitInbox/types.ts` | type-only | WU-02 |
+| _(none — the ledger is empty)_ | | | |
+
+**Resolved by WU-02:** `infrastructure_application_signal_contract` — `app/lib/infrastructure/external/{calendar,github,slack}/toNormalizedToolSignal.ts` → `app/lib/application/workunitInbox/types.ts`, type-only. The normalized signal family (`NormalizedToolProvider`, `NormalizedToolSignalType`, `WorkUnitPriority`, `NormalizedToolSignal`) now has its sole declaration at the neutral port `app/lib/ports/toolSignal/types.ts`, which imports nothing, so the three provider mappers depend downward instead of upward. `app/lib/application/workunitInbox/types.ts` keeps the Inbox projection family and a type-only compatibility re-export for existing consumers; it declares none of the four relocated symbols. The new `app/lib/ports/**` layer ships with its own fail-closed boundary policy, so it is not an unpoliced surface. Shape is preserved exactly: field names, declaration order, optionality, vocabularies, `tenantId: string` and `priorityHint` are unchanged, and no mapper output changed.
 
 **Resolved by WU-01A:** `domain_tenant_hybrid_boundary` — `app/lib/domain/{types,workUnitLifecycle}.ts` → `app/lib/tenant/types.ts`, type-only. Both modules now import the canonical declarations in `app/lib/domain/tenant/types.ts` directly, so the `app/lib/domain` → `app/lib/tenant` dependency inversion no longer exists. WU-01A changed those two import specifiers and nothing else; it is not WU-01 and introduces no canonical record family.
 
@@ -123,7 +125,9 @@ Independent review found two dependency-direction violations that exist at the r
 
 **WU-01 may not introduce the new canonical domain record family on top of the tenant hybrid** without first resolving it or recording an explicit PM re-scope. WU-01A closed the dependency-direction half of that gate only; the hybrid module itself is unchanged, and building `ReviewedWorkUnitV1` and `WorkUnitCandidateV1` still requires the separate authorization WU-01 has not been given.
 
-**WU-02 owns relocation of the normalized signal contract** into a domain or port boundary, so provider adapters stop depending on an application-layer type.
+**WU-02 has closed the relocation of the normalized signal contract.** Its new home is the top-level port `app/lib/ports/toolSignal/types.ts`; provider adapters no longer depend on an application-layer type. Domain placement was rejected on evidence — `app/lib/domain/` already hosts two source vocabularies (`SourceType`/`SourceRef`/`ExternalSignal` and `SourceRecordV1`), and a third would create the source-authority collapse the program exists to prevent.
+
+**This slice is narrower than the WU-02 row in the WorkUnit table below.** WU-02 as executed is the dependency-direction closure only. Canonical source adapters in shadow mode, provider integration and GET-write remediation were **not** authorized, **not** implemented and remain open; the WU-02 label must not be read as satisfying that row. It also creates no `SourceRecordV1` consumer, conversion or persistence, changes no route, UI or migration, and adds no provider operation.
 
 The ledger is exact-path based and is deliberately not an allowlist. Reconciliation asserts set equality in both directions against the live scan, so each of the following fails rather than being absorbed: an undeclared equivalent violation, a new importer of a declared target, a moved or different path, a declared type-only edge upgraded to a value edge, a stale entry whose source or target no longer exists, and any attempt to declare a directory prefix, glob or basename instead of a concrete file. Removing a debt requires the live edge to be gone, not the record to be edited.
 
@@ -137,11 +141,9 @@ The distinction is operational, not cosmetic. Reconciliation is machine-checked 
 
 Contraction is governed exactly as expansion is. A debt leaves the ledger only when its live edges are already gone, and the source-controlled `DEBT_IDS` literal in `tests/architectureBoundaries.test.mts` must be changed by a human in the same review. Removing the record is never the mechanism of closure, and a resolved id may not reappear.
 
-The current declared debt is exactly this one entry and no others:
+The current declared debt is empty: there is no declared entry, and adding one requires a separate PM/architecture decision recorded before the change.
 
-- `infrastructure_application_signal_contract`
-
-Previously declared and now resolved: `domain_tenant_hybrid_boundary` (closed by WU-01A).
+Previously declared and now resolved: `domain_tenant_hybrid_boundary` (closed by WU-01A) and `infrastructure_application_signal_contract` (closed by WU-02). Neither id may reappear.
 
 Recording `WU-01` or `WU-02` as debt owner assigns prospective ownership only. It does **not** authorize starting, implementing, or merging those WorkUnits.
 
@@ -177,7 +179,7 @@ WU-00 does not start WU-01. No canonical record family, persistence, provider in
 
 The product owner recorded one bounded, written re-scope of the tenant-hybrid gate, limited to a single record. `SourceRecordV1` is the only authorized canonical record declaration, and it is authorized at exactly one path, `app/lib/domain/source/types.ts`. The seven proposal names remain forbidden. Both statements are enforced by a closed allowlist over the whole versioned-record family, so a second record under a fresh, unlisted name fails rather than passing by omission.
 
-The re-scope authorizes nothing else. It does not authorize `WorkUnitCandidateV1`, `ReviewedWorkUnitV1`, any proposer or reviewer contract, any `Actor` or `TenantContext` dependency, or the canonical record family as a whole. It does not resolve the tenant hybrid, which is unchanged: the record consumes only the canonical branded `TenantId`, and needs none of the six symbols still physically owned by `app/lib/tenant/types.ts`. It adds no production consumer, no persistence, no migration, no provider call, no adapter, no composition root, no UI and no API route, and it neither changes nor replaces the live unversioned domain family. `infrastructure_application_signal_contract` stays `known_open` and unchanged, owned by WU-02.
+The re-scope authorizes nothing else. It does not authorize `WorkUnitCandidateV1`, `ReviewedWorkUnitV1`, any proposer or reviewer contract, any `Actor` or `TenantContext` dependency, or the canonical record family as a whole. It does not resolve the tenant hybrid, which is unchanged: the record consumes only the canonical branded `TenantId`, and needs none of the six symbols still physically owned by `app/lib/tenant/types.ts`. It adds no production consumer, no persistence, no migration, no provider call, no adapter, no composition root, no UI and no API route, and it neither changes nor replaces the live unversioned domain family. `infrastructure_application_signal_contract` was still `known_open` and unchanged at the time of that re-scope; it was closed later, by WU-02, with no relationship created between the normalized signal contract and `SourceRecordV1`.
 
 The remaining WU-01 scope — candidate, correction, review, reviewed WorkUnit and action preparation — stays unstarted and unauthorized, as do WU-01C, WU-02, WU-03, H1B3, formation, correlation, persistence and provider integration.
 
