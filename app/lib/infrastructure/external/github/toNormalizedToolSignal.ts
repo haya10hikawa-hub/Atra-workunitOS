@@ -5,7 +5,7 @@
  * format, feeding the existing WorkUnit Inbox pipeline.
  */
 
-import type { NormalizedToolSignal } from "../../../application/workunitInbox/types.ts"
+import type { NormalizedToolSignal } from "../../../ports/toolSignal/types.ts"
 import type { GitHubNormalizedEvent } from "./types.ts"
 
 // ─── Single Event ───────────────────────────────────────────────

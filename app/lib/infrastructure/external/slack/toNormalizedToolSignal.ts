@@ -2,7 +2,7 @@
  * Slack Event → NormalizedToolSignal Mapper
  */
 
-import type { NormalizedToolSignal } from "../../../application/workunitInbox/types.ts"
+import type { NormalizedToolSignal } from "../../../ports/toolSignal/types.ts"
 import type { SlackNormalizedEvent } from "./types.ts"
 
 // ─── Single Event ───────────────────────────────────────────────

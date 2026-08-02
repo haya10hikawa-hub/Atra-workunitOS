@@ -13,13 +13,20 @@ import {
 
 const rootDir = fileURLToPath(new URL("../", import.meta.url))
 const REFACTOR_BASE_SHA = "066a43c3df07f3da10a2fc93ff7d90157c732114"
-const DEBT_IDS = ["infrastructure_application_signal_contract"]
-// The domain -> app/lib/tenant inversion recorded as `domain_tenant_hybrid_boundary` is resolved:
-// both domain modules now consume the canonical declarations in app/lib/domain/tenant/types.ts
-// directly. The entry was removed only after the live edges disappeared — the record was never the
-// mechanism of closure. Reintroduction is not absorbed: `violatesDomainTarget` still forbids
-// /app/lib/tenant/, and the declared set is now empty, so any such edge reconciles as undeclared.
-const RESOLVED_DEBT_IDS = ["domain_tenant_hybrid_boundary"]
+const DEBT_IDS: string[] = []
+// Both recorded inversions are resolved, and in both cases the entry was removed only after the
+// live edges disappeared — the record was never the mechanism of closure.
+//
+// `domain_tenant_hybrid_boundary` (WU-01A): both domain modules now consume the canonical
+// declarations in app/lib/domain/tenant/types.ts directly.
+// `infrastructure_application_signal_contract` (WU-02): the normalized signal family moved to the
+// neutral port app/lib/ports/toolSignal/types.ts, so the three provider mappers depend downward.
+//
+// Reintroduction is not absorbed either way: `violatesDomainTarget` still forbids /app/lib/tenant/,
+// `violatesExternalClientTarget` still forbids /app/lib/application/, and the declared set is now
+// empty, so any returning edge reconciles as undeclared.
+const RESOLVED_DEBT_IDS = ["domain_tenant_hybrid_boundary", "infrastructure_application_signal_contract"]
+const SIGNAL_PORT = "app/lib/ports/toolSignal/types.ts"
 const DEBT_FIELDS = [
   "id", "status", "introduced_by", "source_sha", "exact_sources", "exact_targets",
   "edge_kind", "risk", "owner_workunit", "removal_gate", "production_change_allowed_in_wu00",
@@ -87,6 +94,17 @@ function violatesDomainTarget(edge: ModuleEdge): boolean {
 function violatesExternalClientTarget(edge: ModuleEdge): boolean {
   return violatesUiDependency(edge)
     || hasForbiddenResolvedPath(edge.resolvedTarget, ["/app/lib/application/"])
+}
+
+// The ports layer is a neutral contract boundary, so its policy is a closed allowlist rather than
+// a denylist: a target nobody anticipated — a package, a Node builtin, a future layer, an
+// unresolvable specifier — is forbidden by default instead of silently permitted. React, Next,
+// application, infrastructure, persistence, components and API routes are all excluded by it.
+const PERMITTED_PORT_TARGET_PREFIXES = ["app/lib/ports/", "app/lib/domain/"]
+
+function violatesPortTarget(edge: ModuleEdge): boolean {
+  const normalized = edge.resolvedTarget.replace(/^\/+/, "")
+  return !PERMITTED_PORT_TARGET_PREFIXES.some((prefix) => normalized.startsWith(prefix))
 }
 
 function syntheticEdge(file: string, resolvedTarget: string, kind: ModuleEdge["kind"] = "import-type"): ModuleEdge {
@@ -330,6 +348,45 @@ test("target external-client policy forbids the application layer", () => {
     violatesExternalClientTarget(syntheticEdge("app/lib/infrastructure/external/github/client.ts", "app/lib/infrastructure/external/github/types.ts")),
     false,
   )
+  // The relocated signal port is the intended target of the WU-02 closure and must not be
+  // classified as a violation, or the closure would be unrepresentable.
+  assert.equal(
+    violatesExternalClientTarget(syntheticEdge("app/lib/infrastructure/external/github/toNormalizedToolSignal.ts", SIGNAL_PORT)),
+    false,
+  )
+})
+
+test("target port policy permits only ports and domain and rejects a positive control", () => {
+  const portEdge = (specifier: string, resolvedTarget: string): ModuleEdge => ({
+    file: "app/lib/ports/toolSignal/types.ts", kind: "import", specifier, resolvedTarget,
+  })
+  const forbidden: Array<[string, string]> = [
+    ["next/server.js", "node_modules/next/server.d.ts"],
+    ["react", "node_modules/@types/react/index.d.ts"],
+    ["../../application/workunitInbox/types.ts", "app/lib/application/workunitInbox/types.ts"],
+    ["../../infrastructure/external/github/types.ts", "app/lib/infrastructure/external/github/types.ts"],
+    ["../../persistence/d1/types.ts", "app/lib/persistence/d1/types.ts"],
+    ["../../../components/workunit-os/WorkUnitCard.tsx", "app/components/workunit-os/WorkUnitCard.tsx"],
+    ["../../../api/workunit/inbox/route.ts", "app/api/workunit/inbox/route.ts"],
+    ["node:fs", "node:fs"],
+  ]
+  for (const [specifier, resolvedTarget] of forbidden) {
+    assert.equal(violatesPortTarget(portEdge(specifier, resolvedTarget)), true, `${resolvedTarget} must be forbidden`)
+  }
+  for (const permitted of [SIGNAL_PORT, "app/lib/ports/other/types.ts", "app/lib/domain/types.ts"]) {
+    assert.equal(violatesPortTarget(portEdge("./x.ts", permitted)), false, `${permitted} must be permitted`)
+  }
+  // Prefix lookalikes are not the permitted layer: matching is on the path boundary, not the name.
+  assert.equal(violatesPortTarget(portEdge("../portsLegacy/types.ts", "app/lib/portsLegacy/types.ts")), true)
+})
+
+test("port modules import only ports and domain, and the tool signal port is a graph leaf", async () => {
+  // Non-vacuity: an empty scan proves nothing unless the scan root actually contains code.
+  const portFiles = await collectCodeFiles(path.join(rootDir, "app/lib/ports"))
+  assert.ok(portFiles.length > 0, "app/lib/ports must contain scanned code files")
+  await assertNoForbiddenImports(["app/lib/ports"], "ports", violatesPortTarget)
+  assert.deepEqual(await scanModuleGraph(rootDir, ["app/lib/ports"]), [],
+    "the tool signal port must import nothing at all")
 })
 
 // T1 — the domain layer now has zero live boundary violations, reconciled against an EMPTY
@@ -357,17 +414,32 @@ test("live domain boundary violations are empty and no domain debt remains decla
   }
 })
 
-test("live external-client boundary violations are exactly the declared signal-contract debt", async () => {
-  const ledger = await readDebtLedger()
+// The external-client counterpart of the domain test above: zero live violations, reconciled
+// against an EMPTY declared set. Nothing is allowlisted — the declared side is [].
+test("live external-client boundary violations are empty and no external-client debt remains declared", async () => {
   const observed = (await scanModuleGraph(rootDir, [
     "app/lib/infrastructure/external",
     "app/lib/workunitInbox/sources",
     "app/lib/integrations",
   ])).filter(violatesExternalClientTarget)
-  const declared = declaredDebtKeys(debtById(ledger, "infrastructure_application_signal_contract"))
-  const { undeclared, stale } = reconcile(observed, declared)
+  assert.deepEqual(
+    observed.map((edge) => `${edge.file} -> ${edge.kind} ${edge.specifier}`),
+    [],
+    "external source clients must have no target-policy violation",
+  )
+
+  const { undeclared, stale } = reconcile(observed, [])
   assert.deepEqual(undeclared, [], `undeclared external-client violation:\n${undeclared.join("\n")}`)
-  assert.deepEqual(stale, [], `declared external-client debt no longer observed:\n${stale.join("\n")}`)
+  assert.deepEqual(stale, [], `stale declared external-client debt:\n${stale.join("\n")}`)
+
+  // The record may only be absent because the edges are absent, never the other way round.
+  const ledger = await readDebtLedger()
+  for (const id of RESOLVED_DEBT_IDS) {
+    assert.equal(
+      ledger.debts.some((debt) => debt.id === id), false,
+      `${id} was resolved and must not be re-declared`,
+    )
+  }
 })
 
 // T6 — reconcile() is a pure function; its unit test must not depend on the live ledger, or the
@@ -375,7 +447,23 @@ test("live external-client boundary violations are exactly the declared signal-c
 // domain debt was closed. The declared set is therefore a literal synthetic record with the exact
 // shape the removed debt had, so every rejection below stays permanently exercised.
 test("debt reconciliation rejects new, moved, upgraded and stale violations", async () => {
-  const declared = ["app/lib/domain/types.ts | type-only | app/lib/tenant/types.ts"]
+  // The declared set is derived from a synthetic ledger record rather than the live one, so
+  // declaredDebtKeys() and debtById() — and every rejection below — stay permanently exercised
+  // now that the live ledger is empty.
+  const syntheticLedger: DebtLedger = {
+    sourceSha: REFACTOR_BASE_SHA, sourceShaRole: "refactor_base_only_not_tree_attestation",
+    notAnAllowlist: true,
+    debts: [{
+      id: "synthetic_reconciliation_control", status: "known_open", introduced_by: "pre_wu00_snapshot",
+      source_sha: REFACTOR_BASE_SHA, edge_kind: "type-only", owner_workunit: "WU-01",
+      exact_sources: ["app/lib/domain/types.ts"], exact_targets: ["app/lib/tenant/types.ts"],
+      risk: "Synthetic control record. It exists only inside this test, so reconciliation stays exercised.",
+      removal_gate: "Never removed: this record has no live edge and is not part of the shipped ledger.",
+      production_change_allowed_in_wu00: false,
+    }],
+  }
+  const declared = declaredDebtKeys(debtById(syntheticLedger, "synthetic_reconciliation_control"))
+  assert.deepEqual(declared, ["app/lib/domain/types.ts | type-only | app/lib/tenant/types.ts"])
   const live = syntheticEdge("app/lib/domain/types.ts", "app/lib/tenant/types.ts")
   assert.deepEqual(reconcile([live], declared).undeclared, [], "declared edge must reconcile cleanly")
 
@@ -483,20 +571,26 @@ test("compatibility tenant module keeps its consumers and its full export surfac
     "identity types must remain re-exports, never competing declarations")
 })
 
-// T5 — closing one debt must not silently weaken the other.
-test("remaining declared debt is exactly the infrastructure signal contract, intact", async () => {
+// T5 — closure, not intactness. An empty ledger is only evidence if the edges it recorded are
+// gone AND the replacement direction is the intended one, so both halves are asserted together:
+// the record is absent, and each of the three mappers resolves the contract type-only to the port.
+test("the infrastructure signal contract debt is closed at the port, not merely unrecorded", async () => {
   const ledger = await readDebtLedger()
-  assert.deepEqual(ledger.debts.map((debt) => debt.id), ["infrastructure_application_signal_contract"])
+  assert.deepEqual(ledger.debts, [], "the ledger must be empty once its last entry is closed")
+  assert.deepEqual([...DEBT_IDS], [], "the source-controlled declared set must be empty too")
+  assert.ok(RESOLVED_DEBT_IDS.includes("infrastructure_application_signal_contract"),
+    "the closed id must be recorded as resolved so it cannot be re-declared")
 
-  const debt = debtById(ledger, "infrastructure_application_signal_contract")
-  assert.deepEqual(debt.exact_sources, [
-    "app/lib/infrastructure/external/calendar/toNormalizedToolSignal.ts",
-    "app/lib/infrastructure/external/github/toNormalizedToolSignal.ts",
-    "app/lib/infrastructure/external/slack/toNormalizedToolSignal.ts",
-  ])
-  assert.deepEqual(debt.exact_targets, ["app/lib/application/workunitInbox/types.ts"])
-  assert.equal(debt.edge_kind, "type-only")
-  assert.equal(debt.owner_workunit, "WU-02")
+  const mappers = (await scanModuleGraph(rootDir, ["app/lib/infrastructure/external"]))
+    .filter((edge) => edge.file.endsWith("/toNormalizedToolSignal.ts")
+      && (edge.resolvedTarget === SIGNAL_PORT || edge.resolvedTarget.includes("workunitInbox/types.ts")))
+    .map((edge) => `${edge.file} | ${edgeKindClass(edge.kind)} | ${edge.resolvedTarget}`)
+    .sort()
+  assert.deepEqual(mappers, [
+    `app/lib/infrastructure/external/calendar/toNormalizedToolSignal.ts | type-only | ${SIGNAL_PORT}`,
+    `app/lib/infrastructure/external/github/toNormalizedToolSignal.ts | type-only | ${SIGNAL_PORT}`,
+    `app/lib/infrastructure/external/slack/toNormalizedToolSignal.ts | type-only | ${SIGNAL_PORT}`,
+  ], "all three provider mappers must consume the signal contract from the port, type-only")
 })
 
 // T7 — reintroduction fails closed: the policy is unweakened and the declared set is now empty,
@@ -795,9 +889,8 @@ test("governance: declared debt ledger is a review-governed registry, not a mach
   // exactly the review gate; it is a human decision point, not a machine-closed guarantee.
   const ledger = await readDebtLedger()
   assert.deepEqual(ledger.debts.map((debt) => debt.id).sort(), [...DEBT_IDS].sort())
-  assert.deepEqual([...DEBT_IDS].sort(), [
-    "infrastructure_application_signal_contract",
-  ], "declared debt is exactly one entry, infrastructure_application_signal_contract, pending a separate PM/architecture decision")
+  assert.deepEqual([...DEBT_IDS].sort(), [],
+    "declared debt is empty: both recorded inversions are closed, and adding an entry requires a separate PM/architecture decision recorded before the change")
 
   // Contraction is governed the same way expansion is. A satisfied removal_gate is the only route
   // out of the ledger, and it requires this source-controlled literal to change too.
