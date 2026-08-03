@@ -128,6 +128,7 @@
   },
   "inboxRoute": {
     "status": 200,
+    "_note": "WU-02S: the GET is projection-only. The response body below is RETAINED unchanged as the characterization baseline; the former GET persistence expectations moved to refreshPersistence.",
     "body": {
       "workUnits": [
         {
@@ -216,16 +217,49 @@
         }
       ]
     },
-    "persistence": {
+    "getPersistence": { "rows": [], "usageCount": 0, "auditCount": 0 },
+    "refreshPersistence": {
       "rows": [
-        { "id": "wu:signal:calendar:deadline:1", "tenantId": "dev-tenant", "sourceSignalId": "signal:calendar:deadline:1", "status": "open" },
-        { "id": "wu:signal:github:issue:assigned:1", "tenantId": "dev-tenant", "sourceSignalId": "signal:github:issue:assigned:1", "status": "open" },
-        { "id": "wu:signal:github:issue:blocked:1", "tenantId": "dev-tenant", "sourceSignalId": "signal:github:issue:blocked:1", "status": "open" },
-        { "id": "wu:signal:github:pr:review:1", "tenantId": "dev-tenant", "sourceSignalId": "signal:github:pr:review:1", "status": "open" },
-        { "id": "wu:signal:slack:mention:1", "tenantId": "dev-tenant", "sourceSignalId": "signal:slack:mention:1", "status": "open" }
+        {
+          "id": "wu:signal:calendar:deadline:1",
+          "tenantId": "dev-tenant",
+          "sourceSignalId": "signal:calendar:deadline:1",
+          "status": "open"
+        },
+        {
+          "id": "wu:signal:github:issue:assigned:1",
+          "tenantId": "dev-tenant",
+          "sourceSignalId": "signal:github:issue:assigned:1",
+          "status": "open"
+        },
+        {
+          "id": "wu:signal:github:issue:blocked:1",
+          "tenantId": "dev-tenant",
+          "sourceSignalId": "signal:github:issue:blocked:1",
+          "status": "open"
+        },
+        {
+          "id": "wu:signal:github:pr:review:1",
+          "tenantId": "dev-tenant",
+          "sourceSignalId": "signal:github:pr:review:1",
+          "status": "open"
+        },
+        {
+          "id": "wu:signal:slack:mention:1",
+          "tenantId": "dev-tenant",
+          "sourceSignalId": "signal:slack:mention:1",
+          "status": "open"
+        }
       ],
       "usageCount": 1,
-      "audit": { "eventKind": "workunit.inbox.fetch", "reason": "mock", "metadata": { "source": "mock", "count": 5 } }
+      "audit": {
+        "eventKind": "workunit.inbox.fetch",
+        "reason": "mock",
+        "metadata": {
+          "source": "mock",
+          "count": 5
+        }
+      }
     }
   },
   "llm": {

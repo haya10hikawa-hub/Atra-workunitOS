@@ -1,6 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { GET as inboxGet } from "../app/api/workunit/inbox/route.ts"
+import { POST as inboxRefreshPost } from "../app/api/workunit/inbox/refresh/route.ts"
 import { POST as feedbackPost } from "../app/api/workunit/[id]/feedback/route.ts"
 import { GET as integrationsStatusGet } from "../app/api/integrations/status/route.ts"
 import { resolveRouteRepositories } from "../app/lib/persistence/routeRepositories.ts"
@@ -95,6 +96,14 @@ async function withJwtRoutePersistence(
   }
 }
 
+function refreshRequest(source = "mock", headers: Record<string, string> = {}): Request {
+  return new Request("http://localhost:3000/api/workunit/inbox/refresh", {
+    method: "POST",
+    headers: { Host: "localhost:3000", "Content-Type": "application/json", Origin: "http://localhost:3000", ...headers },
+    body: JSON.stringify({ source }),
+  })
+}
+
 function restoreEnv(values: Record<string, string | undefined>) {
   for (const [key, value] of Object.entries(values)) {
     if (value === undefined) delete process.env[key]
@@ -102,18 +111,25 @@ function restoreEnv(values: Record<string, string | undefined>) {
   }
 }
 
-test("inbox route persists generated WorkUnits, avoids duplicates, records usage, and appends audit", async () => {
+test("inbox GET projects without writing; POST refresh persists, dedupes, records usage, and appends audit", async () => {
   await withRoutePersistence(async (db) => {
-    const request = new Request("http://localhost/api/workunit/inbox?source=mock")
-
-    const firstResponse = await inboxGet(request)
-    assert.equal(firstResponse.status, 200)
-    const firstBody = await firstResponse.json()
-    assert.equal(firstBody.workUnits.length, 5)
-
     const repoResult = await resolveRouteRepositories(tenantId)
     assert.equal(repoResult.ok, true)
     if (!repoResult.ok) return
+
+    // WU-02S: the GET is projection-only. It returns the full projection and
+    // writes nothing — no rows, no usage, no audit (INV-SAFE-1).
+    const getResponse = await inboxGet(new Request("http://localhost:3000/api/workunit/inbox?source=mock"))
+    assert.equal(getResponse.status, 200)
+    assert.equal((await getResponse.json()).workUnits.length, 5)
+    assert.equal((await repoResult.bundle.workUnits.listRecent(repoResult.bundle.ctx, 20)).length, 0)
+    assert.equal(db.debugTable("usage_events").length, 0)
+    assert.equal(db.debugTable("audit_logs").length, 0)
+
+    // The refresh endpoint is the sole materialization path.
+    const first = await inboxRefreshPost(refreshRequest())
+    assert.equal(first.status, 200)
+    assert.deepEqual(Object.keys(await first.json()).sort(), ["ok", "refreshed", "requestId", "source"])
 
     const firstRows = await repoResult.bundle.workUnits.listRecent(repoResult.bundle.ctx, 20)
     assert.equal(firstRows.length, 5)
@@ -122,21 +138,17 @@ test("inbox route persists generated WorkUnits, avoids duplicates, records usage
     assert.equal(persistedGitHub?.status, "open")
     assert.ok(persistedGitHub?.sourceUrl)
 
-    const secondResponse = await inboxGet(request)
-    assert.equal(secondResponse.status, 200)
-    const secondBody = await secondResponse.json()
-    assert.equal(secondBody.workUnits.length, 5)
+    // Deterministic ids → a second refresh converges rather than duplicating.
+    assert.equal((await inboxRefreshPost(refreshRequest())).status, 200)
+    assert.equal((await repoResult.bundle.workUnits.listRecent(repoResult.bundle.ctx, 20)).length, 5)
 
-    const secondRows = await repoResult.bundle.workUnits.listRecent(repoResult.bundle.ctx, 20)
-    assert.equal(secondRows.length, 5)
-
+    // Telemetry is append-only: exactly one row per refresh, names preserved.
     const usageCount = await repoResult.bundle.usage.getCurrentUsage(repoResult.bundle.ctx, tenantId, "inbox_fetch")
     assert.equal(usageCount, 2)
 
     const auditRows = await repoResult.bundle.auditLogs.listRecent(repoResult.bundle.ctx, 10)
     const auditRow = auditRows.find((row) => row.eventKind === "workunit.inbox.fetch")
     assert.ok(auditRow)
-    assert.ok(auditRow?.metadata)
     assert.deepEqual(JSON.parse(auditRow?.metadata ?? "{}"), { source: "mock", count: 5 })
 
     const usageRows = db.debugTable("usage_events")
@@ -147,8 +159,7 @@ test("inbox route persists generated WorkUnits, avoids duplicates, records usage
     const otherTenantResult = await resolveRouteRepositories("other-tenant" as TenantId)
     assert.equal(otherTenantResult.ok, true)
     if (!otherTenantResult.ok) return
-    const otherTenantRows = await otherTenantResult.bundle.workUnits.listRecent(otherTenantResult.bundle.ctx, 20)
-    assert.equal(otherTenantRows.length, 0)
+    assert.equal((await otherTenantResult.bundle.workUnits.listRecent(otherTenantResult.bundle.ctx, 20)).length, 0)
   })
 })
 
@@ -176,9 +187,9 @@ test("feedback route records feedback usage, updates status for later, and appen
     })
 
     const response = await feedbackPost(
-      new Request("http://localhost/api/workunit/wu-feedback/feedback", {
+      new Request("http://localhost:3000/api/workunit/wu-feedback/feedback", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Origin: "http://localhost:3000" },
+        headers: { Host: "localhost:3000", "Content-Type": "application/json", Origin: "http://localhost:3000" },
         body: JSON.stringify({ feedback: "later" }),
       }),
       { params: Promise.resolve({ id: "wu-feedback" }) },
@@ -207,7 +218,7 @@ test("feedback route records feedback usage, updates status for later, and appen
   })
 })
 
-test("integration status route records usage and returns persisted provider state", async () => {
+test("integration status route performs no usage write and returns persisted provider state", async () => {
   await withRoutePersistence(async (db) => {
     const repoResult = await resolveRouteRepositories(tenantId)
     assert.equal(repoResult.ok, true)
@@ -231,21 +242,21 @@ test("integration status route records usage and returns persisted provider stat
     const githubStatus = body.providers.find((provider: { provider: string }) => provider.provider === "github")
     assert.equal(githubStatus.status, "connected")
 
+    // WU-02S / INV-SAFE-1: the pure read-metering usage write was deleted with
+    // no replacement. The response above is unchanged; only the invisible write
+    // disappeared.
     const usageCount = await repoResult.bundle.usage.getCurrentUsage(repoResult.bundle.ctx, tenantId, "integration_status_read")
-    assert.equal(usageCount, 1)
-
-    const usageRows = db.debugTable("usage_events")
-    const usageRow = usageRows.find((row) => row.event_type === "integration_status_read")
-    assert.ok(usageRow)
-    assert.deepEqual(JSON.parse(String(usageRow?.metadata_json ?? "{}")), { count: 3 })
-    assert.equal(JSON.stringify(usageRow).includes("token"), false)
-    assert.equal(JSON.stringify(usageRow).includes("secret"), false)
+    assert.equal(usageCount, 0)
+    assert.equal(db.debugTable("usage_events").filter((row) => row.event_type === "integration_status_read").length, 0)
   })
 })
 
-test("inbox route ignores client tenant override and persists only to session tenant", async () => {
+test("inbox refresh ignores a client tenant override and persists only to the session tenant", async () => {
   await withRoutePersistence(async () => {
-    const response = await inboxGet(new Request("http://localhost/api/workunit/inbox?source=mock&tenantId=other-tenant"))
+    // The GET query string can never cause a write at all…
+    assert.equal((await inboxGet(new Request("http://localhost:3000/api/workunit/inbox?source=mock&tenantId=other-tenant"))).status, 200)
+    // …and the refresh endpoint derives its tenant solely from the session.
+    const response = await inboxRefreshPost(refreshRequest())
     assert.equal(response.status, 200)
 
     const ownTenant = await resolveRouteRepositories(tenantId)
@@ -287,9 +298,9 @@ test("feedback route ignores client actor and tenant overrides", async () => {
     })
 
     const response = await feedbackPost(
-      new Request("http://localhost/api/workunit/wu-feedback-override/feedback", {
+      new Request("http://localhost:3000/api/workunit/wu-feedback-override/feedback", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Origin: "http://localhost:3000" },
+        headers: { Host: "localhost:3000", "Content-Type": "application/json", Origin: "http://localhost:3000" },
         body: JSON.stringify({
           feedback: "useful",
           actorUserId: "evil-user",
@@ -312,9 +323,9 @@ test("feedback route rejects viewer role even in explicit dev session", async ()
   await withRoutePersistence(async () => {
     process.env.DEV_SESSION_ROLE = "viewer"
     const response = await feedbackPost(
-      new Request("http://localhost/api/workunit/wu-viewer/feedback", {
+      new Request("http://localhost:3000/api/workunit/wu-viewer/feedback", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Origin: "http://localhost:3000" },
+        headers: { Host: "localhost:3000", "Content-Type": "application/json", Origin: "http://localhost:3000" },
         body: JSON.stringify({ feedback: "useful" }),
       }),
       { params: Promise.resolve({ id: "wu-viewer" }) },
@@ -333,7 +344,10 @@ test("integration status route allows viewer role in explicit dev session", asyn
 
 test("inbox route works with jwt auth and seeded membership", async () => {
   await withJwtRoutePersistence("viewer", async (_db, authHeader) => {
-    const response = await inboxGet(new Request("http://localhost/api/workunit/inbox?source=mock", { headers: { Authorization: authHeader } }))
+    // A viewer keeps read access to the projection. The GET writes nothing, so
+    // the tenant-isolation assertions below hold on an empty store — which is
+    // itself the INV-SAFE-1 guarantee for this path.
+    const response = await inboxGet(new Request("http://localhost:3000/api/workunit/inbox?source=mock", { headers: { Authorization: authHeader } }))
     assert.equal(response.status, 200)
     const body = await response.json()
     assert.equal(body.workUnits.length, 5)
@@ -344,7 +358,13 @@ test("inbox route works with jwt auth and seeded membership", async () => {
     const otherTenant = await resolveRouteRepositories("evil-tenant" as TenantId)
     assert.equal(otherTenant.ok, true)
     if (!otherTenant.ok) return
-    assert.equal((await ownTenant.bundle.workUnits.listRecent(ownTenant.bundle.ctx, 20)).length, 5)
+    // The forged `tenantId: "evil-tenant"` JWT claim is ignored: the session
+    // resolves to the seeded membership tenant, so the projection contains
+    // dev-tenant's five mock signals and not the claimed tenant's.
+    assert.equal(body.workUnits.every((unit: { tenantId: string }) => unit.tenantId === tenantId), true)
+    // And post-WU-02S the GET writes nothing, so BOTH stores stay empty — which
+    // is strictly stronger than the previous "own tenant has 5 rows" assertion.
+    assert.equal((await ownTenant.bundle.workUnits.listRecent(ownTenant.bundle.ctx, 20)).length, 0)
     assert.equal((await otherTenant.bundle.workUnits.listRecent(otherTenant.bundle.ctx, 20)).length, 0)
   })
 })
@@ -359,8 +379,8 @@ test("feedback route works with jwt auth and sufficient role, but viewer is reje
       id: "wu-jwt-feedback", tenantId, sourceSignalId: "signal:jwt-feedback", title: "JWT Feedback", kind: "deadline", priority: "medium",
       sourceProvider: "calendar", reason: "Needs follow-up", evidence: "Quarterly review due", nextAction: "Reply later", status: "open", createdAt: now, updatedAt: now,
     })
-    const response = await feedbackPost(new Request("http://localhost/api/workunit/wu-jwt-feedback/feedback", {
-      method: "POST", headers: { "Content-Type": "application/json", Origin: "http://localhost:3000", Authorization: authHeader }, body: JSON.stringify({ feedback: "useful", actorUserId: "evil-user", tenantId: "evil-tenant" }),
+    const response = await feedbackPost(new Request("http://localhost:3000/api/workunit/wu-jwt-feedback/feedback", {
+      method: "POST", headers: { Host: "localhost:3000", "Content-Type": "application/json", Origin: "http://localhost:3000", Authorization: authHeader }, body: JSON.stringify({ feedback: "useful", actorUserId: "evil-user", tenantId: "evil-tenant" }),
     }), { params: Promise.resolve({ id: "wu-jwt-feedback" }) })
     assert.equal(response.status, 200)
     const feedbackRows = await repoResult.bundle.workUnitFeedback.findByWorkUnitId(repoResult.bundle.ctx, "wu-jwt-feedback")
@@ -368,8 +388,8 @@ test("feedback route works with jwt auth and sufficient role, but viewer is reje
     assert.equal(feedbackRows[0]?.tenantId, tenantId)
   })
   await withJwtRoutePersistence("viewer", async (_db, authHeader) => {
-    const response = await feedbackPost(new Request("http://localhost/api/workunit/wu-jwt-feedback-viewer/feedback", {
-      method: "POST", headers: { "Content-Type": "application/json", Origin: "http://localhost:3000", Authorization: authHeader }, body: JSON.stringify({ feedback: "useful" }),
+    const response = await feedbackPost(new Request("http://localhost:3000/api/workunit/wu-jwt-feedback-viewer/feedback", {
+      method: "POST", headers: { Host: "localhost:3000", "Content-Type": "application/json", Origin: "http://localhost:3000", Authorization: authHeader }, body: JSON.stringify({ feedback: "useful" }),
     }), { params: Promise.resolve({ id: "wu-jwt-feedback-viewer" }) })
     assert.equal(response.status, 403)
   })
@@ -398,7 +418,7 @@ test("production-like mode rejects anonymous inbox access by default", async () 
   try {
     process.env.NODE_ENV = "production"
     delete process.env.ALLOW_DEV_SESSION
-    const response = await inboxGet(new Request("http://localhost/api/workunit/inbox?source=mock"))
+    const response = await inboxGet(new Request("http://localhost:3000/api/workunit/inbox?source=mock"))
     assert.equal(response.status, 401)
   } finally {
     process.env.NODE_ENV = envBackup.NODE_ENV
@@ -408,7 +428,7 @@ test("production-like mode rejects anonymous inbox access by default", async () 
 
 test("inbox route works with AUTH_ADAPTER=jwt and seeded membership", async () => {
   await withJwtRoutePersistence("viewer", async (_db, authHeader) => {
-    const response = await inboxGet(new Request("http://localhost/api/workunit/inbox?source=mock", {
+    const response = await inboxGet(new Request("http://localhost:3000/api/workunit/inbox?source=mock", {
       headers: { Authorization: authHeader },
     }))
     assert.equal(response.status, 200)
@@ -438,18 +458,18 @@ test("feedback route works with jwt identity and editor role, but viewer cannot 
       createdAt: now,
       updatedAt: now,
     })
-    const response = await feedbackPost(new Request("http://localhost/api/workunit/wu-jwt-feedback/feedback", {
+    const response = await feedbackPost(new Request("http://localhost:3000/api/workunit/wu-jwt-feedback/feedback", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Origin: "http://localhost:3000", Authorization: authHeader },
+      headers: { Host: "localhost:3000", "Content-Type": "application/json", Origin: "http://localhost:3000", Authorization: authHeader },
       body: JSON.stringify({ feedback: "useful" }),
     }), { params: Promise.resolve({ id: "wu-jwt-feedback" }) })
     assert.equal(response.status, 200)
   })
 
   await withJwtRoutePersistence("viewer", async (_db, authHeader) => {
-    const response = await feedbackPost(new Request("http://localhost/api/workunit/wu-jwt-viewer/feedback", {
+    const response = await feedbackPost(new Request("http://localhost:3000/api/workunit/wu-jwt-viewer/feedback", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Origin: "http://localhost:3000", Authorization: authHeader },
+      headers: { Host: "localhost:3000", "Content-Type": "application/json", Origin: "http://localhost:3000", Authorization: authHeader },
       body: JSON.stringify({ feedback: "useful" }),
     }), { params: Promise.resolve({ id: "wu-jwt-viewer" }) })
     assert.equal(response.status, 403)

@@ -52,6 +52,17 @@ export type SecurityRuntimeConfig = {
   readonly allowDevWorkspaceBootstrap: boolean
   readonly allowControlLessDevSession: boolean
   readonly devSessionRole?: string
+  /**
+   * Validated, deduplicated, frozen absolute origins. The ONLY CSRF /
+   * mutation-guard trusted-origin authority: `csrfProtection.ts` and
+   * `httpMutationGuard.ts` read no environment themselves and receive this
+   * projection explicitly. Under `source: "cloudflare"` an absent, empty,
+   * whitespace-only or malformed value fails closed (`malformed_trusted_origins`
+   * → the route's existing value-free 503 `integration_missing`). Under
+   * `source: "local"` an absent value defaults to `http://localhost:3000`;
+   * malformed entries still fail closed.
+   */
+  readonly trustedOrigins: readonly string[]
 }
 
 export type LlmRuntimeConfig = {
@@ -78,6 +89,7 @@ export type RequestRuntimeConfigError =
   | "dev_flag_forbidden"
   | "dev_adapter_forbidden"
   | "forbidden_capability"
+  | "malformed_trusted_origins"
 
 // ─── Forbidden production capabilities ───────────────────────────
 //
@@ -137,6 +149,54 @@ function boundedString(value: unknown, max: number): { ok: true; value?: string 
   return { ok: true, value }
 }
 
+const LOCAL_DEFAULT_TRUSTED_ORIGIN = "http://localhost:3000"
+const MAX_TRUSTED_ORIGINS_LENGTH = 2048
+
+/**
+ * Parse and validate the comma-separated trusted-origin list.
+ *
+ * Every surviving entry must parse with `new URL(entry)` AND equal its own
+ * `new URL(entry).origin`, so `https://x/path`, `https://x/`, bare hosts and
+ * wildcards are all rejected. The result is deduplicated and frozen.
+ *
+ * `requireConfigured` is true for Cloudflare production: absent, empty or
+ * whitespace-only input fails closed. Locally an absent value defaults to
+ * `http://localhost:3000`, but a malformed value still fails closed.
+ */
+function parseTrustedOrigins(
+  raw: unknown,
+  requireConfigured: boolean,
+): { ok: true; value: readonly string[] } | { ok: false } {
+  if (raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "")) {
+    if (requireConfigured) return { ok: false }
+    return { ok: true, value: Object.freeze([LOCAL_DEFAULT_TRUSTED_ORIGIN]) }
+  }
+  if (typeof raw !== "string" || raw.length > MAX_TRUSTED_ORIGINS_LENGTH) return { ok: false }
+
+  const entries = raw.split(",").map((item) => item.trim()).filter((item) => item.length > 0)
+  if (entries.length === 0) return { ok: false }
+
+  const validated: string[] = []
+  for (const entry of entries) {
+    // A wildcard is rejected explicitly: `new URL("https://*.example.com")`
+    // parses and its `.origin` round-trips, so the equality check below would
+    // otherwise ACCEPT a wildcard allowlist. Whitespace is rejected for the
+    // same reason — it can survive parsing in some forms.
+    if (/[*\s]/.test(entry)) return { ok: false }
+    let parsed: URL
+    try {
+      parsed = new URL(entry)
+    } catch {
+      return { ok: false }
+    }
+    // No suffix/prefix form, no path, no trailing slash, no userinfo, no
+    // opaque origin — the entry must be exactly its own serialized origin.
+    if (parsed.origin === "null" || parsed.origin !== entry) return { ok: false }
+    if (!validated.includes(entry)) validated.push(entry)
+  }
+  return { ok: true, value: Object.freeze(validated) }
+}
+
 // ─── Cloudflare (authoritative production) projection ───────────
 
 function resolveCloudflareConfig(raw: AppEnv): RequestRuntimeConfigResult {
@@ -186,6 +246,13 @@ function resolveCloudflareConfig(raw: AppEnv): RequestRuntimeConfigResult {
   const apiKey = boundedString(raw.DEEPSEEK_API_KEY, MAX_SECRET_LENGTH)
   if (!provider.ok || !apiKey.ok) return { ok: false, error: "malformed_var" }
 
+  // Trusted origins — REQUIRED in Cloudflare production. A guard whose
+  // allowlist cannot be configured in production is not a guard, so an absent,
+  // empty, whitespace-only or malformed value fails closed here rather than
+  // silently defaulting to a localhost allowlist.
+  const trustedOrigins = parseTrustedOrigins(raw.ALLOWED_ORIGINS, true)
+  if (!trustedOrigins.ok) return { ok: false, error: "malformed_trusted_origins" }
+
   const runtime: ValidatedRequestRuntimeConfig = {
     source: "cloudflare",
     persistence: Object.freeze({
@@ -202,6 +269,7 @@ function resolveCloudflareConfig(raw: AppEnv): RequestRuntimeConfigResult {
       allowDevSession: false,
       allowDevWorkspaceBootstrap: false,
       allowControlLessDevSession: false,
+      trustedOrigins: trustedOrigins.value,
     }),
     llm: Object.freeze({
       provider: provider.value,
@@ -255,11 +323,17 @@ function resolveLocalConfig(
     }
   }
 
+  // Trusted origins — local development may default to http://localhost:3000
+  // when unset, but an explicitly supplied malformed value still fails closed.
+  const trustedOrigins = parseTrustedOrigins(injectedD1?.ALLOWED_ORIGINS ?? processEnv.ALLOWED_ORIGINS, false)
+  if (!trustedOrigins.ok) return { ok: false, error: "malformed_trusted_origins" }
+
   const runtime: ValidatedRequestRuntimeConfig = {
     source: "local",
     persistence,
     auth: Object.freeze({ adapter, isProduction, jwt }),
     security: Object.freeze({
+      trustedOrigins: trustedOrigins.value,
       externalActionsEnabled: processEnv.EXTERNAL_ACTIONS_ENABLED === "true",
       allowLegacyIngestFallback: processEnv.ALLOW_LEGACY_INGEST_FALLBACK === "true",
       allowDevSession: !isProduction && processEnv.ALLOW_DEV_SESSION === "true",

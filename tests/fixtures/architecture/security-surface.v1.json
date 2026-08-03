@@ -4,43 +4,34 @@
   "safeHandlers": [
     {
       "key": "app/api/audit/recent/route.ts#GET",
-      "handlerHash": "62ea97e6e05a05a6d511679d0f63410b63ebbde7d9066bbf93ea39dc8168a1bd",
-      "routeHash": "3737fd28cf21ca86af18e47663d5c3a7e546505426207f7a8364a950c3e492d2"
+      "handlerHash": "60f8f4f0cea922a1cae83a41b2cce61012660c2fb3747ad1f18323f7d00207d9",
+      "routeHash": "f656cd8857c7c08e1743c18003c5823127a1aaa2b2fee677fe60f10319dff6b1"
     },
     {
       "key": "app/api/integrations/status/route.ts#GET",
-      "handlerHash": "c88df57a5f790d29d2199f152babb0c1a6c7d3c8359844d3046a74e04021e765",
-      "routeHash": "99c0aefe0f7650a4e3f1a0b7cca774bc795533b39931574c50cd498939ded656"
+      "handlerHash": "c4cd863f62f3df71c455b088d85f402aed1de1b25daf611b9635019ac728a3a1",
+      "routeHash": "aea597a4d8e09e2b970ae26511d2fd65cc65b21685f435cd96b6fc07162c754a"
     },
     {
       "key": "app/api/workunit/[id]/approval/route.ts#GET",
-      "handlerHash": "37fd806df7128af292634173e9a2d449dc7fe8f168bc95fdb58ca6856fb8aaf4",
-      "routeHash": "4b8ece954371d1a552de9e073c30d3c4244136ad5056ad873c3f5ab30e3c5278"
+      "handlerHash": "8ee65fada6675e75913adaac23aed6f4c96e8fcb5f802a420ce87eb933cb9003",
+      "routeHash": "e390072e6c1faa6fc6ce2e6e778bdaaa8eda309d786d297a1412ef6f1fa0fff6"
     },
     {
       "key": "app/api/workunit/[id]/approval/status/route.ts#GET",
-      "handlerHash": "ee7748c4d46507b169bc1ff9ce2cc41e0e862b9e932ecbe5ceaa83dd8cd89de9",
-      "routeHash": "42e8e16d8e2e7e3304d42681b8920588afd4d4388f051e7f2b2a0fad828549ec"
+      "handlerHash": "c3d138873c7237fbb9392e0979c8c37b12fdf48115773ed35ae3fc6e918c6c66",
+      "routeHash": "0cfe8d3833dfda6c1227631c43eb54883f4d6ec92927f6e85b4668a9e67e0f64"
     },
     {
       "key": "app/api/workunit/inbox/route.ts#GET",
-      "handlerHash": "937f9eebfbfc0180929c2c43808bfc54966c09f7825ef2f438be53fd6bab6ae7",
-      "routeHash": "9bb656782b8a15722b3fc4e6c80406da7473af8f8cbabb633be76133f5bdea77"
+      "handlerHash": "21cf5dbdafe002f70450c37ddaf159e6fc0f1b1f9e1a4150845de72788f487d8",
+      "routeHash": "d005522fc7986c1b33ccacae8bef3f60e543e2cc34160cd61f97cbb45e01f438"
     },
     {
       "key": "app/api/workunit/tools/route.ts#GET",
       "handlerHash": "48b66dba3d79dd03d62a6f69775e747f3e2c3ba77039a334420226596fb9b766",
-      "routeHash": "dfb3063298e69b88faa4e6bd11a3a06f968ee3131743296726890ca14ebb81b8"
+      "routeHash": "10facbe66f216c7127a18fdb8e89d5f454dc85032309e9755b682347f1a910dd"
     }
   ],
-  "reviewedStateChangingSafeHandlers": [
-    {
-      "key": "app/api/integrations/status/route.ts#GET",
-      "evidenceCalls": ["recordEvent"]
-    },
-    {
-      "key": "app/api/workunit/inbox/route.ts#GET",
-      "evidenceCalls": ["append", "persistWorkUnits", "recordEvent"]
-    }
-  ]
+  "reviewedStateChangingSafeHandlers": []
 }

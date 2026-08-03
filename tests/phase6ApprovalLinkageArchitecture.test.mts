@@ -131,18 +131,32 @@ test("the live Approval / ActionPreview routes are byte-identical to the P6-FIX-
   // adds the exact-binding `claimApprovalForRuntime` method and harmonizes
   // `verifyApproval` expiry to inclusive-fail. Its pin stays at that content.
   //
-  // The two live routes are advanced by Issue #129 (P0-RUNTIME-013, round 3): each
-  // now resolves the request-scoped runtime config ONCE and threads that single
-  // frozen object into `requireSession(request, runtime)` and
-  // `resolveRouteRepositories(tenantId, runtime)` — a security fix (one snapshot
-  // per request; no double resolution). The approval decision logic, hashing,
-  // four-eyes, and RBAC are otherwise unchanged. The pins are updated to the new
-  // content; a further accidental/unauthorized edit still fails.
+  // The two live routes were advanced by Issue #129 (P0-RUNTIME-013, round 3):
+  // each resolves the request-scoped runtime config ONCE and threads that
+  // single frozen object into `requireSession(request, runtime)` and
+  // `resolveRouteRepositories(tenantId, runtime)`.
+  //
+  // WU-02S advances them again, and ONLY these two digests move:
+  //   - the inline `validateCsrfOrigin` call is replaced by
+  //     `checkMutationRequestIntegrity`, which additionally binds the target
+  //     Host, the body-size precheck and the Content-Type;
+  //   - runtime-config resolution is hoisted to the FIRST statement, because the
+  //     guard's trusted-origin policy is a projection of it;
+  //   - `checkRateLimit` moves below tenant authority, and the route RBAC check
+  //     moves ABOVE the body read.
+  // The approval decision logic, hashing, four-eyes and RBAC predicates are
+  // otherwise unchanged. `approvalStore.ts` is NOT touched and its pin is
+  // deliberately left at the P6-FIX-012 content.
+  //
+  // A digest says "these bytes". The five-route semantic ordering assertion in
+  // `securityRefactorCriteriaRatchet.test.mts` says "these bytes still enforce
+  // this order" — that test is what makes re-pinning here safe. A further
+  // accidental or unauthorized edit still fails.
   const PINNED_BASELINE_DIGESTS: Readonly<Record<string, string>> = {
     "app/api/workunit/[id]/approval/route.ts":
-      "4b8ece954371d1a552de9e073c30d3c4244136ad5056ad873c3f5ab30e3c5278",
+      "e390072e6c1faa6fc6ce2e6e778bdaaa8eda309d786d297a1412ef6f1fa0fff6",
     "app/api/workunit/[id]/action-preview/route.ts":
-      "ca5544297bc453133751efa79285749feb3898df4e7767564a61bd25d0ce86be",
+      "f626cb8cfdfa3be3edd9a8550c63673d9a8f9aca3c635bca2b719783a31216b1",
     "app/lib/security/approvalStore.ts":
       "fe95e65db109e10f60236a9ebe2870c29b7dcdd8ed837e3b9397aa9937d0c04c",
   }

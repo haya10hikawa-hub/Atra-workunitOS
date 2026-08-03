@@ -47,17 +47,17 @@ async function withPersistence(fn: (db: FakeD1Database) => Promise<void>) {
 }
 
 function previewRequest(body: unknown): Request {
-  return new Request(`http://localhost/api/workunit/${workUnitId}/action-preview`, {
+  return new Request(`http://localhost:3000/api/workunit/${workUnitId}/action-preview`, {
     method: "POST",
-    headers: { "content-type": "application/json", origin: "http://localhost:3000" },
+    headers: { Host: "localhost:3000", "content-type": "application/json", Origin: "http://localhost:3000" },
     body: JSON.stringify(body),
   })
 }
 
 function approvalRequest(body: unknown): Request {
-  return new Request(`http://localhost/api/workunit/${workUnitId}/approval`, {
+  return new Request(`http://localhost:3000/api/workunit/${workUnitId}/approval`, {
     method: "POST",
-    headers: { "content-type": "application/json", origin: "http://localhost:3000" },
+    headers: { Host: "localhost:3000", "content-type": "application/json", Origin: "http://localhost:3000" },
     body: JSON.stringify(body),
   })
 }

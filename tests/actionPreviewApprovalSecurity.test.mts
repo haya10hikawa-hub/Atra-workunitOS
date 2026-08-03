@@ -33,7 +33,7 @@ async function withPersistence(fn: (db: FakeD1Database) => Promise<void>) {
 function request(path: string, body: unknown): Request {
   return new Request(`http://localhost${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json", origin: "http://localhost:3000" },
+    headers: { Host: "localhost:3000", "content-type": "application/json", Origin: "http://localhost:3000" },
     body: JSON.stringify(body),
   })
 }
@@ -117,7 +117,7 @@ test("approval is single-decision, rejects expired previews, and GET omits inter
     assert.equal((await decideApproval(approvalRequest(), { params: Promise.resolve({ id: workUnitId }) })).status, 201)
     assert.equal((await decideApproval(approvalRequest(), { params: Promise.resolve({ id: workUnitId }) })).status, 409)
 
-    const listResponse = await listPreviews(new Request(`http://localhost/api/workunit/${workUnitId}/approval`), { params: Promise.resolve({ id: workUnitId }) })
+    const listResponse = await listPreviews(new Request(`http://localhost:3000/api/workunit/${workUnitId}/approval`), { params: Promise.resolve({ id: workUnitId }) })
     assert.equal(listResponse.status, 200)
     const serialized = JSON.stringify(await listResponse.json())
     for (const forbidden of ["targetHash", "payloadHash", "tenantId"]) assert.equal(serialized.includes(forbidden), false)

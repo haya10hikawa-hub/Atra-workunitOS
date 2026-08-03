@@ -31,6 +31,9 @@ const LOCKED_SECURITY: SecurityRuntimeConfig = Object.freeze({
   allowDevSession: false,
   allowDevWorkspaceBootstrap: false,
   allowControlLessDevSession: false,
+  // No origin is trusted when no validated config is available — the
+  // fail-closed value for the mutation guard's trusted-origin authority.
+  trustedOrigins: Object.freeze([]),
 })
 
 /**

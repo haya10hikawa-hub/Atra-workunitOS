@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server.js"
 import { getSessionErrorStatus, requireSession } from "../../../lib/security/session.ts"
 import { safeError } from "../../../lib/security/safeErrors.ts"
-import { resolveRouteRepositories } from "../../../lib/persistence/routeRepositories.ts"
+import { resolveRouteReadRepositories } from "../../../lib/persistence/routeRepositories.ts"
 import type { TenantId } from "../../../lib/tenant/types.ts"
 import { canViewAudit } from "../../../lib/security/tenantAccess.ts"
 import { resolveValidatedRequestRuntimeConfig } from "../../../lib/runtime/requestRuntimeConfig.ts"
@@ -25,7 +25,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   const limit = parseLimit(new URL(request.url).searchParams.get("limit"))
   if (limit === null) return NextResponse.json(safeError(requestId, "invalid_request"), { status: 400 })
 
-  const repoResult = await resolveRouteRepositories(sessionResult.session.tenantId as TenantId, runtime)
+  const repoResult = await resolveRouteReadRepositories(sessionResult.session.tenantId as TenantId, runtime)
   if (!repoResult.ok) {
     // Production (Cloudflare OR Node) NEVER returns an empty successful audit
     // response on a persistence failure. The empty fallback is authorized ONLY by

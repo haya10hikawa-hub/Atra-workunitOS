@@ -92,6 +92,9 @@ function seedControl(control: SqliteD1Database) {
 function cloudflareEnv(control: SqliteD1Database, tenant: SqliteD1Database): AppEnv {
   return {
     CONTROL_DB: control, TENANT_DB_DEFAULT: tenant, PERSISTENCE_MODE: "d1",
+    // WU-02S: a Cloudflare production runtime REQUIRES a validated
+    // trusted-origin list; its absence is a fail-closed config error.
+    ALLOWED_ORIGINS: "http://localhost:3000",
     EXTERNAL_ACTIONS_ENABLED: "false", ALLOW_LEGACY_INGEST_FALLBACK: "false",
     AUTH_ADAPTER: "jwt", JWT_AUTH_SECRET: TEST_JWT_SECRET, JWT_AUTH_ISSUER: ISS, JWT_AUTH_AUDIENCE: AUD,
   } as unknown as AppEnv
@@ -99,9 +102,11 @@ function cloudflareEnv(control: SqliteD1Database, tenant: SqliteD1Database): App
 
 async function bearer(subject: string, email: string, init?: RequestInit): Promise<Request> {
   const token = await signHs256Jwt({ sub: subject, email, iss: ISS, aud: AUD }, TEST_JWT_SECRET)
-  return new Request(`http://localhost/api/workunit/${WORK_UNIT_ID}/approval`, {
+  return new Request(`http://localhost:3000/api/workunit/${WORK_UNIT_ID}/approval`, {
     ...init,
-    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json", origin: "http://localhost:3000", ...(init?.headers ?? {}) },
+    // `host` is explicit: the mutation guard binds the target host and Node's
+    // Request does not populate it from the URL.
+    headers: { Authorization: `Bearer ${token}`, host: "localhost:3000", "content-type": "application/json", origin: "http://localhost:3000", ...(init?.headers ?? {}) },
   })
 }
 

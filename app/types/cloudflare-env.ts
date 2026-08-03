@@ -30,6 +30,12 @@ export interface CloudflareEnv {
   EXTERNAL_ACTIONS_ENABLED?: string
   ALLOW_LEGACY_INGEST_FALLBACK?: string
 
+  /**
+   * Comma-separated absolute origins (e.g. "https://app.example.com").
+   * Request-scoped; the ONLY CSRF/mutation-guard trusted-origin authority.
+   */
+  ALLOWED_ORIGINS?: string
+
   // Auth configuration (request-scoped; never read from ambient process.env in prod)
   AUTH_ADAPTER?: string
   JWT_AUTH_SECRET?: string

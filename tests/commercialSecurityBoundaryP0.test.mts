@@ -11,12 +11,26 @@ const MUTATING_ROUTES = [
   "app/api/workunit/[id]/feedback/route.ts",
   "app/api/workunit/[id]/action-preview/route.ts",
   "app/api/workunit/[id]/execution/dry-run/route.ts",
+  "app/api/workunit/inbox/refresh/route.ts",
 ]
 
-test("P0: every current mutating WorkUnit route enforces CSRF origin", async () => {
+test("P0: every current mutating WorkUnit route enforces request integrity", async () => {
+  // WU-02S: the Origin/Referer decision moved behind the header-only mutation
+  // guard, which owns method, target Host, Origin, Referer fallback, body-size
+  // precheck and Content-Type. The guard consumes csrfProtection.ts rather than
+  // duplicating it, so the authority is unchanged — only the call site moved.
   for (const path of MUTATING_ROUTES) {
     const source = await readFile(path, "utf8")
-    assert.ok(source.includes("validateCsrfOrigin(request)"), path)
+    assert.ok(source.includes("checkMutationRequestIntegrity(request, {"), path)
+    // The trusted-origin list must come from the request-scoped runtime config.
+    // Scoped to ORIGIN authority per DEV-G: this WorkUnit prohibits ambient-env
+    // origin authority in the guard and CSRF modules, and forbids a route from
+    // sourcing its own origins. It does not claim to remove every unrelated
+    // ambient-env reader from the application.
+    assert.ok(source.includes("trustedOrigins: runtime.security.trustedOrigins"), `${path}: request-scoped origins`)
+    for (const forbidden of ["ALLOWED_ORIGINS", "NEXT_PUBLIC_APP_URL"]) {
+      assert.equal(source.includes(forbidden), false, `${path}: must not source origins from ${forbidden}`)
+    }
   }
 })
 

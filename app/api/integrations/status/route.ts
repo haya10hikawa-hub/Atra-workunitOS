@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server.js"
 import { getSessionErrorStatus, requireSession } from "../../../lib/security/session.ts"
 import { safeError } from "../../../lib/security/safeErrors.ts"
-import { resolveRouteRepositories } from "../../../lib/persistence/routeRepositories.ts"
+import { resolveRouteReadRepositories } from "../../../lib/persistence/routeRepositories.ts"
 import type { TenantId } from "../../../lib/tenant/types.ts"
 import { canViewIntegrationStatus } from "../../../lib/security/tenantAccess.ts"
 import { resolveValidatedRequestRuntimeConfig } from "../../../lib/runtime/requestRuntimeConfig.ts"
@@ -10,7 +10,6 @@ import { canUseLocalPersistenceFallback } from "../../../lib/runtime/localFallba
 const ALL_PROVIDERS = ["github", "slack", "calendar"] as const
 
 export async function GET(request: Request): Promise<NextResponse> {
-  const requestId = `integration-status:${Date.now()}`
   const runtimeResult = resolveValidatedRequestRuntimeConfig()
   if (!runtimeResult.ok) {
     return NextResponse.json(safeError("status-na", "integration_missing" as Parameters<typeof safeError>[1]), { status: 503 })
@@ -27,7 +26,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.json(safeError("status-na", "forbidden" as Parameters<typeof safeError>[1]), { status: 403 })
   }
 
-  const repoResult = await resolveRouteRepositories(sessionResult.session.tenantId as TenantId, runtime)
+  const repoResult = await resolveRouteReadRepositories(sessionResult.session.tenantId as TenantId, runtime)
 
   // If repos available, read persisted connections
   if (repoResult.ok) {
@@ -36,15 +35,11 @@ export async function GET(request: Request): Promise<NextResponse> {
       const conn = connections.find((c) => c.provider === provider)
       return conn ? safeProviderStatus(conn) : defaultStatus(provider)
     })
-    await repoResult.bundle.usage.recordEvent(repoResult.bundle.ctx, {
-      id: `usage:${requestId}`,
-      tenantId: repoResult.bundle.ctx.tenantId,
-      eventType: "integration_status_read",
-      quantity: 1,
-      resourceType: "integration_status",
-      metadataJson: JSON.stringify({ count: providers.length }),
-      createdAt: new Date().toISOString(),
-    }).catch(() => {})
+    // INV-SAFE-1: the pure read-metering `usage.recordEvent` that stood here was
+    // deleted outright with no replacement. The response above is built entirely
+    // before it and its result was discarded, so nothing observable changes; and
+    // nothing downstream consumes it (`getCurrentUsage` / `getDailySummary` have
+    // zero non-test callers). `usage` is now absent from the resolved bundle type.
     return NextResponse.json({ providers })
   }
 

@@ -15,8 +15,10 @@ import type { TenantId } from "../tenant/types.ts"
 import {
   resolveProductionRepositories,
   resolveLocalRepositories,
+  toReadOnlyBundle,
   type RepositoryResolutionResult,
   type TenantRepositoryBundle,
+  type TenantReadRepositoryBundle,
 } from "./repositoryResolver.ts"
 import { D1TenantDbResolver } from "./tenantDbResolver.ts"
 import type { SafeErrorCode } from "../security/safeErrors.ts"
@@ -29,6 +31,10 @@ import {
 
 export type RouteRepositoryResult =
   | { ok: true; bundle: TenantRepositoryBundle }
+  | { ok: false; error: SafeErrorCode; status: number }
+
+export type RouteReadRepositoryResult =
+  | { ok: true; bundle: TenantReadRepositoryBundle }
   | { ok: false; error: SafeErrorCode; status: number }
 
 // ─── Resolution ─────────────────────────────────────────────────
@@ -84,4 +90,24 @@ export async function resolveRouteRepositories(
   }
 
   return { ok: true, bundle: result.bundle }
+}
+
+/**
+ * The ONLY repository resolver a safe-method (GET/HEAD/OPTIONS) handler may
+ * call (INV-SAFE-1).
+ *
+ * Delegates to `resolveRouteRepositories` — the same validated authority path,
+ * so tenant-registry validation, the `tenant_forbidden → 403` mapping and the
+ * `integration_missing → 503` mapping are shared rather than duplicated — then
+ * narrows the result. The handler only ever holds `TenantReadRepositoryBundle`,
+ * from which every write member is absent at the TYPE level and from which
+ * `usage` is absent entirely. Observable behaviour is identical.
+ */
+export async function resolveRouteReadRepositories(
+  tenantId: TenantId,
+  runtime?: ValidatedRequestRuntimeConfig,
+): Promise<RouteReadRepositoryResult> {
+  const result = await resolveRouteRepositories(tenantId, runtime)
+  if (!result.ok) return result
+  return { ok: true, bundle: toReadOnlyBundle(result.bundle) }
 }

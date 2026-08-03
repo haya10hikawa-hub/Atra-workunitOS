@@ -10,6 +10,7 @@ import { createExternalSignal } from "../app/lib/domain/types.ts"
 import { createMockLlmProvider, STANDARD_MOCK_RESPONSES } from "../app/lib/llm/mockProvider.ts"
 import { processWorkSignal } from "../app/lib/llm/processWorkSignal.ts"
 import { GET as inboxGet } from "../app/api/workunit/inbox/route.ts"
+import { POST as inboxRefreshPost } from "../app/api/workunit/inbox/refresh/route.ts"
 import { POST as toolsPost } from "../app/api/workunit/tools/route.ts"
 import { resolveRouteRepositories } from "../app/lib/persistence/routeRepositories.ts"
 import { setTestRuntimeEnvForRequest, resetTestRuntimeEnvForRequest } from "../app/lib/runtime/requestRuntimeEnvInjection.ts"
@@ -100,13 +101,37 @@ test("default page to launcher composition source matches the reviewed snapshot"
   assert.deepEqual(hashes, contract.launcherCompositionSourceHashes)
 })
 
-test("actual Inbox GET dev-auth runtime and D1 wiring matches the exact contract", async () => {
+test("actual Inbox GET is projection-only and POST refresh owns persistence, per the exact contract", async () => {
   await withDevRouteRuntime(false, async () => {
+    // ── GET: byte-identical response, ZERO durable writes ──
     const response = await inboxGet(new Request("http://localhost:3000/api/workunit/inbox?source=mock"))
     const body = await response.json()
     const repos = await resolveRouteRepositories("dev-tenant" as TenantId)
     assert.equal(repos.ok, true)
     if (!repos.ok) return
+
+    const readRows = (await repos.bundle.workUnits.listRecent(repos.bundle.ctx, 20))
+    const getUsage = await repos.bundle.usage.getCurrentUsage(repos.bundle.ctx, "dev-tenant", "inbox_fetch")
+    const getAudit = (await repos.bundle.auditLogs.listRecent(repos.bundle.ctx, 20))
+      .filter((row) => row.eventKind === "workunit.inbox.fetch")
+    assert.deepEqual({
+      status: response.status,
+      body,
+      getPersistence: { rows: readRows, usageCount: getUsage, auditCount: getAudit.length },
+    }, {
+      status: contract.inboxRoute.status,
+      body: contract.inboxRoute.body,
+      getPersistence: contract.inboxRoute.getPersistence,
+    })
+
+    // ── POST refresh: the persistence expectations formerly pinned on the GET ──
+    const refresh = await inboxRefreshPost(new Request("http://localhost:3000/api/workunit/inbox/refresh", {
+      method: "POST",
+      headers: { Host: "localhost:3000", "content-type": "application/json", origin: "http://localhost:3000" },
+      body: JSON.stringify({ source: "mock" }),
+    }))
+    assert.equal(refresh.status, 200)
+
     const rows = (await repos.bundle.workUnits.listRecent(repos.bundle.ctx, 20))
       .map((row) => ({ id: row.id, tenantId: row.tenantId, sourceSignalId: row.sourceSignalId, status: row.status }))
       .sort((a, b) => a.id.localeCompare(b.id))
@@ -115,13 +140,9 @@ test("actual Inbox GET dev-auth runtime and D1 wiring matches the exact contract
       .find((row) => row.eventKind === "workunit.inbox.fetch")
     assert.ok(audit)
     assert.deepEqual({
-      status: response.status,
-      body,
-      persistence: {
-        rows, usageCount,
-        audit: { eventKind: audit.eventKind, reason: audit.reason, metadata: JSON.parse(audit.metadata ?? "{}") },
-      },
-    }, contract.inboxRoute)
+      rows, usageCount,
+      audit: { eventKind: audit.eventKind, reason: audit.reason, metadata: JSON.parse(audit.metadata ?? "{}") },
+    }, contract.inboxRoute.refreshPersistence)
   })
 })
 
@@ -148,7 +169,7 @@ test("actual Tools POST dev-auth mock-provider response mapping matches the exac
   await withDevRouteRuntime(true, async () => {
     const response = await toolsPost(new Request("http://localhost:3000/api/workunit/tools", {
       method: "POST",
-      headers: { "content-type": "application/json", origin: "http://localhost:3000", "x-request-id": "ratchet-tools-ingest" },
+      headers: { Host: "localhost:3000", "content-type": "application/json", origin: "http://localhost:3000", "x-request-id": "ratchet-tools-ingest" },
       body: JSON.stringify({
         id: "tools-ingest-1", source: "slack", operation: "ingest",
         event: { id: "event-llm-11", source: "slack", timestamp: "2026-01-04T00:00:00.000Z", text: "Prepare security review" },
