@@ -21,7 +21,7 @@ import { toSafeAuditMetadata, recordAuditEvent } from "../app/lib/security/audit
 import { createInMemoryAuditLogRepository } from "../app/lib/persistence/inMemoryRepositories.ts"
 import { SAFE_ERROR_CODES } from "../app/lib/security/safeErrors.ts"
 import type { AppEnv } from "../app/types/cloudflare-env.ts"
-import type { TenantId } from "../app/lib/tenant/types.ts"
+import type { TenantId, UserId } from "../app/lib/tenant/types.ts"
 import type { TenantDbContext } from "../app/lib/persistence/types.ts"
 
 const tenantId = "dev-tenant" as TenantId
@@ -31,7 +31,7 @@ async function withPersistence(fn: (db: FakeD1Database) => Promise<void>) {
   const db = new FakeD1Database()
   const backup = { ...process.env }
   try {
-    process.env.NODE_ENV = "development"
+    Object.assign(process.env, { NODE_ENV: "development" })
     process.env.AUTH_ADAPTER = "dev"
     process.env.ALLOW_DEV_SESSION = "true"
     process.env.ALLOW_DEV_WORKSPACE_BOOTSTRAP = "true"
@@ -160,7 +160,7 @@ test("6. double-submit on a decided preview is safe (409 conflict)", async () =>
 test("7. in-memory action-preview creator round-trips + tenant-scoped", async () => {
   const backup = { ...process.env }
   try {
-    process.env.NODE_ENV = "development"
+    Object.assign(process.env, { NODE_ENV: "development" })
     process.env.ALLOW_IN_MEMORY_PERSISTENCE = "true"
     delete process.env.PERSISTENCE_MODE
     const { resolveRepositories } = await import("../app/lib/persistence/repositoryResolver.ts")
@@ -176,7 +176,7 @@ test("7. in-memory action-preview creator round-trips + tenant-scoped", async ()
       id: "p:mem", tenantId: "tenant-a" as TenantId, workUnitId: "wu", actionType: "internal_task",
       targetPreview: "{}", payloadPreview: "{}", requiresApproval: 1, status: "preview",
       targetHash: "t", payloadHash: "p", createdAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 60_000).toISOString(), creatorUserId: "creator-1" as TenantId,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(), creatorUserId: "creator-1" as UserId,
     } as Parameters<typeof a.bundle.actionPreviews.create>[1])
     const own = await a.bundle.actionPreviews.findById(a.bundle.ctx, "p:mem")
     assert.equal(own?.creatorUserId, "creator-1")
@@ -205,7 +205,7 @@ test("8. D1 action-preview creator round-trips (FakeD1)", async () => {
       id: "p:d1", tenantId, workUnitId, actionType: "internal_task",
       targetPreview: "{}", payloadPreview: "{}", requiresApproval: 1, status: "preview",
       targetHash: "t", payloadHash: "p", createdAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 60_000).toISOString(), creatorUserId: "d1-creator" as TenantId,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(), creatorUserId: "d1-creator" as UserId,
     } as Parameters<typeof b.actionPreviews.create>[1])
     const stored = await b.actionPreviews.findById(b.ctx, "p:d1")
     assert.equal(stored?.creatorUserId, "d1-creator")

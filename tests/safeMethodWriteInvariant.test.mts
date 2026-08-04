@@ -441,4 +441,3 @@ function compileProbe(source: string): string[] {
     .filter((d) => d.file?.fileName === probePath)
     .map((d) => ts.flattenDiagnosticMessageText(d.messageText, " "))
 }
-

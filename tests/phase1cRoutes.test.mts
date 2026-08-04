@@ -29,7 +29,7 @@ async function withRoutePersistence(testFn: (db: FakeD1Database) => Promise<void
   }
 
   try {
-    process.env.NODE_ENV = "development"
+    Object.assign(process.env, { NODE_ENV: "development" })
     process.env.AUTH_ADAPTER = "dev"
     process.env.ALLOW_DEV_SESSION = "true"
     process.env.ALLOW_DEV_WORKSPACE_BOOTSTRAP = "true"
@@ -65,7 +65,7 @@ async function withJwtRoutePersistence(
   }
 
   try {
-    process.env.NODE_ENV = "production"
+    Object.assign(process.env, { NODE_ENV: "production" })
     process.env.AUTH_ADAPTER = "jwt"
     process.env.JWT_AUTH_SECRET = JWT_SECRET
     process.env.JWT_AUTH_ISSUER = JWT_ISSUER
@@ -416,12 +416,12 @@ test("production-like mode rejects anonymous inbox access by default", async () 
   }
 
   try {
-    process.env.NODE_ENV = "production"
+    Object.assign(process.env, { NODE_ENV: "production" })
     delete process.env.ALLOW_DEV_SESSION
     const response = await inboxGet(new Request("http://localhost:3000/api/workunit/inbox?source=mock"))
     assert.equal(response.status, 401)
   } finally {
-    process.env.NODE_ENV = envBackup.NODE_ENV
+    Object.assign(process.env, { NODE_ENV: envBackup.NODE_ENV })
     process.env.ALLOW_DEV_SESSION = envBackup.ALLOW_DEV_SESSION
   }
 })

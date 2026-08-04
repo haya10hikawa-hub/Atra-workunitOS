@@ -15,7 +15,7 @@ async function withPersistence(fn: (db: FakeD1Database) => Promise<void>) {
   const db = new FakeD1Database()
   const backup = { ...process.env }
   try {
-    process.env.NODE_ENV = "development"
+    Object.assign(process.env, { NODE_ENV: "development" })
     process.env.AUTH_ADAPTER = "dev"
     process.env.ALLOW_DEV_SESSION = "true"
     process.env.ALLOW_DEV_WORKSPACE_BOOTSTRAP = "true"
