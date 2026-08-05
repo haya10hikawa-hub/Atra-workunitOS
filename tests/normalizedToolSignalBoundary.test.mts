@@ -28,12 +28,16 @@ const UNRELATED_PRIORITY_MEMBERS = ["Critical", "High", "Normal"]
 const MAPPERS = ["calendar", "github", "slack"].map((provider) =>
   `app/lib/infrastructure/external/${provider}/toNormalizedToolSignal.ts`)
 
-const INBOX_ROUTE = "app/api/workunit/inbox/route.ts"
+// WU-02S: signal resolution and the source vocabulary moved out of the route
+// module and into the shared Inbox application service, which both
+// `GET /api/workunit/inbox` and `POST /api/workunit/inbox/refresh` call. The
+// pins are re-pointed at that module; neither assertion is weakened.
+const INBOX_SERVICE = "app/lib/application/workunitInbox/inboxService.ts"
 const SIGNAL_CONSUMERS = [
   "app/lib/application/workunitInbox/transform.ts",
   "app/lib/application/workunitInbox/mockSignals.ts",
   "app/lib/application/candidate/candidateWorkUnitBridge.ts",
-  "app/api/workunit/inbox/route.ts",
+  "app/lib/application/workunitInbox/inboxService.ts",
 ]
 
 // The eight legacy compatibility shims this slice must leave untouched: three bare mapper
@@ -412,12 +416,21 @@ test("T12: every provider the port declares stays an accepted inbox route source
   const alias = typeAliases(ts, sourceFile).get("NormalizedToolProvider")
   assert.ok(alias, "the port must declare NormalizedToolProvider")
   const providers = stringUnionMembers(ts, alias)
-  const declared = /const VALID_SOURCES = new Set\(\[([^\]]*)\]\)/.exec(await readSource(INBOX_ROUTE))
-  assert.ok(declared, "the inbox route must still declare VALID_SOURCES as a literal set")
+  const serviceSource = await readSource(INBOX_SERVICE)
+  const declared = /export const INBOX_SOURCES: readonly InboxSource\[\] = Object\.freeze\(\[([^\]]*)\]\)/.exec(serviceSource)
+  assert.ok(declared, "the inbox service must still declare INBOX_SOURCES as a literal frozen list")
   const sources = declared[1].split(",").map((entry) => entry.trim().replace(/^"|"$/g, "")).filter(Boolean)
-  assert.ok(sources.length >= providers.length, "non-vacuity: the route source list must be readable")
+  assert.ok(sources.length >= providers.length, "non-vacuity: the service source list must be readable")
   assert.deepEqual(providers.filter((provider) => !sources.includes(provider)), [],
-    "every provider the port declares must remain an accepted inbox route source")
+    "every provider the port declares must remain an accepted inbox source")
+
+  // Both inbox routes must consume that single vocabulary rather than
+  // re-declaring one, so the read and write paths cannot drift apart.
+  for (const route of ["app/api/workunit/inbox/route.ts", "app/api/workunit/inbox/refresh/route.ts"]) {
+    const routeSource = await readSource(route)
+    assert.ok(routeSource.includes("isInboxSource"), `${route} must use the shared source guard`)
+    assert.equal(/const VALID_SOURCES\s*=/.test(routeSource), false, `${route} must not re-declare the vocabulary`)
+  }
 })
 
 // ─── T13 — the compatibility surface stays erased ────────────────────────────────

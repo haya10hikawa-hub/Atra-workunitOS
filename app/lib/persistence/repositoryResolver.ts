@@ -58,6 +58,59 @@ export type TenantRepositoryBundle = {
   ctx: TenantDbContext
 }
 
+// ─── Read-only capability projection (WU-02S, INV-SAFE-1 layer L1) ──
+//
+// Safe-method handlers (GET/HEAD/OPTIONS) must not merely avoid calling a write
+// — the capability must be ABSENT FROM THE TYPE they can hold. These `Pick<>`
+// narrowings remove every write member, so a direct write, a renamed helper, an
+// alias, a destructured method and a callback-injected writer all fail to
+// type-check rather than relying on a name-matching scanner.
+
+export type WorkUnitReadRepository =
+  Pick<WorkUnitRepository, "findById" | "listRecent">
+export type ActionPreviewReadRepository =
+  Pick<ActionPreviewRepository, "findById" | "findByWorkUnitId">
+export type ApprovalRecordReadRepository =
+  Pick<ApprovalRecordRepository, "findById" | "findByPreviewId" | "findByWorkUnitId">
+export type WorkUnitFeedbackReadRepository =
+  Pick<WorkUnitFeedbackRepository, "findByWorkUnitId">
+export type IntegrationConnectionReadRepository =
+  Pick<IntegrationConnectionRepository, "findByProvider" | "listByTenant">
+export type AuditLogReadRepository =
+  Pick<AuditLogRepository, "listRecent" | "findByWorkUnitId">
+
+/**
+ * Read-only projection of `TenantRepositoryBundle`.
+ *
+ * `usage` is ABSENT ENTIRELY rather than narrowed: `UsageRepository`'s only
+ * non-write members (`getDailySummary`, `getCurrentUsage`) have zero
+ * application callers, so omitting the field costs nothing and removes
+ * `recordEvent` from a safe handler's reach completely. That is stronger than a
+ * `Pick<>` and differs deliberately from the six mechanical projections above.
+ */
+export type TenantReadRepositoryBundle = {
+  readonly actionPreviews: ActionPreviewReadRepository
+  readonly approvalRecords: ApprovalRecordReadRepository
+  readonly workUnits: WorkUnitReadRepository
+  readonly workUnitFeedback: WorkUnitFeedbackReadRepository
+  readonly integrationConnections: IntegrationConnectionReadRepository
+  readonly auditLogs: AuditLogReadRepository
+  readonly ctx: TenantDbContext
+}
+
+/** Narrow a resolved write-capable bundle to its read-only projection. */
+export function toReadOnlyBundle(bundle: TenantRepositoryBundle): TenantReadRepositoryBundle {
+  return {
+    actionPreviews: bundle.actionPreviews,
+    approvalRecords: bundle.approvalRecords,
+    workUnits: bundle.workUnits,
+    workUnitFeedback: bundle.workUnitFeedback,
+    integrationConnections: bundle.integrationConnections,
+    auditLogs: bundle.auditLogs,
+    ctx: bundle.ctx,
+  }
+}
+
 export type RepositoryResolutionError =
   | "persistence_disabled"
   | "tenant_resolution_failed"

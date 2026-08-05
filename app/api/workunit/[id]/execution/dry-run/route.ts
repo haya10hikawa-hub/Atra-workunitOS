@@ -10,8 +10,7 @@ import type { TenantId } from "../../../../../lib/tenant/types.ts"
 import { canCreatePreview } from "../../../../../lib/security/tenantAccess.ts"
 import { canExecuteExternalAction } from "../../../../../lib/security/rbac.ts"
 import { verifyApprovalPreviewBinding } from "../../../../../lib/security/approvalPreviewBinding.ts"
-import { validateCsrfOrigin } from "../../../../../lib/security/csrfProtection.ts"
-import { readBoundedJsonObject } from "../../../../../lib/security/requestBody.ts"
+import { checkMutationRequestIntegrity, readGuardedJsonBody } from "../../../../../lib/security/httpMutationGuard.ts"
 import { checkRateLimit, getTrustedClientIp } from "../../../../../lib/security/rateLimitGate.ts"
 import { resolveValidatedRequestRuntimeConfig, projectRuntimeAuthorizationEnv } from "../../../../../lib/runtime/requestRuntimeConfig.ts"
 
@@ -41,6 +40,8 @@ function errorResponse(requestId: string, code: string, status: number): NextRes
   return json(safeError(requestId, code as Parameters<typeof safeError>[1]), status)
 }
 
+const BODY_LIMITS = { maxBytes: 16 * 1024, maxArrayLength: 20, maxNodes: 200 } as const
+
 const FORBIDDEN_CLIENT_KEYS = [
   "approvalId", "targetHash", "payloadHash",
   "tenantId", "userId", "approvedByUserId", "approvedByPm",
@@ -61,12 +62,9 @@ export async function POST(
   const { id: workUnitId } = await params
   const requestId = `dry-run:${workUnitId}:${Date.now()}`
 
-  const csrf = validateCsrfOrigin(request)
-  if (!csrf.ok) return errorResponse(requestId, csrf.reason, 403)
-
-  audit("execution_dry_run_requested", requestId, { workUnitId })
-
-  // ── 0. Request-scoped runtime config (resolved ONCE) ─────────
+  // ── 0. Request-scoped runtime config (resolved ONCE, FIRST) ──
+  // The guard's trusted-origin policy is a projection of this config, so it
+  // must resolve before request integrity is evaluated.
   const runtimeResult = resolveValidatedRequestRuntimeConfig()
   if (!runtimeResult.ok) {
     audit("execution_dry_run_failed", requestId, { reason: "runtime_config_invalid" })
@@ -75,7 +73,17 @@ export async function POST(
   const runtime = runtimeResult.runtime
   const killSwitchEnv = projectRuntimeAuthorizationEnv(runtime.security)
 
-  // ── 1. Session ───────────────────────────────────────────────
+  // ── 1–6. Request integrity (header-only, synchronous) ────────
+  const integrity = checkMutationRequestIntegrity(request, {
+    method: "POST",
+    trustedOrigins: runtime.security.trustedOrigins,
+    maxBytes: BODY_LIMITS.maxBytes,
+  })
+  if (!integrity.ok) return errorResponse(requestId, integrity.error, integrity.status)
+
+  audit("execution_dry_run_requested", requestId, { workUnitId })
+
+  // ── 7. Authentication ────────────────────────────────────────
   const sessionResult = await requireSession(request, runtime)
   if (!sessionResult.ok) {
     audit("execution_dry_run_failed", requestId, { reason: "unauthorized" })
@@ -86,19 +94,45 @@ export async function POST(
     )
   }
   const session = sessionResult.session
+
+  // ── 8. Tenant identity and active membership authority ───────
+  const repoResult = await resolveRouteRepositories(session.tenantId as TenantId, runtime)
+  if (!repoResult.ok) {
+    audit("execution_dry_run_failed", requestId, { reason: "persistence_not_available" })
+    return errorResponse(requestId, "integration_missing", 503)
+  }
+  const {
+    actionPreviews: previewRepo,
+    approvalRecords: approvalRepo,
+    ctx,
+  } = repoResult.bundle
+
+  // ── 9. Rate limit — after authentication and tenant authority ──
   if (!checkRateLimit({ tenantId: session.tenantId, actorUserId: session.userId, clientIp: getTrustedClientIp(request), routeFamily: "execution_dry_run" }).ok) {
     return errorResponse(requestId, "rate_limited", 429)
   }
 
-  // ── 2. Parse body ────────────────────────────────────────────
-  const bodyResult = await readBoundedJsonObject(request, { maxBytes: 16 * 1024, maxArrayLength: 20, maxNodes: 200 })
+  // ── 10. Route-specific RBAC — before the body read ───────────
+  // Issue #145: a dry-run that reports "would be allowed" is a preview of the
+  // REAL execution decision, so it must require the real execute permission
+  // (`workunit.execute_external_action`) — never preview-creation permission as
+  // a substitute. A "verified" dry-run means only that all current evidence and
+  // policy would permit ATTEMPTING the atomic claim now; no authorization is
+  // created and no Approval or Linkage state is consumed.
+  if (!canExecuteExternalAction(session) || !canCreatePreview(session)) {
+    audit("execution_dry_run_failed", requestId, { reason: "rbac_denied" })
+    return errorResponse(requestId, "forbidden", 403)
+  }
+
+  // ── 11–12. Body read and JSON parse ──────────────────────────
+  const bodyResult = await readGuardedJsonBody(request, BODY_LIMITS)
   if (!bodyResult.ok) {
     audit("execution_dry_run_failed", requestId, { reason: bodyResult.reason })
     return errorResponse(requestId, "invalid_request", bodyResult.reason === "payload_too_large" ? 413 : 400)
   }
   const body = bodyResult.value
 
-  // ── 3. Validate shape ────────────────────────────────────────
+  // ── 13. Domain validation ────────────────────────────────────
   if (typeof body.workUnitId !== "string" || body.workUnitId !== workUnitId) {
     audit("execution_dry_run_failed", requestId, { reason: "workunit_mismatch" })
     return errorResponse(requestId, "invalid_request", 400)
@@ -124,31 +158,7 @@ export async function POST(
   const requestedActionType: string | null =
     typeof body.requestedActionType === "string" ? body.requestedActionType : null
 
-  // ── 4. RBAC ──────────────────────────────────────────────────
-  // Issue #145: a dry-run that reports "would be allowed" is a preview of the
-  // REAL execution decision, so it must require the real execute permission
-  // (`workunit.execute_external_action`) — never preview-creation permission as
-  // a substitute. A "verified" dry-run means only that all current evidence and
-  // policy would permit ATTEMPTING the atomic claim now; no authorization is
-  // created and no Approval or Linkage state is consumed.
-  if (!canExecuteExternalAction(session) || !canCreatePreview(session)) {
-    audit("execution_dry_run_failed", requestId, { reason: "rbac_denied" })
-    return errorResponse(requestId, "forbidden", 403)
-  }
-
-  // ── 5. Resolve repositories ──────────────────────────────────
-  const repoResult = await resolveRouteRepositories(session.tenantId as TenantId, runtime)
-  if (!repoResult.ok) {
-    audit("execution_dry_run_failed", requestId, { reason: "persistence_not_available" })
-    return errorResponse(requestId, "integration_missing", 503)
-  }
-  const {
-    actionPreviews: previewRepo,
-    approvalRecords: approvalRepo,
-    ctx,
-  } = repoResult.bundle
-
-  // ── 6. Load stored previews + approvals ──────────────────────
+  // ── 14. Load stored previews + approvals ─────────────────────
   if (previewIds.length === 0) {
     audit("execution_dry_run_blocked", requestId, { reason: "preview_ref_required" })
     return successResponse(workUnitId, previewRefs.length, requestedActionType, "not_ready", "A stored preview reference is required before dry-run verification.", requestId)

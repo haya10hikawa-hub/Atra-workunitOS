@@ -2,11 +2,10 @@ import { NextResponse } from "next/server.js"
 import { getSessionErrorStatus, requireSession } from "../../../../lib/security/session.ts"
 import { safeError } from "../../../../lib/security/safeErrors.ts"
 import { writeAuditLog, type AuditEventKind } from "../../../../lib/security/auditLog.ts"
-import { resolveRouteRepositories } from "../../../../lib/persistence/routeRepositories.ts"
+import { resolveRouteRepositories, resolveRouteReadRepositories } from "../../../../lib/persistence/routeRepositories.ts"
 import type { TenantId } from "../../../../lib/tenant/types.ts"
 import { canApprovePreview, canCreatePreview } from "../../../../lib/security/tenantAccess.ts"
-import { validateCsrfOrigin } from "../../../../lib/security/csrfProtection.ts"
-import { readBoundedJsonObject } from "../../../../lib/security/requestBody.ts"
+import { checkMutationRequestIntegrity, readGuardedJsonBody } from "../../../../lib/security/httpMutationGuard.ts"
 import { checkRateLimit, getTrustedClientIp } from "../../../../lib/security/rateLimitGate.ts"
 import { hasClientOwnedFields, isPreviewExpired, resolveRequestId } from "../../../../lib/security/routeGuards.ts"
 import { recordAuditEvent } from "../../../../lib/security/auditPersistence.ts"
@@ -26,6 +25,8 @@ function errorResponse(requestId: string, code: string, status: number): NextRes
   return json(safeError(requestId, code as Parameters<typeof safeError>[1]), status)
 }
 
+const BODY_LIMITS = { maxBytes: 4 * 1024, maxDepth: 4, maxNodes: 30 } as const
+
 // ─── POST /api/workunit/:id/approval ───────────────────────────
 
 export async function POST(
@@ -35,12 +36,9 @@ export async function POST(
   const { id: workUnitId } = await params
   const requestId = resolveRequestId(request)
 
-  const csrf = validateCsrfOrigin(request)
-  if (!csrf.ok) return errorResponse(requestId, csrf.reason, 403)
-
-  audit("approval_create_requested", requestId, { workUnitId })
-
-  // ── Request-scoped runtime config (resolved ONCE) ────────────
+  // ── 0. Request-scoped runtime config (resolved ONCE, FIRST) ──
+  // The guard's trusted-origin policy is a projection of this config, so it
+  // must resolve before request integrity is evaluated.
   const runtimeResult = resolveValidatedRequestRuntimeConfig()
   if (!runtimeResult.ok) {
     audit("approval_create_failed", requestId, { reason: "runtime_config_invalid" })
@@ -48,7 +46,17 @@ export async function POST(
   }
   const runtime = runtimeResult.runtime
 
-  // ── Session ──────────────────────────────────────────────────
+  // ── 1–6. Request integrity (header-only, synchronous) ────────
+  const integrity = checkMutationRequestIntegrity(request, {
+    method: "POST",
+    trustedOrigins: runtime.security.trustedOrigins,
+    maxBytes: BODY_LIMITS.maxBytes,
+  })
+  if (!integrity.ok) return errorResponse(requestId, integrity.error, integrity.status)
+
+  audit("approval_create_requested", requestId, { workUnitId })
+
+  // ── 7. Authentication ────────────────────────────────────────
   const sessionResult = await requireSession(request, runtime)
   if (!sessionResult.ok) {
     audit("approval_create_failed", requestId, { reason: "unauthorized" })
@@ -59,11 +67,8 @@ export async function POST(
     )
   }
   const session = sessionResult.session
-  if (!checkRateLimit({ tenantId: session.tenantId, actorUserId: session.userId, clientIp: getTrustedClientIp(request), routeFamily: "approval_decision" }).ok) {
-    return errorResponse(requestId, "rate_limited", 429)
-  }
 
-  // ── Resolve repositories (same frozen runtime config) ───────
+  // ── 8. Tenant identity and active membership authority ───────
   const repoResult = await resolveRouteRepositories(session.tenantId as TenantId, runtime)
   if (!repoResult.ok) {
     audit("approval_create_failed", requestId, { reason: "persistence_not_available" })
@@ -71,15 +76,26 @@ export async function POST(
   }
   const { actionPreviews: previewRepo, approvalRecords: approvalRepo, auditLogs, ctx } = repoResult.bundle
 
-  // ── Parse body ───────────────────────────────────────────────
-  const bodyResult = await readBoundedJsonObject(request, { maxBytes: 4 * 1024, maxDepth: 4, maxNodes: 30 })
+  // ── 9. Rate limit — after authentication and tenant authority ──
+  if (!checkRateLimit({ tenantId: session.tenantId, actorUserId: session.userId, clientIp: getTrustedClientIp(request), routeFamily: "approval_decision" }).ok) {
+    return errorResponse(requestId, "rate_limited", 429)
+  }
+
+  // ── 10. Route-specific RBAC — before the body read ───────────
+  if (!canApprovePreview(session)) {
+    audit("approval_create_failed", requestId, { reason: "rbac_denied" })
+    return errorResponse(requestId, "forbidden", 403)
+  }
+
+  // ── 11–12. Body read and JSON parse ──────────────────────────
+  const bodyResult = await readGuardedJsonBody(request, BODY_LIMITS)
   if (!bodyResult.ok) {
     audit("approval_create_failed", requestId, { reason: bodyResult.reason })
     return errorResponse(requestId, "invalid_request", bodyResult.reason === "payload_too_large" ? 413 : 400)
   }
   const body = bodyResult.value
 
-  // ── Validate ─────────────────────────────────────────────────
+  // ── 13. Domain validation ────────────────────────────────────
   const actionPreviewId = typeof body.actionPreviewId === "string" ? body.actionPreviewId : null
   const decision = body.decision === "approve" || body.decision === "reject" ? body.decision : null
 
@@ -91,12 +107,6 @@ export async function POST(
   if (hasClientOwnedFields(body)) {
     audit("approval_create_failed", requestId, { reason: "client_provided_context" })
     return errorResponse(requestId, "invalid_request", 400)
-  }
-
-  // ── RBAC ─────────────────────────────────────────────────────
-  if (!canApprovePreview(session)) {
-    audit("approval_create_failed", requestId, { reason: "rbac_denied" })
-    return errorResponse(requestId, "forbidden", 403)
   }
 
   // ── Lookup stored preview via repository ────────────────────
@@ -218,7 +228,7 @@ export async function GET(
     return NextResponse.json(safeError("na", "forbidden" as Parameters<typeof safeError>[1]), { status: 403 })
   }
 
-  const repoResult = await resolveRouteRepositories(sessionResult.session.tenantId as TenantId, runtime)
+  const repoResult = await resolveRouteReadRepositories(sessionResult.session.tenantId as TenantId, runtime)
   if (!repoResult.ok) {
     return errorResponse("na", "integration_missing", 503)
   }

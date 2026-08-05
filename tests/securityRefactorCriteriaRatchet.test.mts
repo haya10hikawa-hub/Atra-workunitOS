@@ -1,11 +1,25 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import ts from "typescript"
 import { listFiles } from "../scripts/lib/typescriptModuleGraph.mjs"
+// The single shared route/AST scanner. `safeMethodWriteInvariant` consumes the
+// same module, so the two suites cannot silently disagree; each keeps its own
+// positive controls so a helper defect is caught from either side.
+import {
+  DEFAULT_NEXT_EXTENSIONS,
+  HTTP_METHODS,
+  SAFE_METHODS,
+  UNSAFE_METHODS,
+  extractRouteExports,
+  isNextRouteFile,
+  parseSource,
+  scanRouteExports,
+  type HttpMethod,
+  type RouteExport,
+} from "./helpers/routeSurface.ts"
 import { NoopProductionAuthAdapter } from "../app/lib/application/auth/noopProductionAuthAdapter.ts"
 import { resolveAuthAdapter } from "../app/lib/application/auth/resolveAuthAdapter.ts"
 import type { AuthRuntimeConfig } from "../app/lib/runtime/requestRuntimeConfig.ts"
@@ -14,30 +28,17 @@ import { POST as previewPost } from "../app/api/workunit/[id]/action-preview/rou
 import { POST as approvalPost } from "../app/api/workunit/[id]/approval/route.ts"
 import { POST as feedbackPost } from "../app/api/workunit/[id]/feedback/route.ts"
 import { POST as dryRunPost } from "../app/api/workunit/[id]/execution/dry-run/route.ts"
+import { POST as inboxRefreshPost } from "../app/api/workunit/inbox/refresh/route.ts"
 import { signHs256Jwt } from "./helpers/jwt.ts"
 import nextConfig from "../next.config.ts"
 
 const rootDir = fileURLToPath(new URL("../", import.meta.url))
 const contractPath = path.join(rootDir, "tests/fixtures/architecture/security-surface.v1.json")
 const context = { params: Promise.resolve({ id: "wu-security-ratchet" }) }
-const HTTP_METHODS = ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"] as const
-const SAFE_METHODS = new Set<HttpMethod>(["GET", "HEAD", "OPTIONS"])
-const UNSAFE_METHODS = new Set<HttpMethod>(["POST", "PUT", "PATCH", "DELETE"])
-const DEFAULT_NEXT_EXTENSIONS = ["js", "jsx", "ts", "tsx"] as const
-
-type HttpMethod = typeof HTTP_METHODS[number]
-type RouteSurface = {
-  key: string
-  file: string
-  method: HttpMethod
-  handlerHash: string
-  routeHash: string
-  callNames: string[]
-}
 type SecuritySurfaceContract = {
   sourceSha: string
   sourceShaRole: "refactor_base_only_not_tree_attestation"
-  safeHandlers: Array<Pick<RouteSurface, "key" | "handlerHash" | "routeHash">>
+  safeHandlers: Array<Pick<RouteExport, "key" | "handlerHash" | "routeHash">>
   reviewedStateChangingSafeHandlers: Array<{ key: string; evidenceCalls: string[] }>
 }
 type HeaderRule = { source: string; headers: Array<{ key: string; value: string }> }
@@ -48,6 +49,7 @@ const unsafeHandlers = [
   { key: "app/api/workunit/[id]/approval/route.ts#POST", method: "POST", url: "/api/workunit/wu-security-ratchet/approval", invoke: (request: Request) => approvalPost(request, context) },
   { key: "app/api/workunit/[id]/feedback/route.ts#POST", method: "POST", url: "/api/workunit/wu-security-ratchet/feedback", invoke: (request: Request) => feedbackPost(request, context) },
   { key: "app/api/workunit/[id]/execution/dry-run/route.ts#POST", method: "POST", url: "/api/workunit/wu-security-ratchet/execution/dry-run", invoke: (request: Request) => dryRunPost(request, context) },
+  { key: "app/api/workunit/inbox/refresh/route.ts#POST", method: "POST", url: "/api/workunit/inbox/refresh", invoke: (request: Request) => inboxRefreshPost(request) },
 ] as const
 
 test("AST route discovery covers every supported export form and fails closed", () => {
@@ -92,15 +94,18 @@ test("safe-method AST surface and reviewed write exceptions match the pinned sna
   const actual = safeHandlers.map(({ key, handlerHash, routeHash }) => ({ key, handlerHash, routeHash }))
   assert.deepEqual(actual, contract.safeHandlers)
 
-  const reviewedKeys = contract.reviewedStateChangingSafeHandlers.map((item) => item.key).sort()
-  assert.deepEqual(reviewedKeys, [
-    "app/api/integrations/status/route.ts#GET",
-    "app/api/workunit/inbox/route.ts#GET",
-  ])
-  for (const exception of contract.reviewedStateChangingSafeHandlers) {
-    const handler = safeHandlers.find((item) => item.key === exception.key)
-    assert.ok(handler, `reviewed safe-method exception is missing: ${exception.key}`)
-    for (const call of exception.evidenceCalls) assert.ok(handler.callNames.includes(call), `${exception.key}: missing ${call}`)
+  // INV-SAFE-1 (WU-02S): the reviewed-exception ledger is now a PROHIBITION,
+  // not an allowance. No safe handler may be excused a durable write, so a
+  // non-empty ledger is a failure rather than a documented exception.
+  assert.deepEqual(contract.reviewedStateChangingSafeHandlers, [],
+    "a state-changing safe handler was re-admitted; INV-SAFE-1 permits no exceptions")
+
+  // And no safe handler may name a durable write call at all.
+  const writeCalls = ["upsert", "create", "updateStatus", "markUsed", "claimForRuntime", "append", "recordEvent"]
+  for (const handler of safeHandlers) {
+    for (const call of writeCalls) {
+      assert.equal(handler.callNames.includes(call), false, `${handler.key} names durable write ${call}`)
+    }
   }
 })
 
@@ -170,88 +175,9 @@ test("header-floor checker rejects narrowed scope, broad script/connect sources,
   assert.throws(() => assertGlobalHeaderFloor(missingPermissions))
 })
 
-async function scanRouteSurface(): Promise<RouteSurface[]> {
-  const files = (await listFiles(path.join(rootDir, "app/api"))).filter(isNextRouteFile)
-  const surfaces = (await Promise.all(files.map(async (file) => {
-    const relative = path.relative(rootDir, file).split(path.sep).join("/")
-    return extractRouteExports(relative, await readFile(file, "utf8"))
-  }))).flat().sort((left, right) => left.key.localeCompare(right.key))
-  assert.equal(new Set(surfaces.map((item) => item.key)).size, surfaces.length, "duplicate HTTP method export")
-  return surfaces
-}
-
-// AST discovery avoids declaration-spelling blind spots in the security inventory.
-function extractRouteExports(file: string, source: string): RouteSurface[] {
-  const sourceFile = parseSource(file, source)
-  const routeHash = hash(source.replace(/\r\n/g, "\n"))
-  const surfaces: RouteSurface[] = []
-  const add = (name: string, node: ts.Node) => {
-    const method = HTTP_METHODS.find((candidate) => candidate === name)
-    if (!method) return
-    surfaces.push({
-      key: `${file}#${method}`,
-      file,
-      method,
-      handlerHash: hash(ts.createPrinter().printNode(ts.EmitHint.Unspecified, node, sourceFile)),
-      routeHash,
-      callNames: collectCallNames(node),
-    })
-  }
-
-  for (const statement of sourceFile.statements) {
-    if (ts.isFunctionDeclaration(statement) && hasExport(statement) && !hasDefault(statement) && statement.name) add(statement.name.text, statement)
-    if (ts.isVariableStatement(statement) && hasExport(statement)) {
-      for (const declaration of statement.declarationList.declarations) if (ts.isIdentifier(declaration.name)) add(declaration.name.text, statement)
-    }
-    if (ts.isExportDeclaration(statement)) {
-      if (!statement.exportClause || ts.isNamespaceExport(statement.exportClause)) throw new Error(`export * is forbidden in route handler: ${file}`)
-      if (!statement.isTypeOnly && ts.isNamedExports(statement.exportClause)) {
-        for (const element of statement.exportClause.elements) if (!element.isTypeOnly) add(element.name.text, statement)
-      }
-    }
-    if (ts.isExportAssignment(statement) && statement.isExportEquals) throw new Error(`CommonJS route exports are forbidden: ${file}`)
-    if (isCommonJsExport(statement, sourceFile)) throw new Error(`CommonJS route exports are forbidden: ${file}`)
-  }
-  return surfaces
-}
-
-function parseSource(file: string, source: string): ts.SourceFile {
-  const kind = /\.[jt]sx$/.test(file) ? ts.ScriptKind.TSX : /\.[cm]?js$/.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS
-  const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, kind)
-  const diagnostics = (parsed as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics
-  if (diagnostics.length > 0) {
-    throw new Error(`Unable to parse ${file}: ${diagnostics.map((item) => ts.flattenDiagnosticMessageText(item.messageText, "\n")).join("; ")}`)
-  }
-  return parsed
-}
-
-function hasExport(node: ts.Node): boolean {
-  return ts.canHaveModifiers(node)
-    && (ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) ?? false)
-}
-
-function hasDefault(node: ts.Node): boolean {
-  return ts.canHaveModifiers(node)
-    && (ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword) ?? false)
-}
-
-function isCommonJsExport(node: ts.Node, sourceFile: ts.SourceFile): boolean {
-  if (!ts.isExpressionStatement(node) || !ts.isBinaryExpression(node.expression)) return false
-  if (node.expression.operatorToken.kind !== ts.SyntaxKind.EqualsToken) return false
-  return /^(?:module\.)?exports(?:\.|\[|$)/.test(node.expression.left.getText(sourceFile))
-}
-
-function collectCallNames(node: ts.Node): string[] {
-  const names = new Set<string>()
-  const visit = (child: ts.Node) => {
-    if (ts.isCallExpression(child)) {
-      if (ts.isIdentifier(child.expression)) names.add(child.expression.text)
-      else if (ts.isPropertyAccessExpression(child.expression)) names.add(child.expression.name.text)
-    }
-    ts.forEachChild(child, visit)
-  }
-  visit(node)
-  return [...names].sort()
+/** Route discovery, delegated to the single shared scanner. */
+async function scanRouteSurface(): Promise<RouteExport[]> {
+  return scanRouteExports(rootDir, nextConfig.pageExtensions ?? undefined)
 }
 
 function findAmbientCookieReads(file: string, source: string): string[] {
@@ -362,26 +288,162 @@ async function readSecurityContract(): Promise<SecuritySurfaceContract> {
 }
 
 function routeRequest(url: string, method: HttpMethod, headers: Record<string, string> = {}): Request {
+  // `Host` is supplied explicitly: the mutation guard binds the target host, and
+  // Node's `Request` does not populate `Host` from the URL the way a real HTTP
+  // server does. A missing Host is itself a rejection (fail closed), so it must
+  // be set deliberately whenever the probe is testing something else.
   return new Request(`http://localhost:3000${url}`, {
     method,
-    headers: { "content-type": "application/json", ...headers },
+    headers: { host: "localhost:3000", "content-type": "application/json", ...headers },
     body: UNSAFE_METHODS.has(method) ? "{}" : undefined,
   })
 }
 
-function isNextRouteFile(file: string): boolean {
-  const extensions = nextConfig.pageExtensions ?? DEFAULT_NEXT_EXTENSIONS
-  return extensions.some((extension) => path.basename(file) === `route.${extension.replace(/^\./, "")}`)
-}
 
 function isCodeFile(file: string): boolean {
   return /\.[cm]?[jt]sx?$/.test(file)
 }
 
-function hash(value: string): string {
-  return createHash("sha256").update(value).digest("hex")
-}
 
 function cloneHeaderRules(rules: readonly HeaderRule[]): HeaderRule[] {
   return rules.map((rule) => ({ source: rule.source, headers: rule.headers.map((header) => ({ ...header })) }))
+}
+
+// ─── WU-02S §5: five-route semantic ordering assertion ──────────
+//
+// This is a SEMANTIC assertion, not a digest pin. It proves the executable
+// order actually holds in the source of every pre-existing mutation route,
+// which is what makes re-pinning the two route digests elsewhere safe: a digest
+// says "these bytes"; this says "these bytes still enforce this order".
+
+type OrderedStep = { readonly label: string; readonly match: RegExp }
+
+const MUTATION_ROUTES = [
+  { key: "action-preview", file: "app/api/workunit/[id]/action-preview/route.ts" },
+  { key: "approval", file: "app/api/workunit/[id]/approval/route.ts" },
+  { key: "feedback", file: "app/api/workunit/[id]/feedback/route.ts" },
+  { key: "execution/dry-run", file: "app/api/workunit/[id]/execution/dry-run/route.ts" },
+  { key: "tools", file: "app/api/workunit/tools/route.ts" },
+] as const
+
+/**
+ * `tools` derives its required permission from the request body
+ * (`OPERATION_PERMISSION[validated.operation]`), so RBAC there cannot precede
+ * the body read. That is a documented, structural exception; the rate limit
+ * still precedes both. Every other route must place RBAC before the body read.
+ */
+const RBAC_BEFORE_BODY_EXEMPT = new Set<string>(["tools"])
+
+test("WU-02S: every pre-existing mutation route enforces the executable order", async () => {
+  assert.equal(MUTATION_ROUTES.length, 5, "all five pre-existing mutation routes must be covered")
+
+  for (const route of MUTATION_ROUTES) {
+    const absolute = path.join(rootDir, route.file)
+    let source: string
+    try {
+      source = await readFile(absolute, "utf8")
+    } catch {
+      assert.fail(`${route.key}: route module is missing (${route.file})`)
+    }
+
+    const post = extractPostBody(route.key, source)
+
+    const steps: OrderedStep[] = [
+      { label: "0 runtime config", match: /resolveValidatedRequestRuntimeConfig\s*\(/ },
+      { label: "1-6 request-integrity guard", match: /checkMutationRequestIntegrity\s*\(/ },
+      { label: "7 authentication", match: /requireSession\s*\(/ },
+      { label: "9 rate limit", match: /checkRateLimit\s*\(/ },
+      { label: "11 body read", match: /readGuardedJsonBody\s*\(/ },
+    ]
+
+    const positions = new Map<string, number>()
+    for (const step of steps) {
+      const index = post.search(step.match)
+      // FAIL CLOSED: an expected call that cannot be resolved is a failure, not
+      // a skipped assertion.
+      assert.notEqual(index, -1, `${route.key}: cannot resolve step "${step.label}"`)
+      positions.set(step.label, index)
+    }
+
+    const ordered = steps.map((s) => s.label)
+    for (let i = 1; i < ordered.length; i += 1) {
+      const previous = ordered[i - 1]
+      const current = ordered[i]
+      assert.ok(
+        positions.get(previous)! < positions.get(current)!,
+        `${route.key}: "${previous}" must precede "${current}"`,
+      )
+    }
+
+    // 8 tenant authority precedes 9 rate limit, wherever the route resolves it.
+    // `tools` resolves repositories lazily on the paths that need them, so its
+    // tenant authority IS the verified session; the session check above covers it.
+    const tenantIndex = post.search(/resolveRouteRepositories\s*\(/)
+    if (tenantIndex !== -1 && route.key !== "tools") {
+      assert.ok(tenantIndex < positions.get("9 rate limit")!,
+        `${route.key}: tenant authority must precede rate limiting`)
+    }
+
+    // 10 RBAC precedes 11 body read (except the documented `tools` exception).
+    const rbacIndex = findRbacIndex(post)
+    assert.notEqual(rbacIndex, -1, `${route.key}: cannot resolve the route RBAC check`)
+    assert.ok(positions.get("9 rate limit")! < rbacIndex, `${route.key}: rate limiting must precede route RBAC`)
+    if (!RBAC_BEFORE_BODY_EXEMPT.has(route.key)) {
+      assert.ok(rbacIndex < positions.get("11 body read")!,
+        `${route.key}: route RBAC must precede the body read`)
+    }
+
+    // No repository mutation, provider operation or external action may appear
+    // before integrity, authentication, tenant authority and RBAC have passed.
+    const gateEnd = Math.max(positions.get("1-6 request-integrity guard")!, positions.get("7 authentication")!, rbacIndex)
+    const beforeGates = post.slice(0, gateEnd)
+    for (const forbidden of [
+      /\.\s*upsert\s*\(/, /\.\s*create\s*\(/, /\.\s*updateStatus\s*\(/, /\.\s*markUsed\s*\(/,
+      /\.\s*claimForRuntime\s*\(/, /\.\s*append\s*\(/, /\.\s*recordEvent\s*\(/,
+      /\bfetch\s*\(/, /runToolBackendRequest\s*\(/, /authorizeRuntimeCommand\s*\(/,
+    ]) {
+      assert.equal(forbidden.test(beforeGates), false,
+        `${route.key}: ${forbidden} occurs before the authorization gates complete`)
+    }
+  }
+})
+
+test("WU-02S: the ordering assertion is non-vacuous — a reversed pair is detected", () => {
+  // Positive controls for the machinery the ordering test relies on. A reversed
+  // guard/session pair must be observable, and a missing call must fail closed.
+  const reversed = [
+    "export async function POST(request: Request) {",
+    "  const s = await requireSession(request, runtime)",
+    "  const g = checkMutationRequestIntegrity(request, policy)",
+    "  return s && g",
+    "}",
+  ].join("\n")
+  const body = extractPostBody("virtual", reversed)
+  assert.ok(body.search(/requireSession\s*\(/) < body.search(/checkMutationRequestIntegrity\s*\(/),
+    "the probe must be able to observe a reversed pair")
+
+  const missing = extractPostBody("virtual", "export async function POST() { return 1 }")
+  assert.equal(missing.search(/checkMutationRequestIntegrity\s*\(/), -1,
+    "an absent call must be reported as unresolved, never silently skipped")
+
+  assert.notEqual(findRbacIndex("if (!canCreatePreview(session)) return x"), -1)
+  assert.equal(findRbacIndex("return 1"), -1)
+})
+
+/** Extract the POST handler body; throws when it cannot be located. */
+function extractPostBody(label: string, source: string): string {
+  const start = source.search(/export\s+(?:async\s+)?function\s+POST\s*\(/)
+  assert.notEqual(start, -1, `${label}: no exported POST handler found`)
+  return source.slice(start)
+}
+
+/** Locate the route-specific RBAC check, whichever helper the route uses. */
+function findRbacIndex(body: string): number {
+  const patterns = [
+    /!\s*canCreatePreview\s*\(/, /!\s*canApprovePreview\s*\(/, /!\s*canCreateFeedback\s*\(/,
+    /!\s*canRefreshWorkUnitInbox\s*\(/, /!\s*canExecuteExternalAction\s*\(/,
+    /!\s*hasPermission\s*\(\s*session\s*,\s*requiredPermission\s*\)/,
+  ]
+  const found = patterns.map((p) => body.search(p)).filter((i) => i !== -1)
+  return found.length === 0 ? -1 : Math.min(...found)
 }

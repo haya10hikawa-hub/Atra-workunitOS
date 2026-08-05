@@ -2,7 +2,7 @@ import { NextResponse } from "next/server.js"
 import { getSessionErrorStatus, requireSession } from "../../../../../lib/security/session.ts"
 import { safeError } from "../../../../../lib/security/safeErrors.ts"
 import { writeAuditLog, type AuditEventKind } from "../../../../../lib/security/auditLog.ts"
-import { resolveRouteRepositories } from "../../../../../lib/persistence/routeRepositories.ts"
+import { resolveRouteReadRepositories } from "../../../../../lib/persistence/routeRepositories.ts"
 import type { TenantId } from "../../../../../lib/tenant/types.ts"
 import { canCreatePreview } from "../../../../../lib/security/tenantAccess.ts"
 import type { ApprovalRecordRow } from "../../../../../lib/persistence/types.ts"
@@ -75,7 +75,7 @@ export async function GET(
   }
 
   // ── Resolve repositories (same frozen runtime config) ───────
-  const repoResult = await resolveRouteRepositories(session.tenantId as TenantId, runtime)
+  const repoResult = await resolveRouteReadRepositories(session.tenantId as TenantId, runtime)
   if (!repoResult.ok) {
     return errorResponse(requestId, "integration_missing", 503)
   }

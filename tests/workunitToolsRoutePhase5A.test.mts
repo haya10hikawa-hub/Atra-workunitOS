@@ -45,21 +45,21 @@ test("missing Origin/Referer POST is rejected by the route", async () => {
 
 // ─── Source scans on route ───────────────────────────────────
 
-test("route imports CSRF protection", () => {
-  assert.ok(SRC_ROUTE.includes("validateCsrfOrigin"))
+test("route imports the request-integrity guard", () => {
+  assert.ok(SRC_ROUTE.includes("checkMutationRequestIntegrity"))
 })
 
 test("route imports rate limit", () => {
   assert.ok(SRC_ROUTE.includes("checkRateLimit"))
 })
 
-test("route calls CSRF before session", () => {
+test("route runs request integrity before session", () => {
   // Match call sites (with open paren), not import statements which appear earlier.
-  const csrfIdx = POST_ROUTE.indexOf("validateCsrfOrigin(")
+  const csrfIdx = POST_ROUTE.indexOf("checkMutationRequestIntegrity(")
   const sessionIdx = POST_ROUTE.indexOf("requireSession(")
-  assert.ok(csrfIdx > 0, "validateCsrfOrigin( call site must exist")
+  assert.ok(csrfIdx > 0, "checkMutationRequestIntegrity( call site must exist")
   assert.ok(sessionIdx > 0, "requireSession( call site must exist")
-  assert.ok(csrfIdx < sessionIdx, "CSRF must run before session")
+  assert.ok(csrfIdx < sessionIdx, "request integrity must run before session")
 })
 
 test("route calls rate limit before RBAC", () => {
@@ -99,9 +99,11 @@ test("safe errors in route do not include Authorization", () => {
   }
 })
 
-test("route has safe error responses for CSRF+rate limit", () => {
-  // The route forwards csrf.reason (invalid_origin / csrf_failed) dynamically rather
-  // than hard-coding the literal. The csrf reason literals live in csrfProtection.ts.
-  assert.ok(SRC_ROUTE.includes("csrf.reason"), "route must forward csrf.reason")
+test("route has safe error responses for request integrity + rate limit", () => {
+  // The route forwards the guard's mapped code (invalid_request / csrf_failed /
+  // invalid_origin) dynamically rather than hard-coding a literal. The internal
+  // failure `category` is never serialized.
+  assert.ok(SRC_ROUTE.includes("integrity.error"), "route must forward the guard's safe error code")
+  assert.ok(SRC_ROUTE.includes("integrity.status"), "route must forward the guard's status")
   assert.ok(SRC_ROUTE.includes('"rate_limited"'), "route must return rate_limited")
 })

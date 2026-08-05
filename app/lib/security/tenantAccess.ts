@@ -19,6 +19,20 @@ export function canCreateFeedback(session: SessionContext): boolean {
   return hasPermission(session, "workunit.edit")
 }
 
+/**
+ * Authority to trigger Inbox WorkUnit persistence via
+ * `POST /api/workunit/inbox/refresh`.
+ *
+ * Reading the inbox must not by itself authorize mutating stored inbox state:
+ * `viewer` holds `workunit.read` and must keep GET while losing refresh. The
+ * conjunction is deliberate — `canViewInbox` (`workunit.read`) alone is
+ * prohibited, and the misleadingly-named `canCreateFeedback` (which resolves to
+ * `workunit.edit`) is not reused for this gate. No new permission is minted.
+ */
+export function canRefreshWorkUnitInbox(session: SessionContext): boolean {
+  return hasPermission(session, "workunit.create") && hasPermission(session, "workunit.edit")
+}
+
 export function canCreatePreview(session: SessionContext): boolean {
   return hasPermission(session, "workunit.create_action_preview")
 }

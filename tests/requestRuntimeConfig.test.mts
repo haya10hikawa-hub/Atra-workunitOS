@@ -29,6 +29,10 @@ function cloudflareEnv(overrides: Partial<AppEnv> = {}): AppEnv {
     PERSISTENCE_MODE: "d1",
     EXTERNAL_ACTIONS_ENABLED: "false",
     ALLOW_LEGACY_INGEST_FALLBACK: "false",
+    // WU-02S: a Cloudflare production runtime REQUIRES a valid trusted-origin
+    // list. Its absence is a fail-closed config error, so every production
+    // fixture must supply one. Tests 14-16 cover the failure modes directly.
+    ALLOWED_ORIGINS: "https://app.example.com",
     ...overrides,
   } as AppEnv
 }
@@ -140,7 +144,7 @@ test("7. request-scoped EXTERNAL_ACTIONS_ENABLED=false blocks even when process.
 
 test("8. request-scoped kill-switch state is honored by the Runtime Authorization gate", async () => {
   const session = { userId: "u", tenantId: "tenant-1", role: "owner", email: "e@x.local", isDevSession: false, sessionId: "s", createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 3600_000).toISOString() } as Session
-  const killEnv = projectRuntimeAuthorizationEnv({ externalActionsEnabled: false, allowLegacyIngestFallback: false, allowDevSession: false, allowDevWorkspaceBootstrap: false, allowControlLessDevSession: false })
+  const killEnv = projectRuntimeAuthorizationEnv({ externalActionsEnabled: false, allowLegacyIngestFallback: false, allowDevSession: false, allowDevWorkspaceBootstrap: false, allowControlLessDevSession: false, trustedOrigins: [] })
   const outcome = await evaluateRuntimeAuthorizationDryRun({
     session,
     request: { tenantId: "tenant-1", workUnitId: "wu-1", actionPreviewId: "p-1", approvalId: "a-1", actionType: "slack_reply" },
@@ -323,4 +327,53 @@ test("resolveRuntimeConfigFromRawEnv is a pure projection (no ambient reads)", (
   assert.ok(cf.ok && cf.runtime.source === "cloudflare")
   const local = resolveRuntimeConfigFromRawEnv(env, "local", { NODE_ENV: "development", PERSISTENCE_MODE: "d1" })
   assert.ok(local.ok && local.runtime.source === "local")
+})
+
+// ─── WU-02S: request-scoped trusted-origin authority ────────────
+
+test("14. Cloudflare production requires a valid ALLOWED_ORIGINS and fails closed otherwise", () => {
+  const db = { prepare: () => ({}) }
+  const base = { CONTROL_DB: db, TENANT_DB_DEFAULT: db, PERSISTENCE_MODE: "d1", EXTERNAL_ACTIONS_ENABLED: "false" }
+
+  for (const value of [undefined, "", "   ", ",,", "not-a-url", "https://x/path", "https://x/", "*", "https://*.example.com", "example.com", "https://a@b.example.com"]) {
+    const raw = { ...base, ...(value === undefined ? {} : { ALLOWED_ORIGINS: value }) }
+    const result = resolveValidatedRequestRuntimeConfig({ rawEnv: raw as never })
+    assert.equal(result.ok, false, `ALLOWED_ORIGINS=${JSON.stringify(value)} must fail closed`)
+    if (!result.ok) assert.equal(result.error, "malformed_trusted_origins", JSON.stringify(value))
+  }
+
+  const ok = resolveValidatedRequestRuntimeConfig({
+    rawEnv: { ...base, ALLOWED_ORIGINS: "https://app.example.com, https://admin.example.com:8443 , https://app.example.com" } as never,
+  })
+  assert.equal(ok.ok, true)
+  if (!ok.ok) return
+  // Validated, deduplicated, frozen — and order-preserving.
+  assert.deepEqual([...ok.runtime.security.trustedOrigins], ["https://app.example.com", "https://admin.example.com:8443"])
+  assert.equal(Object.isFrozen(ok.runtime.security.trustedOrigins), true)
+  assert.throws(() => { (ok.runtime.security.trustedOrigins as string[]).push("https://evil.test") })
+})
+
+test("15. local development defaults trusted origins to localhost but still fails closed on a malformed value", () => {
+  const empty = resolveValidatedRequestRuntimeConfig({ rawEnv: {} as never, production: false, processEnv: {} })
+  assert.equal(empty.ok, true)
+  if (empty.ok) assert.deepEqual([...empty.runtime.security.trustedOrigins], ["http://localhost:3000"])
+
+  const explicit = resolveValidatedRequestRuntimeConfig({ rawEnv: {} as never, production: false, processEnv: { ALLOWED_ORIGINS: "http://localhost:4000" } })
+  assert.equal(explicit.ok, true)
+  if (explicit.ok) assert.deepEqual([...explicit.runtime.security.trustedOrigins], ["http://localhost:4000"])
+
+  const malformed = resolveValidatedRequestRuntimeConfig({ rawEnv: {} as never, production: false, processEnv: { ALLOWED_ORIGINS: "http://localhost:4000/app" } })
+  assert.equal(malformed.ok, false)
+  if (!malformed.ok) assert.equal(malformed.error, "malformed_trusted_origins")
+})
+
+test("16. two requests with different ALLOWED_ORIGINS cannot observe each other's allowlist", () => {
+  const db = { prepare: () => ({}) }
+  const base = { CONTROL_DB: db, TENANT_DB_DEFAULT: db, PERSISTENCE_MODE: "d1", EXTERNAL_ACTIONS_ENABLED: "false" }
+  const a = resolveValidatedRequestRuntimeConfig({ rawEnv: { ...base, ALLOWED_ORIGINS: "https://a.example.com" } as never })
+  const b = resolveValidatedRequestRuntimeConfig({ rawEnv: { ...base, ALLOWED_ORIGINS: "https://b.example.com" } as never })
+  assert.equal(a.ok && b.ok, true)
+  if (!a.ok || !b.ok) return
+  assert.deepEqual([...a.runtime.security.trustedOrigins], ["https://a.example.com"])
+  assert.deepEqual([...b.runtime.security.trustedOrigins], ["https://b.example.com"])
 })

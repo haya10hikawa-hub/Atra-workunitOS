@@ -29,7 +29,7 @@ async function withToolsPersistence(fn: (db: FakeD1Database) => Promise<void>) {
   const db = new FakeD1Database()
   const backup = { ...process.env }
   try {
-    process.env.NODE_ENV = "development"
+    Object.assign(process.env, { NODE_ENV: "development" })
     process.env.AUTH_ADAPTER = "dev"
     process.env.ALLOW_DEV_SESSION = "true"
     process.env.ALLOW_DEV_WORKSPACE_BOOTSTRAP = "true"
@@ -48,7 +48,7 @@ async function withToolsPersistence(fn: (db: FakeD1Database) => Promise<void>) {
 function toolsRequest(body: unknown): Request {
   return new Request("http://localhost:3000/api/workunit/tools", {
     method: "POST",
-    headers: { "content-type": "application/json", origin: "http://localhost:3000" },
+    headers: { Host: "localhost:3000", "content-type": "application/json", Origin: "http://localhost:3000" },
     body: JSON.stringify(body),
   })
 }

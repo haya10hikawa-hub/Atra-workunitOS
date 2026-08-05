@@ -130,9 +130,12 @@ async function seedApproval(tenant: TenantId = tenantId, status: ApprovalRecordR
 }
 
 function request(auth?: string): Request {
-  const headers: Record<string, string> = { "Content-Type": "application/json", Origin: "http://localhost:3000" }
+  // `Host` is explicit: the mutation guard binds the target host and Node's
+  // Request does not populate it from the URL. A missing Host is itself a
+  // fail-closed rejection, so it must be set when probing something else.
+  const headers: Record<string, string> = { Host: "localhost:3000", "Content-Type": "application/json", Origin: "http://localhost:3000" }
   if (auth) headers.Authorization = auth
-  return new Request(`http://localhost/api/workunit/${workUnitId}/execution/dry-run`, {
+  return new Request(`http://localhost:3000/api/workunit/${workUnitId}/execution/dry-run`, {
     method: "POST", headers, body: JSON.stringify({ workUnitId, previewRefs: [{ actionId: "a1", previewId }], requestedActionType: actionType }),
   })
 }

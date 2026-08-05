@@ -108,10 +108,13 @@ async function seedApproval(
 }
 
 function makeRequest(workUnitId: string, body: unknown): Request {
-  return new Request(`http://localhost/api/workunit/${workUnitId}/execution/dry-run`, {
+  return new Request(`http://localhost:3000/api/workunit/${workUnitId}/execution/dry-run`, {
     method: "POST",
-    // Same-origin header required: the route enforces CSRF via validateCsrfOrigin.
-    headers: { "Content-Type": "application/json", Origin: "http://localhost:3000" },
+    // Same-origin headers required: the route enforces request integrity via
+    // checkMutationRequestIntegrity, which binds the target Host as well as the
+    // Origin. Node's Request does not populate Host from the URL, so it is set
+    // explicitly; a missing Host is itself a fail-closed rejection.
+    headers: { Host: "localhost:3000", "Content-Type": "application/json", Origin: "http://localhost:3000" },
     body: JSON.stringify(body),
   })
 }
@@ -156,7 +159,7 @@ test("dry-run rejects request with missing Origin and Referer (fail closed)", as
   await withPersistence(async () => {
     await seedApproval({ tenantId, workUnitId, status: "approved" })
     // No Origin/Referer header — must be rejected before session/approval logic.
-    const request = new Request(`http://localhost/api/workunit/${workUnitId}/execution/dry-run`, {
+    const request = new Request(`http://localhost:3000/api/workunit/${workUnitId}/execution/dry-run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -175,9 +178,9 @@ test("dry-run rejects request with missing Origin and Referer (fail closed)", as
 test("dry-run rejects cross-site Origin", async () => {
   await withPersistence(async () => {
     await seedApproval({ tenantId, workUnitId, status: "approved" })
-    const request = new Request(`http://localhost/api/workunit/${workUnitId}/execution/dry-run`, {
+    const request = new Request(`http://localhost:3000/api/workunit/${workUnitId}/execution/dry-run`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Origin: "https://evil.example.com" },
+      headers: { Host: "localhost:3000", "Content-Type": "application/json", Origin: "https://evil.example.com" },
       body: JSON.stringify({
         workUnitId,
         previewRefs: [{ actionId: "action:1", previewId }],
@@ -195,9 +198,9 @@ test("dry-run rejects cross-site Origin", async () => {
 
 test("dry-run rejects invalid JSON", async () => {
   await withPersistence(async () => {
-    const request = new Request(`http://localhost/api/workunit/${workUnitId}/execution/dry-run`, {
+    const request = new Request(`http://localhost:3000/api/workunit/${workUnitId}/execution/dry-run`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Origin: "http://localhost:3000" },
+      headers: { Host: "localhost:3000", "Content-Type": "application/json", Origin: "http://localhost:3000" },
       body: "not json",
     })
     const response = await POST(request, { params: Promise.resolve({ id: workUnitId }) })

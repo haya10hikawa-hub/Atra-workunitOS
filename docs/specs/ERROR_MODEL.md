@@ -116,6 +116,34 @@ type ApiFailureWithClientHint = {
 | Client recover   | Yes — user can fix and resubmit          |
 | Domain stage     | Any (validation is the first gate)       |
 
+#### 5.1.1 Non-400 statuses carried by `invalid_request`
+
+`invalid_request` is the code for several request-integrity rejections that do
+**not** return 400. Status and code are deliberately decoupled — established
+precedent, since every mutation route already returns 413 `invalid_request` for
+an oversized payload. **No new safe error code is introduced**; the wire
+vocabulary remains 17 members.
+
+| Status | When returned | Source |
+| ------ | ------------- | ------ |
+| **400** | JSON parse failure, validation failure, missing fields, **unsupported or missing `Content-Type`** | route / `readBoundedJsonObject` / mutation guard step 6 |
+| **405** | **Unsupported HTTP method on a mutation route** | mutation guard step 1, on direct handler invocation — see below |
+| **413** | Oversized payload — declared `Content-Length` above the route limit, or a chunked body exceeding the streaming cap | mutation guard step 5 / `readBoundedJsonObject` |
+
+**Content-Type (400).** Only `application/json`, optionally with
+`charset=utf-8`, is accepted on a mutation route; `text/plain` is rejected
+specifically because it is a CORS-simple type a cross-origin caller can send
+with no preflight.
+
+**Method (405).** Two distinct paths produce a 405 and must not be conflated: an
+**actual** unsupported HTTP request to a module exporting only `POST` is rejected
+by the framework dispatcher **before** the handler runs, and that response is
+**not** this envelope; **direct invocation** with a non-POST `Request` reaches
+the guard's method check and returns 405 `invalid_request` in the standard
+envelope.
+
+See `docs/architecture/HTTP_MUTATION_GUARD.md`.
+
 ### 5.2 `unauthorized`
 
 | Attribute        | Value                                    |

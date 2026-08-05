@@ -4,7 +4,7 @@ import { validateToolBackendRequest } from "../../../lib/toolBackendValidation.t
 import { areExternalActionsEnabled, isExternalOperation } from "../../../lib/security/externalActions.ts"
 import { getSafeErrorStatus, safeError, toSafeErrorCode } from "../../../lib/security/safeErrors.ts"
 import { getSessionErrorStatus, requireSession, type Session } from "../../../lib/security/session.ts"
-import { validateCsrfOrigin } from "../../../lib/security/csrfProtection.ts"
+import { checkMutationRequestIntegrity, readGuardedJsonBody } from "../../../lib/security/httpMutationGuard.ts"
 import { resolveRequestId } from "../../../lib/security/routeGuards.ts"
 import { checkRateLimit, getTrustedClientIp } from "../../../lib/security/rateLimitGate.ts"
 import { hasPermission } from "../../../lib/security/rbac.ts"
@@ -12,7 +12,6 @@ import { writeAuditLog, type AuditEventKind, type AuditEvent } from "../../../li
 import { recordAuditEvent } from "../../../lib/security/auditPersistence.ts"
 import type { WorkUnitPermission } from "../../../lib/security/policy.ts"
 import type { ToolBackendOperation, ToolBackendRequest } from "../../../types/toolBackend.ts"
-import { readBoundedJsonObject } from "../../../lib/security/requestBody.ts"
 
 // LLM pipeline imports
 import { processWorkSignal } from "../../../lib/llm/processWorkSignal.ts"
@@ -44,6 +43,9 @@ import {
 // Phase 5A: CSRF, rate limit, and role fail-closed hardening applied above
 
 // ─── Operation → Permission Mapping ─────────────────────────────
+
+// Preserved verbatim: readBoundedJsonObject's default maxBytes (64 KiB).
+const BODY_LIMITS = { maxBytes: 64 * 1024 } as const
 
 const OPERATION_PERMISSION: Record<ToolBackendOperation, WorkUnitPermission> = {
   ingest:       "workunit.create",
@@ -119,19 +121,11 @@ export async function GET(request: Request): Promise<NextResponse> {
 export async function POST(request: Request): Promise<NextResponse> {
   const requestId = resolveRequestId(request)
 
-  // ── 1. CSRF / Origin protection ─────────────────────────────
-  const csrf = validateCsrfOrigin(request)
-  if (!csrf.ok) {
-    audit("workunit_tools_csrf_blocked" as AuditEventKind, requestId, { reason: csrf.reason })
-    return errorResponse(requestId, csrf.reason, 403)
-  }
-
-  // ── 2. Audit: request received ──────────────────────────────
-  audit("tool_request_received", requestId)
-
-  // ── 2b. Resolve the request-scoped runtime config ONCE ──────
-  // Auth, security (kill switch), LLM, and persistence all derive from this one
-  // frozen snapshot. A config error (malformed Cloudflare env) fails closed.
+  // ── 0. Resolve the request-scoped runtime config ONCE, FIRST ─
+  // Auth, security (kill switch + trusted origins), LLM, and persistence all
+  // derive from this one frozen snapshot. A config error (malformed Cloudflare
+  // env) fails closed. It resolves before request integrity because the guard's
+  // trusted-origin policy is a projection of it.
   const runtimeResult = resolveValidatedRequestRuntimeConfig()
   if (!runtimeResult.ok) {
     audit("integration_missing" as AuditEventKind, requestId, { reason: "runtime_config_invalid" })
@@ -139,7 +133,21 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
   const runtime = runtimeResult.runtime
 
-  // ── 3. Session boundary ─────────────────────────────────────
+  // ── 1–6. Request integrity (header-only, synchronous) ───────
+  const integrity = checkMutationRequestIntegrity(request, {
+    method: "POST",
+    trustedOrigins: runtime.security.trustedOrigins,
+    maxBytes: BODY_LIMITS.maxBytes,
+  })
+  if (!integrity.ok) {
+    audit("workunit_tools_csrf_blocked" as AuditEventKind, requestId, { reason: integrity.category })
+    return errorResponse(requestId, integrity.error, integrity.status)
+  }
+
+  // ── Audit: request received ─────────────────────────────────
+  audit("tool_request_received", requestId)
+
+  // ── 7. Authentication ───────────────────────────────────────
   const sessionResult = await requireSession(request, runtime)
   if (!sessionResult.ok) {
     audit("auth_required", requestId, { reason: sessionResult.reason })
@@ -151,7 +159,10 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
   const session = sessionResult.session
 
-  // ── 4. Rate limit gate ──────────────────────────────────────
+  // ── 8–9. Tenant authority is the verified session's tenantId (this route
+  //        resolves repositories lazily, on the paths that need them), then the
+  //        rate limit — after authentication, before the body read and before
+  //        the operation-derived RBAC check below.
   const clientIp = getTrustedClientIp(request)
   const rateResult = checkRateLimit({
     tenantId: session.tenantId,
@@ -164,15 +175,18 @@ export async function POST(request: Request): Promise<NextResponse> {
     return errorResponse(requestId, "rate_limited", 429)
   }
 
-  // ── 5. Parse JSON as unknown ────────────────────────────────
-  const bodyResult = await readBoundedJsonObject(request)
+  // ── 11–12. Body read and JSON parse ─────────────────────────
+  // NOTE: unlike the other four mutation routes, this route's required
+  // permission is DERIVED FROM THE BODY (`OPERATION_PERMISSION[operation]`), so
+  // RBAC cannot precede the body read here. The rate limit still precedes both.
+  const bodyResult = await readGuardedJsonBody(request, BODY_LIMITS)
   if (!bodyResult.ok) {
     audit("tool_request_rejected", requestId, { reason: bodyResult.reason })
     return errorResponse(requestId, "invalid_request", bodyResult.reason === "payload_too_large" ? 413 : 400)
   }
   const body: unknown = bodyResult.value
 
-  // ── 4. Runtime validation ─────────────────────────────────────
+  // ── 13. Domain validation ─────────────────────────────────────
   const validation = validateToolBackendRequest(body)
   if (!validation.ok) {
     audit("tool_request_rejected", requestId, { reason: "validation_failed" })
@@ -181,7 +195,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   audit("tool_request_validated", requestId)
   const { request: validated } = validation
 
-  // ── 5. RBAC — map operation to required permission ────────────
+  // ── 10. Route-specific RBAC (operation-derived; see note above) ─
   const requiredPermission = OPERATION_PERMISSION[validated.operation]
   if (!hasPermission(session, requiredPermission)) {
     audit("rbac_denied", requestId, {

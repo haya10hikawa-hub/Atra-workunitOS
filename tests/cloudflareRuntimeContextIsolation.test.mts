@@ -17,6 +17,10 @@ function cloudflareEnv(tag: string): AppEnv {
     PERSISTENCE_MODE: "d1",
     EXTERNAL_ACTIONS_ENABLED: "false",
     ALLOW_LEGACY_INGEST_FALLBACK: "false",
+    // WU-02S: a Cloudflare production runtime REQUIRES a validated
+    // trusted-origin list; its absence is a fail-closed config error. Tagged
+    // per-env so the isolation assertions can also observe origin separation.
+    ALLOWED_ORIGINS: `https://${tag.toLowerCase()}.example.com`,
   } as unknown as AppEnv
 }
 
