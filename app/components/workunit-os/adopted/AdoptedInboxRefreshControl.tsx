@@ -15,9 +15,11 @@ export function AdoptedInboxRefreshControl({ presentation, onRefresh }: {
   presentation: InboxRefreshPresentation
   onRefresh: () => void
 }) {
-  const { state } = presentation
+  // ONE reading of the presentation, inside the model's fail-closed envelope. `state` is the
+  // NORMALIZED state that produced this copy, so the button and the message can never
+  // describe different presentations, and this component never touches `presentation` itself.
+  const { state, copy, tone } = refreshCopy(presentation)
   const busy = state === "REFRESHING"
-  const { copy, tone } = refreshCopy(presentation)
 
   return (
     <div className={styles.refreshRow}>

@@ -516,3 +516,108 @@ test("T40 the unknown outcome stays count-free and the control has no optional c
   assert.match(control, /refreshCopy\(presentation\)/)
   for (const file of [CONTROL, DASHBOARD]) assert.equal((await source(file)).includes("refreshed={"), false, file)
 })
+
+// ─── Runtime normalization boundary: F-A, F-B, F-C and reviewer probe R10 ───────────
+//
+// The boundary's contract is "never throws, echoes nothing". These tests hold it to that
+// for arbitrary JavaScript input, not merely for the typed union.
+
+/**
+ * Calls the boundary and REPORTS what happened, so a throw becomes an assertion-shaped
+ * failure comparing `{ threw }` against the honest outcome, never a crashed test file.
+ */
+const copyOutcome = (input: unknown): unknown => {
+  try { return refreshCopy(input as InboxRefreshPresentation) } catch (error) { return { threw: String(error) } }
+}
+
+/** Inherited and unrecognized names. `state in table` answered `true` for the first five. */
+const UNRECOGNIZED_STATES = ["toString", "__proto__", "constructor", "valueOf", "hasOwnProperty", "NOT_A_STATE", ""]
+
+test("T41 a throwing getter or Proxy trap never escapes refreshCopy", () => {
+  const boom = (): never => { throw new Error("ACCESSOR-BOOM-K3") }
+  const passthrough = (t: object, key: string | symbol) => (t as Record<string | symbol, unknown>)[key]
+  const inputs: unknown[] = [
+    { get state() { return boom() }, refreshed: 3 },
+    { state: "SUCCESS", get refreshed() { return boom() } },
+    new Proxy({ state: "SUCCESS", refreshed: 3 }, { get: (t, key) => (key === "state" ? boom() : passthrough(t, key)) }),
+    new Proxy({ state: "SUCCESS", refreshed: 3 }, { get: (t, key) => (key === "refreshed" ? boom() : passthrough(t, key)) }),
+    new Proxy({ state: "SUCCESS", refreshed: 3 }, { get: () => boom(), has: () => true, ownKeys: () => boom() }),
+  ]
+  for (const [index, input] of inputs.entries()) {
+    assert.deepEqual(copyOutcome(input), honest, `throwing input #${index} must degrade, not throw`)
+    assert.equal(JSON.stringify(copyOutcome(input)).includes("ACCESSOR-BOOM-K3"), false, "no raw accessor error is echoed")
+  }
+})
+
+test("T42 R10 — inherited and unrecognized state names cannot bypass normalization or index the copy table", async () => {
+  for (const state of UNRECOGNIZED_STATES) {
+    assert.deepEqual(copyOutcome({ state, refreshed: 5 }), honest, `state ${JSON.stringify(state)} with a count`)
+    assert.deepEqual(copyOutcome({ state }), honest, `state ${JSON.stringify(state)} without a count`)
+  }
+  // The recognition mechanism itself must be exact, never prototype membership.
+  const model = await source(MODEL)
+  assert.equal(/\bstate in [A-Z_]/.test(model), false, "membership via `in` must not decide recognition")
+  assert.match(model, /RECOGNIZED_STATES\.has\(value\)/, "recognition is exact own-key set membership")
+  assert.match(model, /new Set\(Object\.keys\(REFRESH_COPY\)\)/, "the recognized set cannot drift from the copy table")
+})
+
+test("T43 arbitrary untyped input degrades to the unknown outcome", () => {
+  const fn = () => "state"
+  const inputs: unknown[] = [undefined, null, true, false, 0, 1, "state", [], {}, fn, Symbol("state"),
+    { state: 7 }, { state: null }, { state: ["SUCCESS"] }, Object.create({ state: "SUCCESS" })]
+  for (const [index, input] of inputs.entries()) assert.deepEqual(copyOutcome(input), honest, `untyped input #${index}`)
+})
+
+test("T44 state and refreshed are each captured exactly once", () => {
+  let stateReads = 0
+  const flipState = { get state() { stateReads++; return stateReads === 1 ? "SUCCESS" : "NOT_A_STATE" }, refreshed: 4 }
+  assert.deepEqual(copyOutcome(flipState), refreshCopy(present("SUCCESS", 4)), "the first captured value is the one rendered")
+  assert.equal(stateReads, 1, "`state` must be read exactly once per normalization")
+
+  let countReads = 0
+  const flipCount = { state: "MATERIALIZED_RELOAD_FAILED", get refreshed() { countReads++; if (countReads > 1) throw new Error("SECOND-READ"); return 2 } }
+  assert.match((copyOutcome(flipCount) as { copy: string }).copy, /Materialized 2 mock WorkUnit rows, but/)
+  assert.equal(countReads, 1, "`refreshed` must be read exactly once per normalization")
+
+  // Mutating the input after normalization cannot alter what was already rendered.
+  const mutable = { state: "SUCCESS", refreshed: 5 }
+  const rendered = refreshCopy(mutable as unknown as InboxRefreshPresentation)
+  mutable.state = "IDLE"
+  mutable.refreshed = 999
+  assert.match(rendered.copy, /Materialized 5 mock WorkUnit rows/)
+})
+
+test("T45 recognized states keep their counts, their boundaries and their copy", () => {
+  assert.deepEqual(refreshCopy(present("SUCCESS", 0)), honest, "0 is below SUCCESS's minimum of 1")
+  assert.match(refreshCopy(present("SUCCESS", 1)).copy, /Materialized 1 mock WorkUnit rows\./)
+  assert.match(refreshCopy(present("SUCCESS", 42)).copy, /Materialized 42 mock WorkUnit rows\./)
+  assert.deepEqual(refreshCopy(present("MATERIALIZED_RELOAD_FAILED", -1)), honest, "-1 is below the minimum of 0")
+  assert.match(refreshCopy(present("MATERIALIZED_RELOAD_FAILED", 0)).copy, /Materialized 0 mock WorkUnit rows, but/)
+  assert.match(refreshCopy(present("MATERIALIZED_RELOAD_FAILED", 42)).copy, /Materialized 42 mock WorkUnit rows, but/)
+  // Every recognized state reports ITSELF, so the button can never describe another state's copy.
+  for (const state of ALL_STATES) {
+    const rendered = refreshCopy(present(state, 3))
+    assert.equal(rendered.state, state, `${state} must round-trip through normalization`)
+    assert.ok(rendered.copy.length > 0, state)
+  }
+})
+
+test("T46 no unknown input value is ever echoed into copy", () => {
+  const marker = "ECHO-MARKER-V4"
+  const inputs: unknown[] = [{ state: marker }, { state: marker, refreshed: 1 }, { state: "SUCCESS", refreshed: marker },
+    { state: "MATERIALIZED_RELOAD_FAILED", refreshed: marker }, { get state() { throw new Error(marker) } }]
+  for (const [index, input] of inputs.entries()) {
+    assert.equal(JSON.stringify(copyOutcome(input)).includes(marker), false, `input #${index} leaked its value`)
+  }
+})
+
+test("T47 the control renders from one normalized reading of the presentation", async () => {
+  const control = await source(CONTROL)
+  assert.match(control, /const \{ state, copy, tone \} = refreshCopy\(presentation\)/, "one destructured normalized reading")
+  assert.equal(/presentation\.state|\{ state \} = presentation/.test(control), false, "the control must not read presentation.state itself")
+  assert.equal((control.match(/refreshCopy\(/g) ?? []).length, 1, "exactly one boundary call on the render path")
+  // The state the button acts on is the state that produced the copy.
+  assert.equal(canSubmitRefresh(refreshCopy(present("REFRESHING")).state), false)
+  assert.equal(canSubmitRefresh(refreshCopy(present("NOT_A_STATE" as InboxRefreshState)).state), true,
+    "an unrecognized state degrades to the submittable unknown outcome, not to a wedged control")
+})

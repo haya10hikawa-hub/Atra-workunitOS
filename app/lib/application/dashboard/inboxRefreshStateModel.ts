@@ -91,12 +91,21 @@ export const REFRESH_PROVENANCE =
 export const REFRESH_BUTTON_LABEL = "Refresh (mock data)"
 
 /**
- * Copy table. An entry is a plain string OR a function of the verified count.
- * `MATERIALIZATION_OUTCOME_UNKNOWN` is a plain string BY CONSTRUCTION, so no count
- * can be rendered there even by a later careless edit — there is no count to tell
- * the truth with, and a stale or fabricated one would be a false claim.
+ * Copy table. The entry type is DERIVED FROM the state: a count-bearing state's entry is
+ * a function of the verified count, and every other state's entry is a plain string. That
+ * mapping is what lets `refreshCopy` pick a branch from the discriminant alone, with no
+ * cast and no default count. `MATERIALIZATION_OUTCOME_UNKNOWN` is a plain string BY
+ * CONSTRUCTION, so no count can be rendered there even by a later careless edit — there is
+ * no count to tell the truth with, and a stale or fabricated one would be a false claim.
  */
-const REFRESH_COPY: Record<InboxRefreshState, { tone: InboxRefreshTone; text: string | ((refreshed: number) => string) }> = {
+type RefreshCopyTable = {
+  [S in InboxRefreshState]: {
+    tone: InboxRefreshTone
+    text: S extends CountBearingRefreshState ? (refreshed: number) => string : string
+  }
+}
+
+const REFRESH_COPY: RefreshCopyTable = {
   IDLE: { tone: "neutral", text: "Not yet refreshed this session." },
   REFRESHING: { tone: "busy", text: "Refreshing…" },
   SUCCESS: { tone: "success", text: (n) => `Materialized ${n} mock WorkUnit rows. The list was re-read from the server.` },
@@ -148,28 +157,70 @@ export function canSubmitRefresh(state: InboxRefreshState): boolean {
 /** `SUCCESS` claims rows were materialized, so its count must be at least one. */
 const MINIMUM_RENDERABLE_COUNT: Record<CountBearingRefreshState, number> = { SUCCESS: 1, MATERIALIZED_RELOAD_FAILED: 0 }
 
+/** The truthful outcome every unprovable presentation degrades to. Frozen: it is returned by reference. */
+const UNKNOWN_PRESENTATION: InboxRefreshPresentation = Object.freeze({ state: "MATERIALIZATION_OUTCOME_UNKNOWN" })
+
+/**
+ * EXACT, own-only state recognition. `state in table` was the defect: `in` walks the
+ * prototype chain, so `toString`, `__proto__`, `constructor`, `valueOf` and
+ * `hasOwnProperty` all answered `true` and reached the copy lookup. `Object.keys`
+ * yields own enumerable keys only, and `Set.has` is exact — an inherited name can
+ * never be recognized, and the set cannot drift from the copy table it is built from.
+ */
+const RECOGNIZED_STATES: ReadonlySet<string> = new Set(Object.keys(REFRESH_COPY))
+
+const isRecognizedState = (value: unknown): value is InboxRefreshState =>
+  typeof value === "string" && RECOGNIZED_STATES.has(value)
+
+/** Explicit equality, never membership: the two states whose copy needs a verified count. */
+const isCountBearing = (state: InboxRefreshState): state is CountBearingRefreshState =>
+  state === "SUCCESS" || state === "MATERIALIZED_RELOAD_FAILED"
+
 /**
  * The runtime fail-closed boundary. The type above makes an absent count unrepresentable,
  * but types are erased: a JavaScript caller, a cast or a later refactor can still hand this
- * module `SUCCESS` with nothing to count. There is no honest number to print then — `0` is a
- * specific false claim, indistinguishable from a genuine `EMPTY` — so it degrades to the
- * truthful unknown-outcome state, whose copy is count-free by construction. A freshly built
- * value is returned, so a stray count cannot reach the copy either. Never throws, echoes nothing.
+ * module `SUCCESS` with nothing to count, an unrecognized state name, a getter that throws,
+ * or a Proxy that answers differently on each read. There is no honest number to print then
+ * — `0` is a specific false claim, indistinguishable from a genuine `EMPTY` — so every such
+ * input degrades to the truthful unknown-outcome state, whose copy is count-free by
+ * construction. A freshly built value is returned, so a stray count cannot reach the copy.
+ *
+ * Never throws, echoes nothing. That contract is enforced three ways, not asserted:
+ *   - the WHOLE read-and-validate body sits inside one try/catch, so a throwing accessor or
+ *     Proxy trap becomes the unknown outcome instead of an exception on the render path;
+ *   - `state` and `refreshed` are each read EXACTLY ONCE into a local, so a value that
+ *     changes between reads cannot be validated as one thing and rendered as another;
+ *   - nothing derived from the input reaches the returned value except a recognized state
+ *     and a validated safe integer.
  */
 function normalizePresentation(presentation: InboxRefreshPresentation): InboxRefreshPresentation {
-  const state = presentation.state
-  if (!(state in MINIMUM_RENDERABLE_COUNT)) return { state } as InboxRefreshPresentation
-  const counted = state as CountBearingRefreshState
-  const refreshed = (presentation as { refreshed?: unknown }).refreshed
-  if (typeof refreshed !== "number" || !Number.isSafeInteger(refreshed) || refreshed < MINIMUM_RENDERABLE_COUNT[counted]) return { state: "MATERIALIZATION_OUTCOME_UNKNOWN" }
-  return { state: counted, refreshed }
+  try {
+    const state: unknown = (presentation as { state?: unknown } | null | undefined)?.state
+    if (!isRecognizedState(state)) return UNKNOWN_PRESENTATION
+    if (!isCountBearing(state)) return { state }
+    const refreshed: unknown = (presentation as { refreshed?: unknown }).refreshed
+    if (typeof refreshed !== "number" || !Number.isSafeInteger(refreshed) || refreshed < MINIMUM_RENDERABLE_COUNT[state]) return UNKNOWN_PRESENTATION
+    return { state, refreshed }
+  } catch {
+    // A throwing accessor or Proxy trap proves nothing about the outcome, and its message
+    // is caller-controlled text. Neither is rethrown, logged or rendered.
+    return UNKNOWN_PRESENTATION
+  }
 }
 
-export function refreshCopy(presentation: InboxRefreshPresentation): { copy: string; tone: InboxRefreshTone } {
+/**
+ * Returns the normalized state alongside its copy so the control renders from ONE reading
+ * of the presentation: the render path never touches `presentation.state` itself.
+ */
+export function refreshCopy(presentation: InboxRefreshPresentation): { state: InboxRefreshState; copy: string; tone: InboxRefreshTone } {
   const normalized = normalizePresentation(presentation)
+  // The discriminant alone selects the branch. `RefreshCopyTable` derives the entry type
+  // from the state, so the count-bearing branch gets a function and every other branch a
+  // string — no cast, no unchecked index, and no default count to fabricate.
+  if (normalized.state === "SUCCESS" || normalized.state === "MATERIALIZED_RELOAD_FAILED") {
+    const entry = REFRESH_COPY[normalized.state]
+    return { state: normalized.state, copy: entry.text(normalized.refreshed), tone: entry.tone }
+  }
   const entry = REFRESH_COPY[normalized.state]
-  // A function entry belongs only to a count-bearing state, which normalization has
-  // already proved carries a verified, renderable count.
-  if (typeof entry.text !== "string") return { copy: entry.text((normalized as { refreshed: number }).refreshed), tone: entry.tone }
-  return { copy: entry.text, tone: entry.tone }
+  return { state: normalized.state, copy: entry.text, tone: entry.tone }
 }
