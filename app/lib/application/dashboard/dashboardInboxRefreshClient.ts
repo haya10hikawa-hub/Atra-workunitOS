@@ -33,18 +33,19 @@ export type InboxRefreshTransportResult =
 
 const INDETERMINATE = { kind: "indeterminate" } as const
 
+/**
+ * No caller may choose a source: the experiment owns exactly one — the one the dashboard
+ * projects — so the body is built here and no production surface can request another.
+ */
 export async function requestInboxRefresh(
-  options: { source?: string } = {},
   fetchImpl: typeof fetch = fetch,
 ): Promise<InboxRefreshTransportResult> {
-  const source = options.source ?? DASHBOARD_INBOX_SOURCE
-
   let response: Response
   try {
     response = await fetchImpl(DASHBOARD_INBOX_REFRESH_PATH, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ source }),
+      body: JSON.stringify({ source: DASHBOARD_INBOX_SOURCE }),
     })
   } catch {
     // The request may or may not have reached the server. Nothing is provable.
@@ -65,6 +66,10 @@ export async function requestInboxRefresh(
     if (!hasExactKeys(body, ["ok", "requestId", "refreshed", "source"])) return INDETERMINATE
     if (body.ok !== true || typeof body.requestId !== "string") return INDETERMINATE
     if (typeof refreshed !== "number" || !Number.isSafeInteger(refreshed) || refreshed < 0) return INDETERMINATE
+    // The count and the projection about to be shown are per-source quantities, and a key-set
+    // check does not bind the VALUE: an echo naming any other source would report one source's
+    // count beside another source's list.
+    if (body.source !== DASHBOARD_INBOX_SOURCE) return INDETERMINATE
     return { kind: "verified_success", refreshed }
   }
 

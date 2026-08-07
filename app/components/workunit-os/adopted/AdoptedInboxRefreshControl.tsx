@@ -5,17 +5,19 @@
 // reach the DOM through this component.
 
 import {
-  REFRESH_BUTTON_LABEL, REFRESH_PROVENANCE, canSubmitRefresh, refreshCopy, type InboxRefreshState,
+  REFRESH_BUTTON_LABEL, REFRESH_PROVENANCE, canSubmitRefresh, refreshCopy, type InboxRefreshPresentation,
 } from "@/lib/application/dashboard/inboxRefreshStateModel"
 import styles from "./AdoptedWorkUnitDashboard.module.css"
 
-export function AdoptedInboxRefreshControl({ state, refreshed, onRefresh }: {
-  state: InboxRefreshState
-  refreshed?: number
+// One discriminated presentation value, never a state plus a separately optional count:
+// no prop combination here can ask for a fabricated number.
+export function AdoptedInboxRefreshControl({ presentation, onRefresh }: {
+  presentation: InboxRefreshPresentation
   onRefresh: () => void
 }) {
+  const { state } = presentation
   const busy = state === "REFRESHING"
-  const { copy, tone } = refreshCopy(state, refreshed)
+  const { copy, tone } = refreshCopy(presentation)
 
   return (
     <div className={styles.refreshRow}>

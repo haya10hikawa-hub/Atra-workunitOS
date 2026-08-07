@@ -1,4 +1,4 @@
-// WU-VAL-01 — flag-gated Inbox refresh experiment. Permanent charter T1–T32.
+// WU-VAL-01 — flag-gated Inbox refresh experiment. Permanent charter T1–T40.
 //
 // Transport and model behaviour runs against the REAL modules with an injected fetch.
 // The dashboard orchestration cannot be rendered (this repository has no DOM test
@@ -17,7 +17,7 @@ import {
 } from "../app/lib/application/dashboard/dashboardInboxRefreshClient.ts"
 import {
   KNOWN_PRE_WRITE_FAILURES, REFRESH_PROVENANCE, canSubmitRefresh, classifyProjectionReload,
-  classifyRefreshResponse, refreshCopy, type InboxRefreshState,
+  classifyRefreshResponse, refreshCopy, type InboxRefreshPresentation, type InboxRefreshState,
 } from "../app/lib/application/dashboard/inboxRefreshStateModel.ts"
 import { fetchDashboardWorkUnits } from "../app/lib/application/dashboard/dashboardDataClient.ts"
 
@@ -76,7 +76,7 @@ function recordingFetch(responses: Array<Response | Error>) {
  */
 async function runAttempt(responses: Array<Response | Error>, existingRows: string[] = ["row-a"]) {
   const { calls, impl } = recordingFetch(responses)
-  const stage1 = classifyRefreshResponse(await requestInboxRefresh({ source: DASHBOARD_INBOX_SOURCE }, impl))
+  const stage1 = classifyRefreshResponse(await requestInboxRefresh(impl))
   if (!stage1.reload) return { state: stage1.state as InboxRefreshState, rows: existingRows, refreshedCount: undefined, calls }
   let reloaded: string[] | null = null
   try {
@@ -87,6 +87,12 @@ async function runAttempt(responses: Array<Response | Error>, existingRows: stri
   const rows = stage2.applyRows && reloaded !== null ? reloaded : existingRows
   return { state: stage2.state as InboxRefreshState, rows, refreshedCount: stage1.refreshed, calls }
 }
+
+/** A presentation as an untrusted caller may build it — including combinations the type forbids. */
+const present = (state: InboxRefreshState, refreshed?: number) => ({ state, refreshed }) as unknown as InboxRefreshPresentation
+
+/** The truthful outcome every unrenderable count-bearing presentation must degrade to (T38, T39, T40). */
+const honest = refreshCopy(present(UNKNOWN))
 
 const sequence = (calls: Call[]) => calls.map((call) => `${call.method} ${call.url}`)
 const safeErrorBody = (status: number, code: string) => json({ ok: false, requestId: "r", error: code }, status)
@@ -162,7 +168,7 @@ test("T6 a second click cannot create a concurrent request", async () => {
   const attempt = async () => {
     if (inFlight.current) return
     inFlight.current = true
-    try { await requestInboxRefresh({ source: DASHBOARD_INBOX_SOURCE }, impl) } finally { inFlight.current = false }
+    try { await requestInboxRefresh(impl) } finally { inFlight.current = false }
   }
   await Promise.all([attempt(), attempt()])
   assert.equal(calls.length, 1, "the second synchronous invocation creates no request")
@@ -202,7 +208,7 @@ test("T10 raw server or provider error text is never rendered", async () => {
   const leaked = "totally-internal-detail-A1B2"
   const { state } = await runAttempt([json({ ok: false, requestId: leaked, error: leaked }, 403)])
   assert.equal(state, UNKNOWN)
-  for (const candidate of ALL_STATES) assert.equal(refreshCopy(candidate, 3).copy.includes(leaked), false, candidate)
+  for (const candidate of ALL_STATES) assert.equal(refreshCopy(present(candidate, 3)).copy.includes(leaked), false, candidate)
 })
 
 test("T11 mock provenance is visible before and after refresh", async () => {
@@ -211,7 +217,7 @@ test("T11 mock provenance is visible before and after refresh", async () => {
   assert.match(control, /<p className=\{styles\.refreshProvenance\}>\{REFRESH_PROVENANCE\}<\/p>/)
   assert.equal(/\?[^}]*REFRESH_PROVENANCE/.test(control), false, "provenance is rendered unconditionally")
   for (const candidate of ALL_STATES) {
-    const copy = refreshCopy(candidate, 4).copy.toLowerCase()
+    const copy = refreshCopy(present(candidate, 4)).copy.toLowerCase()
     for (const phrase of NEVER_CLAIMED) assert.equal(copy.includes(phrase), false, `${candidate} / ${phrase}`)
   }
 })
@@ -293,7 +299,7 @@ test("T19 partial success preserves the pre-existing rows by reference", async (
 })
 
 test("T20 partial success retains and displays the valid count", () => {
-  const { copy } = refreshCopy("MATERIALIZED_RELOAD_FAILED", 6)
+  const { copy } = refreshCopy(present("MATERIALIZED_RELOAD_FAILED", 6))
   assert.match(copy, /\b6\b/)
   assert.match(copy, /Materialized/)
   assert.match(copy, /could not be re-read/)
@@ -303,7 +309,7 @@ test("T21 no raw GET error, code, body or message reaches visible copy", async (
   const marker = "GET-LEAK-Z9Y8"
   const { state } = await runAttempt([okPost(3), json({ ok: false, requestId: marker, error: marker }, 500)])
   assert.equal(state, "MATERIALIZED_RELOAD_FAILED")
-  assert.equal(refreshCopy(state, 3).copy.includes(marker), false)
+  assert.equal(refreshCopy(present(state, 3)).copy.includes(marker), false)
   const body = await handleRefreshBody()
   assert.match(body, /rows !== null/, "the reload collapses to a boolean before the model")
   assert.equal(/result\.error|reloadResult\.error/.test(body), false)
@@ -333,12 +339,12 @@ test("T23 SUCCESS and EMPTY are only ever produced by stage 2", async () => {
   assert.equal(classifyProjectionReload(true, 1).state, "SUCCESS")
   assert.equal(classifyProjectionReload(true, 0).state, "EMPTY")
   const body = await handleRefreshBody()
-  assert.equal(/setRefreshState\("(SUCCESS|EMPTY)"\)/.test(body), false, "never assigned as a literal")
-  assert.match(body, /setRefreshState\(stage2\.state\)/)
+  assert.equal(/"(SUCCESS|EMPTY)"/.test(body), false, "never assigned as a literal")
+  assert.match(body, /setRefreshPresentation\(stage2\)/)
 })
 
 test("T24 partial-success copy contains no prohibited phrase", () => {
-  const copy = refreshCopy("MATERIALIZED_RELOAD_FAILED", 6).copy.toLowerCase()
+  const copy = refreshCopy(present("MATERIALIZED_RELOAD_FAILED", 6)).copy.toLowerCase()
   for (const phrase of PROHIBITED) assert.equal(copy.includes(phrase), false, phrase)
 })
 
@@ -396,7 +402,7 @@ test("T30 the unknown state preserves rows, shows no count, and issues nothing f
   assert.equal(refreshedCount, undefined)
   assert.deepEqual(sequence(calls), [POST_CALL], "zero GETs, zero retries")
   assert.equal((await handleRefreshBody()).split("requestInboxRefresh(").length - 1, 1, "no retry from the unknown state")
-  const { copy } = refreshCopy(UNKNOWN, 6)
+  const { copy } = refreshCopy(present(UNKNOWN, 6))
   assert.equal(/\d/.test(copy), false, "structurally count-free")
   assert.equal(copy.includes(marker), false)
   for (const phrase of PROHIBITED) assert.equal(copy.toLowerCase().includes(phrase), false, phrase)
@@ -419,11 +425,94 @@ test("T31 only a verified POST success reaches stage 2", async () => {
 })
 
 test("T32 unknown-state recovery names a page reload before another mutation", () => {
-  const { copy, tone } = refreshCopy(UNKNOWN)
+  const { copy, tone } = refreshCopy(present(UNKNOWN))
   assert.match(copy, /Reload the page/)
   assert.match(copy, /before trying again/)
   assert.equal(/\btry again\b/i.test(copy), false, "never an unqualified instruction to press Refresh again")
   assert.equal(tone, "indeterminate")
   const distinct = ["SUCCESS", "INTERNAL_FAILURE", "MATERIALIZED_RELOAD_FAILED"] as const
-  for (const other of distinct) assert.notEqual(tone, refreshCopy(other, 1).tone, other)
+  for (const other of distinct) assert.notEqual(tone, refreshCopy(present(other, 1)).tone, other)
+})
+
+test("T33 the production client exposes no caller-selectable source", async () => {
+  const client = await source(CLIENT)
+  assert.match(client, /export async function requestInboxRefresh\(\s*fetchImpl: typeof fetch = fetch,\s*\): Promise<InboxRefreshTransportResult>/)
+  assert.equal(/options|source\?:/.test(client), false, "no caller-supplied source parameter survives")
+  assert.match(client, /body: JSON\.stringify\(\{ source: DASHBOARD_INBOX_SOURCE \}\)/)
+  assert.match(await source(DASHBOARD), /requestInboxRefresh\(\)/, "the dashboard calls it with no source argument")
+  const { calls, impl } = recordingFetch([okPost(1)])
+  await requestInboxRefresh(impl)
+  assert.equal(String(calls[0].init?.body), '{"source":"all"}')
+})
+
+test("T34 a 200 response echoing the fixed source can become a verified success", async () => {
+  const { impl } = recordingFetch([okPost(7)])
+  assert.deepEqual(await requestInboxRefresh(impl), { kind: "verified_success", refreshed: 7 })
+  const { state, refreshedCount, calls } = await runAttempt([okPost(7), json({ workUnits: [{ id: "a" }] })])
+  assert.deepEqual({ state, refreshedCount, seq: sequence(calls) }, { state: "SUCCESS", refreshedCount: 7, seq: [POST_CALL, GET_CALL] })
+})
+
+/** The honest outcome for every unbound source: unknown, zero GETs, rows kept, no count. */
+const unbound = { state: UNKNOWN, seq: [POST_CALL], rows: ["row-a"], refreshedCount: undefined }
+const attemptWithSource = async (value: unknown) => {
+  const { state, calls, rows, refreshedCount } = await runAttempt([json({ ok: true, requestId: "r", refreshed: 7, source: value })])
+  return { state, seq: sequence(calls), rows, refreshedCount }
+}
+
+test("T35 a success response with a missing or non-string source is indeterminate", async () => {
+  const { state: missing } = await runAttempt([json({ ok: true, requestId: "r", refreshed: 7 })])
+  assert.equal(missing, UNKNOWN, "an absent source proves nothing")
+  for (const value of [12345, null, true, ["all"], { source: "all" }]) {
+    assert.deepEqual(await attemptWithSource(value), unbound, JSON.stringify(value))
+  }
+})
+
+test("T36 every mismatched response source is indeterminate and issues no projection GET", async () => {
+  for (const value of ["github", "slack", "calendar", "mock", "ALL", "all ", "", "TOTALLY-BOGUS"]) {
+    assert.deepEqual(await attemptWithSource(value), unbound, value)
+  }
+  assert.match(await source(CLIENT), /if \(body\.source !== DASHBOARD_INBOX_SOURCE\) return INDETERMINATE/)
+})
+
+test("T37 one presentation state structurally carries the verified count", async () => {
+  const model = await source(MODEL)
+  for (const shape of [/\| \{ state: CountBearingRefreshState; refreshed: number \}/, /\| \{ state: Exclude<InboxRefreshState, CountBearingRefreshState> \}/,
+    /\| \{ state: "SUCCESS"; refreshed: number; applyRows: true \}/, /\| \{ state: "MATERIALIZED_RELOAD_FAILED"; refreshed: number; applyRows: false \}/]) assert.match(model, shape)
+  assert.equal((classifyProjectionReload(false, 6) as { refreshed: number }).refreshed, 6, "stage 2 carries its own count")
+  assert.equal((classifyProjectionReload(true, 4) as { refreshed: number }).refreshed, 4)
+  assert.equal("refreshed" in classifyProjectionReload(true, 0), false, "EMPTY is count-free")
+  const dashboard = await source(DASHBOARD)
+  assert.deepEqual(dashboard.match(/useState<InboxRefresh\w*>/g), ["useState<InboxRefreshPresentation>"], "exactly one refresh state")
+  for (const banned of ["refreshedCount", "setRefreshState", "InboxRefreshState"]) {
+    assert.equal(dashboard.includes(banned), false, `${banned} must not survive as a separately mutable value`)
+  }
+})
+
+test("T38 SUCCESS without a verified positive count fails closed to the unknown outcome", async () => {
+  assert.equal(/\d|Materialized/.test(honest.copy), false, "the fail-closed copy states no count and claims nothing")
+  for (const invalid of [undefined, 0, -1, 1.5, NaN, Infinity, "7", null, Number.MAX_SAFE_INTEGER + 2]) {
+    assert.deepEqual(refreshCopy(present("SUCCESS", invalid as number)), honest, String(invalid))
+  }
+  assert.match(refreshCopy(present("SUCCESS", 1)).copy, /Materialized 1 mock WorkUnit rows/)
+  assert.equal((await source(MODEL)).includes("?? 0"), false, "no count default may return")
+})
+
+test("T39 MATERIALIZED_RELOAD_FAILED without a verified count fails closed to the unknown outcome", () => {
+  for (const invalid of [undefined, -1, 2.5, NaN, Infinity, "0", null, Number.MAX_SAFE_INTEGER + 2]) {
+    assert.deepEqual(refreshCopy(present("MATERIALIZED_RELOAD_FAILED", invalid as number)), honest, String(invalid))
+  }
+  // A VERIFIED zero is a different thing entirely, and stays truthfully renderable.
+  assert.match(refreshCopy(present("MATERIALIZED_RELOAD_FAILED", 0)).copy, /Materialized 0 mock WorkUnit rows, but/)
+})
+
+test("T40 the unknown outcome stays count-free and the control has no optional count prop", async () => {
+  for (const extraneous of [0, 6, 99, -1, NaN]) assert.deepEqual(refreshCopy(present(UNKNOWN, extraneous)), honest, String(extraneous))
+  for (const countFree of ALL_STATES.filter((state) => state !== "SUCCESS" && state !== "MATERIALIZED_RELOAD_FAILED")) {
+    assert.deepEqual(refreshCopy(present(countFree, 42)), refreshCopy(present(countFree)), countFree)
+  }
+  const control = await source(CONTROL)
+  assert.equal(/refreshed\?: number/.test(control), false, "no independently optional count prop")
+  assert.match(control, /presentation: InboxRefreshPresentation/)
+  assert.match(control, /refreshCopy\(presentation\)/)
+  for (const file of [CONTROL, DASHBOARD]) assert.equal((await source(file)).includes("refreshed={"), false, file)
 })

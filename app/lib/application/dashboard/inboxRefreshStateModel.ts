@@ -43,8 +43,22 @@ export type RefreshStage1Outcome =
   | { reload: true; refreshed: number }
   | { reload: false; state: KnownPreWriteFailureState | "MATERIALIZATION_OUTCOME_UNKNOWN" }
 
-/** Stage 2 — the ONLY producer of `SUCCESS`/`EMPTY`/`MATERIALIZED_RELOAD_FAILED`. */
-export type ProjectionReloadOutcome = { state: "SUCCESS" | "EMPTY" | "MATERIALIZED_RELOAD_FAILED"; applyRows: boolean }
+/** The two states whose copy makes a quantitative claim, and therefore needs a count. */
+export type CountBearingRefreshState = "SUCCESS" | "MATERIALIZED_RELOAD_FAILED"
+
+/**
+ * The ONE value the dashboard holds and the control renders. A count-bearing state cannot be
+ * written down without its verified count, so `SUCCESS` with no count is not expressible.
+ */
+export type InboxRefreshPresentation =
+  | { state: CountBearingRefreshState; refreshed: number }
+  | { state: Exclude<InboxRefreshState, CountBearingRefreshState> }
+
+/** Stage 2 — the ONLY producer of `SUCCESS`/`EMPTY`/`MATERIALIZED_RELOAD_FAILED`, and a presentation in its own right. */
+export type ProjectionReloadOutcome =
+  | { state: "SUCCESS"; refreshed: number; applyRows: true }
+  | { state: "EMPTY"; applyRows: true }
+  | { state: "MATERIALIZED_RELOAD_FAILED"; refreshed: number; applyRows: false }
 
 export type KnownPreWriteFailure = { status: number; code: string; state: KnownPreWriteFailureState }
 
@@ -122,16 +136,40 @@ export function classifyRefreshResponse(result: InboxRefreshTransportResult): Re
  * body to a boolean, so no server string can travel further.
  */
 export function classifyProjectionReload(reloadOk: boolean, refreshed: number): ProjectionReloadOutcome {
-  if (!reloadOk) return { state: "MATERIALIZED_RELOAD_FAILED", applyRows: false }
-  return { state: refreshed > 0 ? "SUCCESS" : "EMPTY", applyRows: true }
+  if (!reloadOk) return { state: "MATERIALIZED_RELOAD_FAILED", refreshed, applyRows: false }
+  if (refreshed > 0) return { state: "SUCCESS", refreshed, applyRows: true }
+  return { state: "EMPTY", applyRows: true }
 }
 
 export function canSubmitRefresh(state: InboxRefreshState): boolean {
   return state !== "REFRESHING"
 }
 
-export function refreshCopy(state: InboxRefreshState, refreshed?: number): { copy: string; tone: InboxRefreshTone } {
-  const entry = REFRESH_COPY[state]
-  const copy = typeof entry.text === "string" ? entry.text : entry.text(refreshed ?? 0)
-  return { copy, tone: entry.tone }
+/** `SUCCESS` claims rows were materialized, so its count must be at least one. */
+const MINIMUM_RENDERABLE_COUNT: Record<CountBearingRefreshState, number> = { SUCCESS: 1, MATERIALIZED_RELOAD_FAILED: 0 }
+
+/**
+ * The runtime fail-closed boundary. The type above makes an absent count unrepresentable,
+ * but types are erased: a JavaScript caller, a cast or a later refactor can still hand this
+ * module `SUCCESS` with nothing to count. There is no honest number to print then — `0` is a
+ * specific false claim, indistinguishable from a genuine `EMPTY` — so it degrades to the
+ * truthful unknown-outcome state, whose copy is count-free by construction. A freshly built
+ * value is returned, so a stray count cannot reach the copy either. Never throws, echoes nothing.
+ */
+function normalizePresentation(presentation: InboxRefreshPresentation): InboxRefreshPresentation {
+  const state = presentation.state
+  if (!(state in MINIMUM_RENDERABLE_COUNT)) return { state } as InboxRefreshPresentation
+  const counted = state as CountBearingRefreshState
+  const refreshed = (presentation as { refreshed?: unknown }).refreshed
+  if (typeof refreshed !== "number" || !Number.isSafeInteger(refreshed) || refreshed < MINIMUM_RENDERABLE_COUNT[counted]) return { state: "MATERIALIZATION_OUTCOME_UNKNOWN" }
+  return { state: counted, refreshed }
+}
+
+export function refreshCopy(presentation: InboxRefreshPresentation): { copy: string; tone: InboxRefreshTone } {
+  const normalized = normalizePresentation(presentation)
+  const entry = REFRESH_COPY[normalized.state]
+  // A function entry belongs only to a count-bearing state, which normalization has
+  // already proved carries a verified, renderable count.
+  if (typeof entry.text !== "string") return { copy: entry.text((normalized as { refreshed: number }).refreshed), tone: entry.tone }
+  return { copy: entry.text, tone: entry.tone }
 }
