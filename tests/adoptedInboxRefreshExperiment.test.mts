@@ -574,6 +574,15 @@ test("T44 state and refreshed are each captured exactly once", () => {
   assert.deepEqual(copyOutcome(flipState), refreshCopy(present("SUCCESS", 4)), "the first captured value is the one rendered")
   assert.equal(stateReads, 1, "`state` must be read exactly once per normalization")
 
+  // The count-bearing case above leaves the OTHER branch unpinned: a recognized
+  // count-free state returns early, and nine of the eleven states take that path. Re-reading
+  // `state` there would validate one name and return another, and the returned name then
+  // indexes the copy table unchecked — the F-A/F-B class this boundary exists to close.
+  let countFreeReads = 0
+  const flipCountFree = { get state() { countFreeReads++; return countFreeReads === 1 ? "IDLE" : "NOT_A_STATE" } }
+  assert.deepEqual(copyOutcome(flipCountFree), refreshCopy(present("IDLE")), "the first captured count-free state is the one rendered")
+  assert.equal(countFreeReads, 1, "`state` must be read exactly once on the count-free branch")
+
   let countReads = 0
   const flipCount = { state: "MATERIALIZED_RELOAD_FAILED", get refreshed() { countReads++; if (countReads > 1) throw new Error("SECOND-READ"); return 2 } }
   assert.match((copyOutcome(flipCount) as { copy: string }).copy, /Materialized 2 mock WorkUnit rows, but/)
