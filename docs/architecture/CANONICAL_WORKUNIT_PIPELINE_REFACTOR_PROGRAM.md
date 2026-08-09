@@ -8,6 +8,19 @@ Repository: `haya10hikawa-hub/Atra-workunitOS`
 
 Execution boundary: WU-00 only. No production path, schema, migration, or provider behavior is changed.
 
+## Authority Position
+
+This document is the ratified subordinate Technical / Domain Architecture Authority. The Primary Product / Roadmap Authority is `docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md`, ratified by the human PM as `ATRA_PHASE1_PLAN_AUTHORITY_RATIFIED_WITH_MODIFICATIONS`.
+
+The split is exact:
+
+- The Phase-1 Value Gate Program owns what to validate, phase order, Gate semantics, investment sequencing, the Phase-1 critical path, and deferred scope.
+- This document owns single canonical product-data truth, record ownership, projection boundaries, composition and dependency rules, the `Candidate != ReviewedWorkUnit` / `Preview != Approval` / `Approval != Execution` boundaries, the architecture ratchets, and bounded WorkUnit review discipline.
+
+**The WU-00 … WU-10 sequence below does not override Phase-1 Product Authority sequencing.** It is an architecture decomposition, not a product schedule. Where the two disagree about what to build next, the Phase-1 Value Gate Program governs; where they disagree about whether a construction is architecturally admissible, this document governs. A WU-nn row is never authorization to start that WorkUnit.
+
+Current code-declaration authorization is unchanged by that ratification: `SourceRecordV1` at `app/lib/domain/source/types.ts` is the only authorized canonical record declaration, and all seven proposal names below remain code-forbidden.
+
 ## Goal
 
 Replace the fragmented paths with one source-preserving pipeline:
@@ -182,6 +195,22 @@ The product owner recorded one bounded, written re-scope of the tenant-hybrid ga
 The re-scope authorizes nothing else. It does not authorize `WorkUnitCandidateV1`, `ReviewedWorkUnitV1`, any proposer or reviewer contract, any `Actor` or `TenantContext` dependency, or the canonical record family as a whole. It does not resolve the tenant hybrid, which is unchanged: the record consumes only the canonical branded `TenantId`, and needs none of the six symbols still physically owned by `app/lib/tenant/types.ts`. It adds no production consumer, no persistence, no migration, no provider call, no adapter, no composition root, no UI and no API route, and it neither changes nor replaces the live unversioned domain family. `infrastructure_application_signal_contract` was still `known_open` and unchanged at the time of that re-scope; it was closed later, by WU-02, with no relationship created between the normalized signal contract and `SourceRecordV1`.
 
 The remaining WU-01 scope — candidate, correction, review, reviewed WorkUnit and action preparation — stays unstarted and unauthorized, as do WU-01C, WU-02, WU-03, H1B3, formation, correlation, persistence and provider integration.
+
+### Phase-1 semantic ratification is not code authorization
+
+The human PM has since ratified three of the seven proposal names as Phase-1 semantic targets, under decision C recorded in `docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md`. That ratification names the intended semantic authority. It does **not** authorize any TypeScript declaration, path, or schema.
+
+| Name | Product status | Code status at this head |
+| --- | --- | --- |
+| `CorrelationGroupV1` | `RATIFIED_PHASE1_SEMANTIC_TARGET` | forbidden — may be authorized no earlier than P1-2 |
+| `WorkUnitCandidateV1` | `RATIFIED_PHASE1_SEMANTIC_TARGET` | forbidden — may be authorized no earlier than P1-3 |
+| `WorkUnitCorrectionV1` | `RATIFIED_PHASE1_SEMANTIC_TARGET` | forbidden — may be authorized no earlier than P1-5 |
+| `CanonicalSourceRecordV1` | no ratified semantic status | forbidden |
+| `WorkUnitReviewV1` | no ratified semantic status | forbidden |
+| `ReviewedWorkUnitV1` | no ratified semantic status | forbidden |
+| `ActionPreparationV1` | no ratified semantic status | forbidden |
+
+The closed allowlist is unchanged and still lists exactly one canonical record declaration. Each future expansion is just-in-time: the bounded WorkUnit that introduces the record reviews its exact declaration path and contract, and a human edits the source-controlled allowlist literal in that same review. An alias or alternate name that evades the closed family registry is a governance violation, not a route around it.
 
 ### PR #211 is `UNMERGED_NON_AUTHORITY_INPUT`
 
