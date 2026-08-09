@@ -43,6 +43,15 @@ const AUTHORIZED_CODE_DECLARATION = { name: "SourceRecordV1", path: "app/lib/dom
 // A forecast is not a milestone. The PM ratified the Gate's position in the spine, not its date.
 const UNRATIFIED_VALUE_GATE_DATE = "2026-09-04"
 
+// The architecture program's two status states. Its `Status:` field read "Draft ... review" while
+// the ratification was recorded twelve lines below it, so both were readable as current. The draft
+// wording is a true fact about the `066a43c3` snapshot and must stay visible; what must not recur is
+// that wording occupying the unqualified current `Status:` field.
+const ARCHITECTURE_CURRENT_STATUS = "Status: Ratified subordinate Technical / Domain Architecture Authority"
+const ARCHITECTURE_HISTORICAL_STATUS = "Draft for PM and independent security/architecture review"
+const ARCHITECTURE_HISTORICAL_MARKER =
+  "Historical status at evidence snapshot `066a43c3df07f3da10a2fc93ff7d90157c732114`:"
+
 async function readProductAuthority(): Promise<string> {
   return readFile(path.join(rootDir, PRODUCT_AUTHORITY_DOC), "utf8")
 }
@@ -103,6 +112,31 @@ test("phase-1 authority: the architecture program is recorded as subordinate", a
     "is the ratified subordinate Technical / Domain Architecture Authority",
     "It is subordinate to this document on sequencing and product priority",
   ], "authority hierarchy reciprocity")
+})
+
+test("phase-1 authority: the architecture program's current status is ratified, its draft status historical", async () => {
+  const doc = await readFile(path.join(rootDir, ARCHITECTURE_AUTHORITY_DOC), "utf8")
+  const lines = doc.split("\n")
+
+  // Current: exactly one unqualified `Status:` field, and it records the ratified authority. A
+  // second one would reintroduce the same "which of these is current?" ambiguity from the other end.
+  const statusFields = lines.filter((line) => line.startsWith("Status:"))
+  assert.deepEqual(statusFields, [ARCHITECTURE_CURRENT_STATUS],
+    `${ARCHITECTURE_AUTHORITY_DOC} must carry exactly one current Status field, the ratified one`)
+
+  // Historical: the draft status stays visible and stays attached to the snapshot it was true at.
+  // Deleting it would erase the fact that ratification came later, which is the history this repair
+  // exists to preserve.
+  assert.ok(doc.includes(ARCHITECTURE_HISTORICAL_MARKER),
+    "the draft status must stay recorded as the historical status at its evidence snapshot")
+  const historicalLines = lines.filter((line) => line.includes(ARCHITECTURE_HISTORICAL_STATUS))
+  assert.ok(historicalLines.length > 0,
+    "the historical draft status wording must stay in the document")
+
+  // The distinction itself: no occurrence of the draft wording may sit in the current Status field.
+  const unqualified = historicalLines.filter((line) => line.startsWith("Status:"))
+  assert.deepEqual(unqualified, [],
+    `the draft status is historical, never the current Status field:\n${unqualified.join("\n")}`)
 })
 
 test("phase-1 authority: ratified semantic targets are not code authorization", async () => {

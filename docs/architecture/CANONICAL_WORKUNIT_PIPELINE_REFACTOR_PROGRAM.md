@@ -1,6 +1,13 @@
 # Canonical WorkUnit Pipeline Refactor Program
 
-Status: Draft for PM and independent security/architecture review
+Status: Ratified subordinate Technical / Domain Architecture Authority
+
+Historical status at evidence snapshot `066a43c3df07f3da10a2fc93ff7d90157c732114`:
+Draft for PM and independent security/architecture review. That was the document's current status at
+that snapshot, and it was accurate then — the document was not yet ratified. The PM ratification
+recorded under [Authority Position](#authority-position) came later and supersedes it as current
+status. Every review verdict, evidence count and WU-00 chronology below remains a record of its own
+head and is not restated by the ratification.
 
 Evidence snapshot: `066a43c3df07f3da10a2fc93ff7d90157c732114` (`main`, 2026-07-29)
 
