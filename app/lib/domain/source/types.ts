@@ -32,7 +32,23 @@ export type SourceRecordV1 = {
   /** Namespace in which providerObjectKey is interpreted. Identity field. */
   readonly provider: SourceType
 
-  /** The provider's own exact native key. Identity field. Never normalized. */
+  /**
+   * The provider's own native identity for the observed object. Identity field.
+   * Carried byte-for-byte and never normalized: no trimming, no case folding,
+   * no Unicode normalization, no re-encoding.
+   *
+   * Where a provider's identity is scoped rather than scalar, this may be an
+   * injective, reversible, provider-scoped serialization of provider-issued
+   * identity components under a reviewed per-provider identity profile. Every
+   * component must be provider-issued, provider-immutable for the object's
+   * lifetime, and part of the provider's own identity. Composition does not
+   * create identity: it is never a mutable or display name, a URL, an
+   * Atra-generated or acquisition-generated id, or an array position.
+   *
+   * No per-provider identity profile is proven yet. This generic validator
+   * cannot know a provider's identity contract and does not check nativeness;
+   * see docs/architecture/SOURCE_RECORD_V1_SEMANTICS.md.
+   */
   readonly providerObjectKey: string
 
   /**
@@ -57,8 +73,21 @@ export type SourceRecordV1 = {
   readonly sourceEventAt: string | null
 
   /**
-   * Integrity evidence over the referenced content: `sha256:<64 lowercase hex>`.
-   * Attested by the caller; never computed here. NOT identity, NOT equality.
+   * Integrity evidence over the provider's own content for the referenced
+   * provider object, canonicalized under a reviewed per-provider content-scope
+   * profile: `sha256:<64 lowercase hex>`. NOT identity, NOT equality.
+   *
+   * For one provider and one profile version: an equal digest means the
+   * canonicalized in-scope provider content is byte-identical, a different
+   * digest means at least one in-scope provider-content byte differs, and any
+   * in-scope provider-content change must change the digest. It is never
+   * computed over a NormalizedToolSignal, an acquisition envelope, a normalized
+   * provider projection, SourceRecord fields, or any other Atra-side
+   * representation.
+   *
+   * Attested by the caller; this domain carries the digest and never computes
+   * or verifies the content. No per-provider content-scope profile is proven
+   * yet; see docs/architecture/SOURCE_RECORD_V1_SEMANTICS.md.
    */
   readonly contentDigest: string
 }
