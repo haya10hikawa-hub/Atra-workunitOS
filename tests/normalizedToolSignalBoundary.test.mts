@@ -458,17 +458,38 @@ test("T13: the compatibility surface and the mappers emit no runtime edge to the
     "a value re-export must be detected as a runtime edge, or this test proves nothing")
 })
 
-// ─── T14 — the port is a leaf, with no reverse dependency ────────────────────────
+// ─── T14 — the signal port is a leaf, and the layer has exactly one approved edge ─
 
-test("T14: the port imports nothing and no domain module depends on it", async () => {
-  assert.deepEqual(await scanModuleGraph(rootDir, ["app/lib/ports"]), [],
-    "the port layer must have zero outbound edges")
+// T14 formerly asserted that app/lib/ports had zero outbound edges, which conflated two separate
+// invariants. A separately authorized WorkUnit declared the acquisition-evidence contract, which
+// depends type-only on this port. Only the layer-wide zero is superseded; the leaf property of
+// NormalizedToolSignal — the reason the layer-wide zero was worth having — is now asserted
+// directly, and the layer scan stays whole rather than being narrowed to SIGNAL_PORT.
+const EVIDENCE_PORT = "app/lib/ports/acquisitionEvidence/types.ts"
+const APPROVED_PORT_EDGE = `${EVIDENCE_PORT} | import-type | ${SIGNAL_PORT}`
+
+test("T14-A: the tool signal port imports nothing and no domain module depends on the layer", async () => {
+  const portEdges = await scanModuleGraph(rootDir, ["app/lib/ports"])
+  // Non-vacuity: the layer does have an edge, so an empty leaf set is a real result rather than
+  // an artifact of a scan root that found no code.
+  assert.ok(portEdges.length > 0, "the port layer scan must observe at least the approved edge")
+  assert.deepEqual(portEdges.filter((edge) => edge.file === SIGNAL_PORT), [],
+    "NormalizedToolSignal is the leaf declaration: the signal port must import nothing at all")
 
   const domainEdges = await scanModuleGraph(rootDir, ["app/lib/domain"])
   // Non-vacuity: the domain scan is large, so an empty reverse-dependency set is a real result.
   assert.ok(domainEdges.length > 10, "the domain scan must not be empty")
   assert.deepEqual(domainEdges.filter((edge) => edge.resolvedTarget.startsWith("app/lib/ports/")), [],
     "no domain module may depend on the ports layer")
+})
+
+test("T14-B: the port layer's complete outbound edge set is exactly one approved type edge", async () => {
+  const portEdges = await scanModuleGraph(rootDir, ["app/lib/ports"])
+  assert.deepEqual(
+    portEdges.map((edge) => `${edge.file} | ${edge.kind} | ${edge.resolvedTarget}`).sort(),
+    [APPROVED_PORT_EDGE],
+    "no second port edge, no runtime edge, no domain, application or infrastructure edge",
+  )
 })
 
 // ─── T16 — no laundered edge back to the application model ──────────────────────
