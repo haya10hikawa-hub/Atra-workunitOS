@@ -1,12 +1,12 @@
 {
-  "note": "WU-01B golden vectors for SourceRecordV1. `valid` is the accepted base record; every `rejects` entry applies `patch` (add/overwrite) and `remove` (delete keys) to a fresh copy of it and must produce exactly `failureCode`. `isoVectors` is the shared instant set on which the locally pinned ISO-8601 UTC guard and the Phase 6 guard must agree.",
+  "note": "WU-01B golden vectors for SourceRecordV1. `valid` is the accepted base record; every `rejects` entry applies `patch` (add/overwrite) and `remove` (delete keys) to a fresh copy of it and must produce exactly `failureCode`. `isoVectors` is the shared instant set on which the locally pinned ISO-8601 UTC guard and the Phase 6 guard must agree. This fixture is validator-shape evidence only. It is NOT a provider identity profile and NOT a provider content-scope profile: `providerObjectKey` is a synthetic opaque token, not a provider-native identifier, and `contentDigest` is a synthetic value digesting nothing. No provider contract may be inferred from any value here; see docs/architecture/SOURCE_RECORD_V1_SEMANTICS.md.",
   "valid": {
     "recordVersion": "1",
     "tenantId": "tenant-alpha",
     "provider": "github",
-    "providerObjectKey": "haya10hikawa-hub/Atra-workunitOS#218",
+    "providerObjectKey": "provider-native-key-fixture",
     "declaredSourceRef": null,
-    "sourceUrl": "https://example.invalid/objects/218",
+    "sourceUrl": "https://example.invalid/objects/fixture-object",
     "observedAt": "2026-01-02T03:04:05Z",
     "recordedAt": "2026-01-02T03:04:06.500Z",
     "sourceEventAt": null,
