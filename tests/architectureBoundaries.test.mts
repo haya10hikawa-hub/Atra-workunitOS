@@ -27,6 +27,10 @@ const DEBT_IDS: string[] = []
 // empty, so any returning edge reconciles as undeclared.
 const RESOLVED_DEBT_IDS = ["domain_tenant_hybrid_boundary", "infrastructure_application_signal_contract"]
 const SIGNAL_PORT = "app/lib/ports/toolSignal/types.ts"
+const EVIDENCE_PORT = "app/lib/ports/acquisitionEvidence/types.ts"
+// The single reviewed exception to the ports layer's former zero-edge invariant. This is not
+// general permission for port-to-port imports: it is one edge, pinned by source, kind and target.
+const APPROVED_PORT_EDGE = `${EVIDENCE_PORT} | import-type | ${SIGNAL_PORT}`
 const DEBT_FIELDS = [
   "id", "status", "introduced_by", "source_sha", "exact_sources", "exact_targets",
   "edge_kind", "risk", "owner_workunit", "removal_gate", "production_change_allowed_in_wu00",
@@ -67,6 +71,12 @@ function edgeKindClass(kind: ModuleEdge["kind"]): "type-only" | "value" {
 
 function observedDebtKey(edge: ModuleEdge): string {
   return `${edge.file} | ${edgeKindClass(edge.kind)} | ${edge.resolvedTarget}`
+}
+
+// The port-layer edge set is pinned on the EXACT kind, not the type-only/value class: a
+// `import-type-expression` is also type-only, and would otherwise slip into the approved slot.
+function exactEdgeKey(edge: ModuleEdge): string {
+  return `${edge.file} | ${edge.kind} | ${edge.resolvedTarget}`
 }
 
 // Exact cross product of declared paths. Over-declaring is not tolerated: reconcile()
@@ -380,13 +390,33 @@ test("target port policy permits only ports and domain and rejects a positive co
   assert.equal(violatesPortTarget(portEdge("../portsLegacy/types.ts", "app/lib/portsLegacy/types.ts")), true)
 })
 
-test("port modules import only ports and domain, and the tool signal port is a graph leaf", async () => {
+test("port modules import only ports and domain, and the port layer has exactly one approved edge", async () => {
   // Non-vacuity: an empty scan proves nothing unless the scan root actually contains code.
   const portFiles = await collectCodeFiles(path.join(rootDir, "app/lib/ports"))
   assert.ok(portFiles.length > 0, "app/lib/ports must contain scanned code files")
   await assertNoForbiddenImports(["app/lib/ports"], "ports", violatesPortTarget)
-  assert.deepEqual(await scanModuleGraph(rootDir, ["app/lib/ports"]), [],
-    "the tool signal port must import nothing at all")
+
+  // The layer used to have zero outbound edges. It now has exactly one reviewed port-to-port type
+  // edge, and the scan stays whole-layer: narrowing it to the signal port alone would stop
+  // observing every other port module, which is precisely the closed-world property that makes an
+  // exact edge set meaningful. Source path, target path and edge kind are all pinned, so a second
+  // edge, a moved target, or a value upgrade each fail here rather than being absorbed.
+  const portEdges = await scanModuleGraph(rootDir, ["app/lib/ports"])
+  assert.deepEqual(portEdges.map(exactEdgeKey).sort(), [APPROVED_PORT_EDGE],
+    "app/lib/ports must have exactly the one approved import-type edge")
+
+  const [approved] = portEdges
+  assert.equal(approved.file, EVIDENCE_PORT, "the approved edge's source must be the evidence port")
+  assert.equal(approved.resolvedTarget, SIGNAL_PORT, "the approved edge's target must be the signal port")
+  assert.equal(edgeKindClass(approved.kind), "type-only", "the approved edge must be erased, not a runtime edge")
+  assert.deepEqual(portEdges.filter((edge) => edgeKindClass(edge.kind) === "value"), [],
+    "no port module may hold a value/runtime edge")
+
+  // Independently preserved: NormalizedToolSignal remains the leaf declaration. The dependency runs
+  // one way only, so toolSignal gaining any outbound edge fails even while the layer-wide set above
+  // would still contain exactly one entry.
+  assert.deepEqual(portEdges.filter((edge) => edge.file === SIGNAL_PORT), [],
+    "the tool signal port must import nothing at all and stay a graph leaf")
 })
 
 // T1 — the domain layer now has zero live boundary violations, reconciled against an EMPTY

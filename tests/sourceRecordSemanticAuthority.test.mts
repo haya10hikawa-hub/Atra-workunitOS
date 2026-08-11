@@ -255,18 +255,37 @@ test("R5: all six provider profile gates stay REQUIRED_UNPROVEN", async () => {
 
 // ─── R6 — the acquisition implementation stays unstarted ────────────────────
 
-// Symbols that would exist only if production code had begun producing, adapting or digesting a
-// SourceRecordV1, or had begun implementing a provider profile.
+// R6 was written while acquisition-evidence DECLARATION was also unstarted, so the two contract
+// type names sat in the denylist below alongside genuine implementation symbols. A separately
+// authorized WorkUnit has since declared the neutral contract, and only that part is superseded:
+//
+//   ACQUISITION_EVIDENCE_CONTRACT   = DECLARED
+//   PROVIDER_PROFILE_IMPLEMENTATION = ABSENT
+//   PROVIDER_WIRING                 = ABSENT
+//   DIGEST_COMPUTATION              = ABSENT
+//   SOURCE_RECORD_PRODUCER          = ABSENT
+//   SOURCE_RECORD_CONSUMERS         = 0
+//
+// Declaring a contract shape is not implementing acquisition. Every symbol that would exist only
+// because production code began producing, adapting or digesting a SourceRecordV1, or began
+// implementing a provider profile, stays forbidden below — the denylist lost exactly two names
+// and gained no permission.
 const UNSTARTED_IMPLEMENTATION_SYMBOLS = [
   "toSourceRecordV1", "buildSourceRecordV1", "createSourceRecordV1", "makeSourceRecordV1",
   "sourceRecordFrom", "SourceRecordAdapter", "SourceRecordProducer", "SourceRecordRepository",
   "computeContentDigest", "contentDigestOf", "buildContentDigest", "canonicalizeProviderContent",
   "ProviderIdentityProfile", "ProviderContentScopeProfile", "providerIdentityProfile",
-  "providerObjectKeyFor", "AcquisitionEvidence", "AcquiredSignalObservation",
+  "providerObjectKeyFor",
 ]
+
+// The declared contract, and the single module allowed to declare it. The pair is pinned by
+// resolved path so "declared" cannot decay into "declared anywhere".
+const EVIDENCE_PORT = "app/lib/ports/acquisitionEvidence/types.ts"
+const EVIDENCE_CONTRACT_SYMBOLS = ["AcquisitionEvidence", "AcquiredSignalObservation"]
 
 test("R6: no production module produces, adapts, digests or profiles a SourceRecordV1", async () => {
   const declared: string[] = []
+  const evidenceSites: string[] = []
   let scanned = 0
   for (const root of ["app", "scripts"]) {
     for (const file of await collectCodeFiles(path.join(rootDir, root))) {
@@ -277,11 +296,32 @@ test("R6: no production module produces, adapts, digests or profiles a SourceRec
           declared.push(`${path.relative(rootDir, file)} declares ${symbol}`)
         }
       }
+      for (const symbol of EVIDENCE_CONTRACT_SYMBOLS) {
+        if (new RegExp(`\\b(?:type|interface|class|enum|const|let|var|function)\\s+${symbol}\\b`).test(source)) {
+          evidenceSites.push(`${path.relative(rootDir, file)} declares ${symbol}`)
+        }
+      }
     }
   }
   assert.ok(scanned > 100, "the production scan must not be vacuous")
   assert.deepEqual(declared, [],
     `P1-1 acquisition implementation is not authorized here:\n${declared.join("\n")}`)
+
+  // ACQUISITION_EVIDENCE_CONTRACT = DECLARED, and declared in exactly one place. Dropping the two
+  // names from the denylist above must not become permission to declare them anywhere, nor may the
+  // contract quietly disappear while this test still reports the state as DECLARED.
+  assert.deepEqual(evidenceSites.sort(), EVIDENCE_CONTRACT_SYMBOLS
+    .map((symbol) => `${EVIDENCE_PORT} declares ${symbol}`).sort(),
+    `the acquisition evidence contract must be declared exactly once, at ${EVIDENCE_PORT}`)
+
+  // DIGEST_COMPUTATION = ABSENT, at the one module now authorized to name the digest. The
+  // contract carries attested evidence; a hashing primitive here would start the implementation
+  // this WorkUnit is not authorized to make.
+  const evidenceSource = await read(EVIDENCE_PORT)
+  for (const token of ["createHash", "subtle", "node:crypto", 'from "crypto"', "digest(", "TextEncoder"]) {
+    assert.equal(evidenceSource.includes(token), false,
+      `${EVIDENCE_PORT} must not reach for ${token}: evidence is attested, never computed here`)
+  }
 
   // The record's module is still the three declared files. An adapter would have to arrive as a
   // fourth, and would then be caught whatever it was named.
