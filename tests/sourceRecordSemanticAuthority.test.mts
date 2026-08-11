@@ -269,19 +269,28 @@ test("R5: all six provider profile gates stay REQUIRED_UNPROVEN", async () => {
 // Declaring a contract shape is not implementing acquisition. Every symbol that would exist only
 // because production code began producing, adapting or digesting a SourceRecordV1, or began
 // implementing a provider profile, stays forbidden below — the denylist lost exactly two names
-// and gained no permission.
+// and gained no permission. A further authorized WorkUnit has since REVISED the declared contract;
+// that changed which names are declared, and nothing about the states above.
 const UNSTARTED_IMPLEMENTATION_SYMBOLS = [
   "toSourceRecordV1", "buildSourceRecordV1", "createSourceRecordV1", "makeSourceRecordV1",
   "sourceRecordFrom", "SourceRecordAdapter", "SourceRecordProducer", "SourceRecordRepository",
   "computeContentDigest", "contentDigestOf", "buildContentDigest", "canonicalizeProviderContent",
   "ProviderIdentityProfile", "ProviderContentScopeProfile", "providerIdentityProfile",
   "providerObjectKeyFor",
+  // The revision declares a retention obligation and implements none. A retention store, an
+  // encoder or a content-scope implementation would all have to arrive as one of these.
+  "RetainedContentStore", "retainProviderContent", "resolveRetainedContent", "decodeRetainedContent",
 ]
 
 // The declared contract, and the single module allowed to declare it. The pair is pinned by
-// resolved path so "declared" cannot decay into "declared anywhere".
+// resolved path so "declared" cannot decay into "declared anywhere". The full surface is listed,
+// not a representative sample: a name missing here would be a name nothing pins.
 const EVIDENCE_PORT = "app/lib/ports/acquisitionEvidence/types.ts"
-const EVIDENCE_CONTRACT_SYMBOLS = ["AcquisitionEvidence", "AcquiredSignalObservation"]
+const EVIDENCE_CONTRACT_SYMBOLS = [
+  "AcquisitionCaptureId", "AcquisitionTenantPartition", "AcquisitionMode", "RetainedProviderContent",
+  "ContentScopeBinding", "ProviderIdentityProvenance", "AcquisitionCapture", "AcquisitionCaptureReplay",
+  "AcquisitionEvidence",
+]
 
 test("R6: no production module produces, adapts, digests or profiles a SourceRecordV1", async () => {
   const declared: string[] = []
