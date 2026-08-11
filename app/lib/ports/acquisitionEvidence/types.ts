@@ -8,9 +8,25 @@
  *
  * Declaring it proves nothing about any provider. Every GitHub, Slack and Google
  * Calendar identity and content-scope profile stays `REQUIRED_UNPROVEN`, no
- * current provider path can produce conforming evidence, P1-1 stays `PARTIAL`
- * and the `SourceRecordV1` runtime producer stays absent. See
+ * current provider path depends on or is wired to this contract, P1-1 stays
+ * `PARTIAL` and the `SourceRecordV1` runtime producer stays absent. See
  * docs/architecture/SOURCE_RECORD_V1_SEMANTICS.md.
+ *
+ * STRUCTURAL SIMILARITY IS NOT CONFORMANCE.
+ *
+ * TypeScript is structurally typed, so any module can assemble an object with
+ * these field names and types without depending on this module. Doing so
+ * establishes nothing. Shape alone does not make a value authorized or truthful
+ * acquisition evidence, because shape alone carries no evidence of
+ * provider-native identity, no ratified per-provider identity profile, no
+ * provider-content scope, no ratified content-scope profile and no truthful
+ * B2-P1 integrity evidence. A structural lookalike is therefore a lookalike and
+ * not conforming evidence.
+ *
+ * Conforming production requires a separately reviewed provider identity profile
+ * and content-scope profile, and an explicitly authorized integration WorkUnit
+ * that wires a producer to this contract. No provider has that authorization
+ * today, and no provider module depends on this contract.
  *
  * `ACQUISITION_SCOPE_CHANGE_REQUIRED` stays `YES`. The existence of this
  * contract does not by itself satisfy the acquisition scope change it names.

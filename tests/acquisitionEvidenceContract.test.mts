@@ -7,15 +7,27 @@
  * provider that cannot honour it, or read as evidence that a provider profile was proven. Every
  * assertion below pins one way that could happen.
  *
- * A1–A5   the contract's exact shape and sole declaration site
+ * A1–A5   the contract's exact shape, its sole declaration site and its complete module surface
  * A6      no SourceRecord relationship
- * A7      no provider path can claim conforming evidence
+ * A7      no provider module depends on the contract
  * A8      NormalizedToolSignal is untouched
  * A9–A10  no profile is proven and no digest is computed
- * A11–A12 exactly one port edge, and zero runtime consumers
+ * A11–A12 exactly one port edge, and no production dependency outside the ports layer
  *
- * Structural throughout: shape claims are read off the TypeScript AST and the module graph, never
- * off prose, so a comment cannot satisfy a check the code does not.
+ * Structural throughout: every claim is read off the TypeScript AST or the resolved module graph,
+ * never off source text, so a comment cannot satisfy a check the code does not — and, just as
+ * importantly, a comment cannot fail a check the code does not violate. Naming the contract in
+ * prose is not using it; depending on the module is.
+ *
+ * What this suite does NOT claim. TypeScript is structurally typed, so nothing here prevents some
+ * other module from declaring an object of the same field shape. That is intentional and stated as
+ * such: a structural lookalike is not authorized conforming acquisition evidence, because shape
+ * alone establishes no provider-native identity, no ratified identity or content-scope profile and
+ * no truthful B2-P1 digest evidence. What is enforceable, and what is enforced here, is that no
+ * production module outside the ports layer — and no provider module at all — has a dependency on
+ * this contract. A conforming producer can only arrive through a separately authorized
+ * provider-profile WorkUnit, which would have to create exactly such a dependency and would fail
+ * A7/A12 until it is reviewed and the ratchet is deliberately re-cut.
  */
 import test from "node:test"
 import assert from "node:assert/strict"
@@ -23,11 +35,13 @@ import { readFile, readdir } from "node:fs/promises"
 import { spawnSync } from "node:child_process"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { isCodeFilePath, scanModuleGraph } from "../scripts/lib/typescriptModuleGraph.mjs"
+import { isCodeFilePath, resolveModuleTarget, scanModuleGraph } from "../scripts/lib/typescriptModuleGraph.mjs"
 
 const rootDir = fileURLToPath(new URL("../", import.meta.url))
 
 const EVIDENCE_PORT = "app/lib/ports/acquisitionEvidence/types.ts"
+const EVIDENCE_PORT_DIR = "app/lib/ports/acquisitionEvidence/"
+const PORTS_LAYER = "app/lib/ports/"
 const SIGNAL_PORT = "app/lib/ports/toolSignal/types.ts"
 const SIGNAL_BOUNDARY_SUITE = "tests/normalizedToolSignalBoundary.test.mts"
 const SIGNAL_CONTRACT_FIXTURE = "tests/fixtures/architecture/normalized-signal-contract.v1.json"
@@ -59,6 +73,86 @@ async function collectCodeFiles(dir: string): Promise<string[]> {
     else if (isCodeFilePath(entry.name)) files.push(full)
   }
   return files
+}
+
+function scriptKindFor(ts: TS, filePath: string) {
+  const lower = filePath.toLowerCase()
+  if (lower.endsWith(".tsx")) return ts.ScriptKind.TSX
+  if (lower.endsWith(".jsx")) return ts.ScriptKind.JSX
+  if (/\.(?:cjs|mjs|js)$/.test(lower)) return ts.ScriptKind.JS
+  return ts.ScriptKind.TS
+}
+
+/**
+ * Every name a module declares, at any depth: type aliases, interfaces, enums, classes, functions,
+ * namespaces and every binding introduced by a variable declaration, destructuring included. Read
+ * off the AST rather than matched in source text, so a comment that merely mentions a contract
+ * name is not mistaken for a second declaration of it.
+ */
+function declaredNamesIn(ts: TS, sourceFile: import("typescript").SourceFile): string[] {
+  const names: string[] = []
+  const visitBinding = (name: import("typescript").BindingName) => {
+    if (ts.isIdentifier(name)) {
+      names.push(name.text)
+      return
+    }
+    for (const element of name.elements) {
+      if (!ts.isOmittedExpression(element)) visitBinding(element.name)
+    }
+  }
+  const visit = (node: import("typescript").Node) => {
+    if (ts.isTypeAliasDeclaration(node) || ts.isInterfaceDeclaration(node) || ts.isEnumDeclaration(node)) {
+      names.push(node.name.text)
+    } else if ((ts.isClassDeclaration(node) || ts.isFunctionDeclaration(node)) && node.name !== undefined) {
+      names.push(node.name.text)
+    } else if (ts.isModuleDeclaration(node) && ts.isIdentifier(node.name)) {
+      names.push(node.name.text)
+    } else if (ts.isVariableDeclaration(node)) {
+      visitBinding(node.name)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return names
+}
+
+type Edge = Awaited<ReturnType<typeof scanModuleGraph>>[number]
+
+/**
+ * A dependency on the acquisition-evidence contract: the module itself, or anything beside it.
+ *
+ * Matched case-insensitively, deliberately. A specifier whose casing differs from the file on disk
+ * resolves on a case-insensitive filesystem and is a real dependency there; on a case-sensitive one
+ * the same specifier does not resolve, and the scanner falls back to the literal path — which is
+ * still the contract's path, differently cased. Comparing case-insensitively catches that
+ * dependency on both, and can only ever widen what is caught: no other repository path differs from
+ * this one by case alone.
+ */
+function contractDependencies(edges: Edge[]): Edge[] {
+  const target = EVIDENCE_PORT.toLowerCase()
+  const directory = EVIDENCE_PORT_DIR.toLowerCase()
+  return edges.filter((edge) => {
+    const resolved = edge.resolvedTarget.toLowerCase()
+    return resolved === target || resolved.startsWith(directory)
+  })
+}
+
+function describeEdge(edge: Edge): string {
+  return `${edge.file} | ${edge.kind} | ${edge.specifier} -> ${edge.resolvedTarget}`
+}
+
+/**
+ * Positive control for the dependency filter below. "No edge resolved to the evidence port" is only
+ * evidence of absence if the resolver would in fact name the evidence port that way; otherwise a
+ * moved file or a changed resolver would turn A7/A12 into checks of nothing. This resolves a real
+ * specifier — the one a module at `from` would have to write to reach the contract — and requires
+ * the exact target string the filter compares against.
+ */
+function assertResolverNamesEvidencePort(from: string): void {
+  const specifier = path.relative(path.dirname(from), path.join(rootDir, EVIDENCE_PORT)).split(path.sep).join("/")
+  assert.ok(specifier.startsWith("."), `the control specifier must be relative, got ${specifier}`)
+  assert.equal(resolveModuleTarget(rootDir, from, specifier), EVIDENCE_PORT,
+    `the module resolver must name the evidence port as ${EVIDENCE_PORT} from ${path.relative(rootDir, from)}`)
 }
 
 async function parseEvidencePort() {
@@ -101,23 +195,88 @@ function fieldsOf(ts: TS, alias: Alias, sourceFile: import("typescript").SourceF
 // ─── A1 — sole declaration authority ────────────────────────────────────────────
 
 test("A1: the contract types are declared exactly once, at the evidence port", async () => {
+  const ts = await typescript()
   const sites: string[] = []
   let scanned = 0
   for (const root of ["app", "scripts"]) {
     for (const file of await collectCodeFiles(path.join(rootDir, root))) {
+      const relative = path.relative(rootDir, file)
       const source = await readFile(file, "utf8")
       scanned += 1
+      const sourceFile = ts.createSourceFile(relative, source, ts.ScriptTarget.Latest, true, scriptKindFor(ts, relative))
+      const declared = declaredNamesIn(ts, sourceFile)
       for (const symbol of CONTRACT_SYMBOLS) {
-        if (new RegExp(`\\b(?:type|interface|class|enum|const|let|var|function)\\s+${symbol}\\b`).test(source)) {
-          sites.push(`${path.relative(rootDir, file)} declares ${symbol}`)
-        }
+        if (declared.includes(symbol)) sites.push(`${relative} declares ${symbol}`)
       }
     }
   }
-  // Non-vacuity: a sweep that found nothing to read proves nothing about what it did not find.
+  // Non-vacuity: a sweep that found nothing to read proves nothing about what it did not find. The
+  // port's own two declarations are the reader's positive control — a broken collector returns an
+  // empty site list, which fails this comparison rather than passing it.
   assert.ok(scanned > 100, "the production sweep must not be vacuous")
   assert.deepEqual(sites.sort(), CONTRACT_SYMBOLS.map((s) => `${EVIDENCE_PORT} declares ${s}`).sort(),
     "each contract type must have exactly one production declaration site")
+})
+
+// ─── A1b — complete module surface ──────────────────────────────────────────────
+
+/**
+ * A1 proves the two contract names are declared nowhere else. A1b proves the converse, and it is
+ * the stronger half: the port declares nothing else either. The module — not a list of known
+ * symbols — is the closed contract surface.
+ *
+ * This matters because a symbol-name sweep can only reject what it was told to look for. A third
+ * exported type, a second payload-bearing evidence shape, a private helper type and a reopenable
+ * interface all evade a known-symbol sweep simply by being named something new; none of them
+ * evades an exact statement census. The permitted surface is exactly one import declaration and
+ * exactly the two exported contract aliases, so there is no fourth statement of any kind, exported
+ * or not.
+ */
+const CONTRACT_TOP_LEVEL_KINDS = ["ImportDeclaration", "TypeAliasDeclaration", "TypeAliasDeclaration"]
+
+test("A1b: the port's complete top-level surface is one import and exactly the two exported contract aliases", async () => {
+  const { ts, sourceFile } = await parseEvidencePort()
+  const statements = [...sourceFile.statements]
+
+  assert.deepEqual(statements.map((statement) => ts.SyntaxKind[statement.kind]), CONTRACT_TOP_LEVEL_KINDS,
+    `${EVIDENCE_PORT} must contain exactly one import and two type aliases, in that order, and no fourth statement`)
+
+  // Spelled out per kind as well, so a failure names what arrived rather than only that something
+  // did. `total` closes the census: with one import and two aliases there is no room for a
+  // statement kind this list forgot to enumerate.
+  assert.deepEqual({
+    total: statements.length,
+    imports: statements.filter(ts.isImportDeclaration).length,
+    typeAliases: statements.filter(ts.isTypeAliasDeclaration).length,
+    interfaces: statements.filter(ts.isInterfaceDeclaration).length,
+    enums: statements.filter(ts.isEnumDeclaration).length,
+    namespaces: statements.filter(ts.isModuleDeclaration).length,
+    classes: statements.filter(ts.isClassDeclaration).length,
+    functions: statements.filter(ts.isFunctionDeclaration).length,
+    variables: statements.filter(ts.isVariableStatement).length,
+    exportDeclarations: statements.filter(ts.isExportDeclaration).length,
+    exportAssignments: statements.filter(ts.isExportAssignment).length,
+  }, {
+    total: 3,
+    imports: 1,
+    typeAliases: 2,
+    interfaces: 0,
+    enums: 0,
+    namespaces: 0,
+    classes: 0,
+    functions: 0,
+    variables: 0,
+    exportDeclarations: 0,
+    exportAssignments: 0,
+  }, `${EVIDENCE_PORT}'s top-level statement census is pinned exactly`)
+
+  const aliases = statements.filter(ts.isTypeAliasDeclaration)
+  assert.deepEqual(aliases.map((alias) => alias.name.text), CONTRACT_SYMBOLS,
+    "the two aliases are exactly the contract types — no third type, and no private helper type")
+  for (const alias of aliases) {
+    assert.ok((alias.modifiers ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword),
+      `${alias.name.text} must be exported — the contract surface is public, and nothing else exists to be private`)
+  }
 })
 
 // ─── A2 — type-only contract module ─────────────────────────────────────────────
@@ -251,29 +410,43 @@ test("A6: the evidence port has no SourceRecord relationship and SourceRecord ha
 
 // ─── A7 — zero provider wiring ──────────────────────────────────────────────────
 
-// This is the executable form of the WorkUnit's operative requirement: every current provider path
-// remains unable to claim conforming acquisition evidence. Not because it is told not to — because
-// it cannot name the contract at all.
-test("A7: no GitHub, Slack or Calendar production module can name the evidence contract", async () => {
-  const references: string[] = []
-  let scanned = 0
+/**
+ * PROVIDER_CONTRACT_DEPENDENCY_WIRING = 0. No current GitHub, Slack or Calendar production module
+ * depends on the acquisition-evidence contract.
+ *
+ * That is the whole claim, and it is deliberately narrower than "no provider path can claim
+ * conforming evidence". TypeScript is structurally typed; a provider could assemble an object with
+ * the same four fields without importing anything, and no test can prevent that. What such an
+ * object would not be is *authorized* conforming evidence — see the contract module's own note and
+ * the suite header. Conformance is established by a reviewed provider identity and content-scope
+ * profile, not by field shape, and no provider has one.
+ *
+ * So this proves the thing that is provable and load-bearing: the wiring is absent. It is read off
+ * the resolved module graph, which covers every dependency syntax the scanner resolves — plain,
+ * aliased, default, namespace, type-only, inline-type, side-effect, re-export, import-equals,
+ * dynamic import, `require` and import-type expressions — and which, being a resolution rather than
+ * a text match, is indifferent to how the specifier is spelled. A comment naming the contract is
+ * not a dependency and must not fail here.
+ */
+test("A7: no provider production module depends on the acquisition-evidence contract", async () => {
+  const providerFiles: string[] = []
   for (const root of PROVIDER_ROOTS) {
     const files = await collectCodeFiles(path.join(rootDir, root))
     // Non-vacuity, per provider: a renamed or moved provider directory must fail here rather than
     // silently turning this into a scan of nothing.
     assert.ok(files.length > 0, `${root} must contain scanned provider modules`)
-    scanned += files.length
-    for (const file of files) {
-      const source = await readFile(file, "utf8")
-      const relative = path.relative(rootDir, file)
-      for (const token of [...CONTRACT_SYMBOLS, "ports/acquisitionEvidence", "acquisitionEvidence"]) {
-        if (source.includes(token)) references.push(`${relative} references ${token}`)
-      }
-    }
+    providerFiles.push(...files)
   }
-  assert.ok(scanned >= PROVIDER_ROOTS.length, "the provider sweep must not be vacuous")
-  assert.deepEqual(references, [],
-    `PROVIDER_WIRING must stay 0 — no provider path may claim conforming evidence:\n${references.join("\n")}`)
+  assertResolverNamesEvidencePort(providerFiles[0])
+
+  const edges = await scanModuleGraph(rootDir, PROVIDER_ROOTS)
+  // Non-vacuity: the provider modules really do have dependencies, so an empty contract-dependency
+  // set is a fact about the contract and not about a scan that resolved nothing.
+  assert.ok(edges.length > providerFiles.length, "the provider module-graph scan must not be vacuous")
+
+  const dependencies = contractDependencies(edges).map(describeEdge)
+  assert.deepEqual(dependencies, [],
+    `PROVIDER_CONTRACT_DEPENDENCY_WIRING must stay 0:\n${dependencies.join("\n")}`)
 })
 
 // ─── A8 — NormalizedToolSignal unchanged ────────────────────────────────────────
@@ -385,31 +558,29 @@ test("A11: the port layer's complete outbound edge set is exactly the one approv
     "the tool signal port must stay a leaf")
 })
 
-// ─── A12 — no runtime consumer ──────────────────────────────────────────────────
+// ─── A12 — no consumer outside the ports layer ──────────────────────────────────
 
-// Stronger than A7: not one provider path, but every production module. After this WorkUnit the
-// contract is declared and used by nothing.
-test("A12: no production module outside the ports layer references the contract", async () => {
-  const references: string[] = []
-  let scanned = 0
-  for (const root of ["app", "scripts"]) {
-    for (const file of await collectCodeFiles(path.join(rootDir, root))) {
-      const relative = path.relative(rootDir, file)
-      scanned += 1
-      if (relative.startsWith("app/lib/ports/")) continue
-      const source = await readFile(file, "utf8")
-      for (const token of [...CONTRACT_SYMBOLS, "ports/acquisitionEvidence"]) {
-        if (source.includes(token)) references.push(`${relative} references ${token}`)
-      }
-    }
-  }
-  assert.ok(scanned > 100, "the production sweep must not be vacuous")
-  assert.deepEqual(references, [],
-    `contract declaration = YES, runtime production use = NO:\n${references.join("\n")}`)
+/**
+ * ACQUISITION_CONTRACT_DEPENDENCY_WIRING = 0 outside `app/lib/ports/**`. Broader than A7: not the
+ * three provider trees, but every production module under `app/**` and `scripts/**`.
+ *
+ * Same standard of proof, and the same deliberate limit. A dependency is forbidden; a textual
+ * mention is irrelevant, and a module that happens to contain the words — in a comment, in a
+ * document string, in an unrelated local identifier — does not fail. After this WorkUnit the
+ * contract is declared and depended on by nothing.
+ */
+test("A12: no production module outside the ports layer depends on the acquisition-evidence contract", async () => {
+  const outsidePorts = (await collectCodeFiles(path.join(rootDir, "app")))
+    .filter((file) => !path.relative(rootDir, file).split(path.sep).join("/").startsWith(PORTS_LAYER))
+  assert.ok(outsidePorts.length > 50, "the production sweep must observe real modules outside the ports layer")
+  assertResolverNamesEvidencePort(outsidePorts[0])
 
   const edges = await scanModuleGraph(rootDir, ["app", "scripts"])
-  const importers = edges
-    .filter((edge) => edge.resolvedTarget === EVIDENCE_PORT && !edge.file.startsWith("app/lib/ports/"))
-    .map((edge) => `${edge.file} -> ${edge.specifier}`)
-  assert.deepEqual(importers, [], `the evidence port must have no production importer:\n${importers.join("\n")}`)
+  assert.ok(edges.length > 100, "the production module-graph scan must not be vacuous")
+
+  const consumers = contractDependencies(edges)
+    .filter((edge) => !edge.file.startsWith(PORTS_LAYER))
+    .map(describeEdge)
+  assert.deepEqual(consumers, [],
+    `PRODUCTION_CONTRACT_CONSUMERS_OUTSIDE_PORTS must stay 0:\n${consumers.join("\n")}`)
 })
