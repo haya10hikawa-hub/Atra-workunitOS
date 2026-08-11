@@ -143,10 +143,11 @@ architecture, no new type, no field, no module and no sequencing beyond it, and 
 authorize the change it names.
 
 A separately authorized WorkUnit has since declared a neutral acquisition-evidence contract at
-`app/lib/ports/acquisitionEvidence/types.ts`. That declaration does not satisfy the acquisition
-scope change by itself: `ACQUISITION_SCOPE_CHANGE_REQUIRED` stays `YES` until acquisition actually
-captures provider-native identity and in-scope provider content under reviewed per-provider
-profiles. A declared contract shape is not a capability.
+`app/lib/ports/acquisitionEvidence/types.ts`, and a further separately authorized WorkUnit has
+since revised it — see `docs/architecture/ACQUISITION_EVIDENCE_CONTRACT.md`. Neither declaration
+satisfies the acquisition scope change: `ACQUISITION_SCOPE_CHANGE_REQUIRED` stays `YES` until
+acquisition actually captures provider-native identity and in-scope provider content under reviewed
+per-provider profiles. A declared contract shape is not a capability.
 
 ## 6. Explicit Non-Goals
 
@@ -156,7 +157,11 @@ This clarification does not do, and must not be read as doing, any of the follow
 - authorizing or implementing content canonicalization or digest computation;
 - authorizing or implementing any provider profile, provider call or provider credential flow;
 - proving any GitHub, Slack or Google Calendar provider contract;
-- introducing provider-native id fields or raw provider payload retention;
+- introducing provider-native id fields or raw provider payload retention. A separately authorized
+  neutral acquisition contract may *declare* that a capture must retain provider content, and one
+  now does; declaring the obligation is not performing it. No retention store, no retained payload,
+  no producer and no provider call exists or is authorized, and no provider profile is proven by
+  the declaration;
 - introducing acquisition evidence types. This semantic clarification itself did not authorize or
   introduce acquisition evidence types. Such a neutral contract may be declared only by a
   separately authorized WorkUnit, and its existence does not prove any provider identity profile,
