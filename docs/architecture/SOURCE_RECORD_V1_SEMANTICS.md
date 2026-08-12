@@ -108,30 +108,88 @@ lowercase hexadecimal characters, and rejects every other shape without folding 
 ## 4. Provider Profile Gates
 
 A per-provider identity profile and a per-provider content-scope profile are **required** before
-any provider may produce a `SourceRecordV1`. None has been proven. Each gate below is a record of
-an outstanding obligation, never a permission:
+any provider may produce a `SourceRecordV1`. Each gate below is a record of an outstanding
+obligation, never a permission:
 
 ```text
-GitHub identity profile               = REQUIRED_UNPROVEN
-Slack identity profile                = REQUIRED_UNPROVEN
-Google Calendar identity profile      = REQUIRED_UNPROVEN
+GitHub issue identity profile              = PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL
+GitHub identity profile, other resources   = REQUIRED_UNPROVEN
+Slack identity profile                     = REQUIRED_UNPROVEN
+Google Calendar identity profile           = REQUIRED_UNPROVEN
 
-GitHub content-scope profile          = REQUIRED_UNPROVEN
-Slack content-scope profile           = REQUIRED_UNPROVEN
-Google Calendar content-scope profile = REQUIRED_UNPROVEN
+GitHub issue content-scope profile             = PROVEN
+GitHub content-scope profile, other resources  = REQUIRED_UNPROVEN
+Slack content-scope profile                    = REQUIRED_UNPROVEN
+Google Calendar content-scope profile          = REQUIRED_UNPROVEN
 ```
 
-`REQUIRED_UNPROVEN` means: the generic semantics in sections 2 and 3 are ratified, and no
-provider has yet been shown to satisfy them. This document asserts no provider identity field and
-no provider content scope for any provider. Establishing either requires external
+`REQUIRED_UNPROVEN` means: the generic semantics in sections 2 and 3 are ratified, and that
+provider has not been shown to satisfy them. This document asserts no provider identity field and
+no provider content scope for any of them. Establishing either requires external
 provider-contract verification against the provider's own published contract, reviewed and
 ratified in a separately authorized profile WorkUnit. Until such a WorkUnit lands, a gate moving
 out of `REQUIRED_UNPROVEN` is a defect.
 
+Both moved gates are recorded in `docs/architecture/GITHUB_ISSUE_ACQUISITION_PROFILE.md`, and their
+scope is **GitHub issues only**, under the exact profile versions named there. They say nothing
+about GitHub pull requests, comments, reviews, commits or repositories, nothing about Slack or
+Google Calendar, and nothing about any other profile version. A gate widening beyond its recorded
+scope without a further reviewed profile is the same defect as a gate moving out of
+`REQUIRED_UNPROVEN`.
+
+They did not move to the same state, and the difference is load-bearing. The content-scope gate is
+`PROVEN`: it was closed by exactly such a WorkUnit, against GitHub's own published contract. The
+identity gate is **not proven** and reads
+`PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL`, which is the scoped exception recorded in §4.1.
+
+### 4.1 Scoped exception — GitHub Issue, identity profile v1, Phase-1 only
+
+This is the only exception of its kind in this document, and it is the only one there may be
+without a further ratified decision.
+
+```text
+scope       GitHub Issues only, profile github.issue.rest.database-primary-key v1,
+            Phase-1 bounded experimental use only
+state       PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL
+```
+
+**What is not proven.** Section 2 requires every identity component to be provider-immutable for
+the object's lifetime, and a per-provider profile to establish that from provider authority. For
+the GitHub issue identifier, that requirement is **not** met. Five requirements stay unproven, and
+they are stated in full in the profile document:
+
+```text
+R1  REST issue `id` lifetime immutability
+R2  non-reuse of a REST issue `id` after deletion
+R3  persistence of a REST issue `id` across repository transfer
+R4  provider-backed collision guarantee for github.com/rest/issues
+R5  normative REST `id` = GraphQL `databaseId` equivalence
+```
+
+**Who accepted it.** The human PM reviewed R1–R5 and accepted the residual explicitly, as a product
+decision to proceed at Phase 1 while knowing what is not known. Acceptance is not evidence: it
+discharges none of R1–R5, and none of them may be rewritten as proven on its strength.
+
+**What it is not.** It is not a lifetime-immutability proof, a non-reuse proof, a production
+identity certification, an authorization for any other GitHub resource, an authorization for live
+provider reads, or a precedent any second provider or profile may claim.
+
+**Expiration and revisit.** The exception expires when Phase-1 bounded experimental use ends, and
+is reopened before then by: persisting, correlating or deduplicating on `providerObjectKey` beyond
+Phase-1 experimental use; a second GitHub resource or a second provider seeking the same treatment;
+an identity profile version bump; or GitHub publishing authority that closes any of R1–R5. Closing
+a residual requires provider authority reviewed in a separately authorized WorkUnit.
+
+**What is unchanged.** The generic semantics in sections 2 and 3 are untouched by this exception.
+The lifetime-immutability requirement in section 2 remains the rule for every provider, including
+every future GitHub resource; a second exception requires its own ratified decision recorded here.
+Every gate still reading `REQUIRED_UNPROVEN` is unaffected, and the GitHub issue content-scope gate
+stays `PROVEN` — the residuals are statements about identity and touch no digest.
+
 ## 5. Acquisition Consequence
 
 ```text
-ACQUISITION_SCOPE_CHANGE_REQUIRED = YES
+ACQUISITION_SCOPE_CHANGE_REQUIRED = YES, except for GitHub issues, where it has been made
 ```
 
 The current `NormalizedToolSignal` carries neither enough provider-native identity to satisfy
@@ -143,12 +201,23 @@ architecture, no new type, no field, no module and no sequencing beyond it, and 
 authorize the change it names.
 
 A separately authorized WorkUnit has since declared a neutral acquisition-evidence contract at
-`app/lib/ports/acquisitionEvidence/types.ts`. That declaration does not satisfy the acquisition
-scope change by itself: `ACQUISITION_SCOPE_CHANGE_REQUIRED` stays `YES` until acquisition actually
-captures provider-native identity and in-scope provider content under reviewed per-provider
-profiles. A declared contract shape is not a capability.
+`app/lib/ports/acquisitionEvidence/types.ts`. That declaration did not satisfy the acquisition
+scope change by itself, because a declared contract shape is not a capability.
+
+A further separately authorized WorkUnit has since made that change for one provider resource.
+Acquisition now captures provider-native identity and in-scope provider content for GitHub issues,
+under the reviewed profiles in `docs/architecture/GITHUB_ISSUE_ACQUISITION_PROFILE.md`, and a
+canonical `SourceRecordV1` is produced from a retained real capture. For every other provider and
+every other GitHub resource, acquisition scope is unchanged and
+`ACQUISITION_SCOPE_CHANGE_REQUIRED` stays `YES`.
 
 ## 6. Explicit Non-Goals
+
+This list is the boundary of **this clarification**, stated at the head it was ratified at. It
+records what ratifying B1-A and B2-P1 did not by itself authorize. It is not a standing prohibition
+on every later WorkUnit: a boundary that a separately authorized WorkUnit later crosses, under its
+own review, is crossed by that WorkUnit and not by this document. Section 7 records which of these
+have since been crossed and by what.
 
 This clarification does not do, and must not be read as doing, any of the following:
 
@@ -166,3 +235,19 @@ This clarification does not do, and must not be read as doing, any of the follow
 - expanding the authorized canonical record declaration allowlist;
 - marking P1-1 complete. P1-1 remains `PARTIAL`, and the `SourceRecordV1` runtime producer remains
   absent.
+
+## 7. What later WorkUnits have since crossed
+
+Recorded here so section 6 stays readable as the historical boundary it is, without decaying into a
+claim about the current tree.
+
+| Section 6 item | Current state |
+| --- | --- |
+| a `SourceRecordV1` producer, adapter, consumer or persistence path | A **producer and one consumer of it** exist: `app/lib/application/source/sourceRecordProduction.ts` produces the record from an acquisition capture, and it is the only production module that imports `app/lib/domain/source/`. No persistence path exists |
+| content canonicalization or digest computation | A digest is computed at `app/lib/infrastructure/external/github/recordedIssueCapture.ts`, over retained provider bytes under the identity canonicalization |
+| any provider profile, provider call or provider credential flow | Two GitHub **issue** profiles are reviewed and in use: content-scope is proven, identity carries the §4.1 scoped exception. No provider call and no credential flow exists in `app/**`: acquisition reads a retained capture and never the network |
+| proving any GitHub, Slack or Google Calendar provider contract | GitHub's issue **content** contract is proven, for issues only. GitHub's issue **identity** contract is **not** proven — it is accepted under §4.1 with R1–R5 unproven. Slack and Google Calendar remain unproven |
+| raw provider payload retention | Retention exists, inline and immutable, under `acquisitions/` |
+| expanding the canonical record declaration allowlist | Unchanged. No new canonical record was declared |
+| starting P1-2, or `CorrelationGroupV1` / `WorkUnitCandidateV1` / `WorkUnitCorrectionV1` | Unchanged. None exists |
+| marking P1-1 complete | Unchanged. **P1-1 remains `PARTIAL`** — one provider resource, one acquisition mode, no persistence and no consumer beyond production |

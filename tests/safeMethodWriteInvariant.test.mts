@@ -287,10 +287,15 @@ test("T7: no safe handler names the write resolver, and every repository-resolvi
 
 // ─── T8–T10 — isolation (import-edge based, per DEV-D) ──────────
 
-test("T8: no production module under app/ imports the SourceRecordV1 domain module", async () => {
+// The canonical producer is the one module authorized to import the record's domain module. Every
+// route, repository, UI projection and provider adapter stays forbidden, which is the isolation
+// this check was written to hold: the record must not spread into the request path.
+const AUTHORIZED_SOURCE_RECORD_IMPORTER = "app/lib/application/source/sourceRecordProduction.ts"
+
+test("T8: only the canonical producer under app/ imports the SourceRecordV1 domain module", async () => {
   const { edges, files } = await collectImportEdges()
   assert.ok(files > 0 && edges.length > 0, "the import scan must not be vacuous")
-  // Non-vacuity control: the symbol really exists in the tree, so "no consumer"
+  // Non-vacuity control: the symbol really exists in the tree, so the importer set
   // is a real finding rather than an artefact of a missing module.
   const domainFiles = (await listFiles(path.join(rootDir, "app/lib/domain"))).filter((f: string) => /\.[cm]?[jt]sx?$/.test(f))
   const sourceRecordDeclared = (await Promise.all(domainFiles.map((f: string) => readFile(f, "utf8"))))
@@ -300,10 +305,11 @@ test("T8: no production module under app/ imports the SourceRecordV1 domain modu
   // EDGE-based, per DEV-D: comment-only mentions of SourceRecordV1 already
   // exist at the baseline (app/lib/ports/toolSignal/types.ts and
   // app/lib/ports/README.md), so a literal text scan would be red at base.
-  const offenders = edges
+  const importers = [...new Set(edges
     .filter((edge) => !edge.from.startsWith("app/lib/domain/source/"))
     .filter((edge) => /(^|\/)lib\/domain\/source(\/|$)/.test(edge.specifier) || /domain\/source/.test(edge.specifier))
-  assert.deepEqual(offenders.map((e) => `${e.from} -> ${e.specifier}`), [])
+    .map((edge) => edge.from))].sort()
+  assert.deepEqual(importers, [AUTHORIZED_SOURCE_RECORD_IMPORTER])
 })
 
 test("T9: no module under app/ imports a PR #211 formation module", async () => {

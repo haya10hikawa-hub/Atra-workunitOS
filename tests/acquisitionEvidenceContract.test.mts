@@ -1,18 +1,17 @@
 /**
  * P1-1 acquisition-evidence contract suite.
  *
- * This WorkUnit declares a neutral contract and nothing else. The hard part is not declaring it —
- * it is proving that declaring it changed no capability. A contract type is exactly the kind of
- * artifact whose meaning decays quietly: it can be extended a field at a time, wired into a
- * provider that cannot honour it, or read as evidence that a provider profile was proven. Every
- * assertion below pins one way that could happen.
+ * The contract is no longer inert: one real recorded provider source now travels through it to a
+ * canonical `SourceRecordV1`. So the claim this suite protects has changed shape. It used to be
+ * "nothing depends on this". It is now "exactly these two modules depend on this, and the contract
+ * still cannot be widened, duplicated, or read as proving a provider profile it does not prove".
  *
  * A1–A5   the contract's exact shape, its sole declaration site and its complete module surface
- * A6      no SourceRecord relationship
- * A7      no provider module depends on the contract
- * A8      NormalizedToolSignal is untouched
- * A9–A10  no profile is proven and no digest is computed
- * A11–A12 exactly one port edge, and no production dependency outside the ports layer
+ * A6      no SourceRecord relationship, and exactly one authorized record consumer
+ * A7      provider wiring is exactly the one profiled provider
+ * A8      NormalizedToolSignal is untouched and shares no field with evidence
+ * A9–A10  only the profiled provider's gates moved, and the port still computes no digest
+ * A11–A12 the port layer is a leaf again, and the contract's consumers are exactly two
  *
  * Structural throughout: every claim is read off the TypeScript AST or the resolved module graph,
  * never off source text, so a comment cannot satisfy a check the code does not — and, just as
@@ -20,14 +19,12 @@
  * prose is not using it; depending on the module is.
  *
  * What this suite does NOT claim. TypeScript is structurally typed, so nothing here prevents some
- * other module from declaring an object of the same field shape. That is intentional and stated as
- * such: a structural lookalike is not authorized conforming acquisition evidence, because shape
- * alone establishes no provider-native identity, no ratified identity or content-scope profile and
- * no truthful B2-P1 digest evidence. What is enforceable, and what is enforced here, is that no
- * production module outside the ports layer — and no provider module at all — has a dependency on
- * this contract. A conforming producer can only arrive through a separately authorized
- * provider-profile WorkUnit, which would have to create exactly such a dependency and would fail
- * A7/A12 until it is reviewed and the ratchet is deliberately re-cut.
+ * other module from declaring an object of the same field shape. A structural lookalike is not
+ * authorized conforming acquisition evidence, because shape alone establishes no provider-native
+ * identity, no ratified identity or content-scope profile and no truthful B2-P1 digest evidence.
+ * What is enforceable, and what is enforced here, is that the set of production modules depending
+ * on this contract is exactly the reviewed pair, and that a third arrival fails until it is
+ * reviewed and this ratchet is deliberately re-cut.
  */
 import test from "node:test"
 import assert from "node:assert/strict"
@@ -47,8 +44,22 @@ const SIGNAL_BOUNDARY_SUITE = "tests/normalizedToolSignalBoundary.test.mts"
 const SIGNAL_CONTRACT_FIXTURE = "tests/fixtures/architecture/normalized-signal-contract.v1.json"
 const SEMANTICS_DOC = "docs/architecture/SOURCE_RECORD_V1_SEMANTICS.md"
 
-const CONTRACT_SYMBOLS = ["AcquisitionEvidence", "AcquiredSignalObservation"]
-const APPROVED_PORT_EDGE = `${EVIDENCE_PORT} | import-type | ${SIGNAL_PORT}`
+/** The GitHub acquisition adapter and the canonical producer. Exactly these, in sorted order. */
+const GITHUB_ACQUISITION = "app/lib/infrastructure/external/github/recordedIssueCapture.ts"
+const SOURCE_PRODUCER = "app/lib/application/source/sourceRecordProduction.ts"
+const AUTHORIZED_CONTRACT_CONSUMERS = [GITHUB_ACQUISITION, SOURCE_PRODUCER].sort()
+
+/**
+ * The contract's complete declared surface, in declaration order.
+ *
+ * Pinned as an ordered list rather than a set: reordering a contract is a diff a reviewer should
+ * see, and an added or removed alias must fail here regardless of what it is named.
+ */
+const CONTRACT_SYMBOLS = [
+  "AcquisitionCaptureId", "AcquisitionTenantPartition", "AcquisitionMode",
+  "RetainedProviderContent", "ContentScopeBinding", "ProviderIdentityProvenance",
+  "AcquisitionCapture", "AcquisitionEvidence",
+]
 
 const PROVIDER_ROOTS = ["github", "slack", "calendar"]
   .map((provider) => `app/lib/infrastructure/external/${provider}`)
@@ -211,7 +222,7 @@ test("A1: the contract types are declared exactly once, at the evidence port", a
     }
   }
   // Non-vacuity: a sweep that found nothing to read proves nothing about what it did not find. The
-  // port's own two declarations are the reader's positive control — a broken collector returns an
+  // port's own declarations are the reader's positive control — a broken collector returns an
   // empty site list, which fails this comparison rather than passing it.
   assert.ok(scanned > 100, "the production sweep must not be vacuous")
   assert.deepEqual(sites.sort(), CONTRACT_SYMBOLS.map((s) => `${EVIDENCE_PORT} declares ${s}`).sort(),
@@ -221,28 +232,26 @@ test("A1: the contract types are declared exactly once, at the evidence port", a
 // ─── A1b — complete module surface ──────────────────────────────────────────────
 
 /**
- * A1 proves the two contract names are declared nowhere else. A1b proves the converse, and it is
- * the stronger half: the port declares nothing else either. The module — not a list of known
- * symbols — is the closed contract surface.
+ * A1 proves the contract names are declared nowhere else. A1b proves the converse, and it is the
+ * stronger half: the port declares nothing else either. The module — not a list of known symbols —
+ * is the closed contract surface.
  *
- * This matters because a symbol-name sweep can only reject what it was told to look for. A third
- * exported type, a second payload-bearing evidence shape, a private helper type and a reopenable
- * interface all evade a known-symbol sweep simply by being named something new; none of them
- * evades an exact statement census. The permitted surface is exactly one import declaration and
- * exactly the two exported contract aliases, so there is no fourth statement of any kind, exported
- * or not.
+ * A symbol-name sweep can only reject what it was told to look for. A ninth exported type, a second
+ * payload-bearing evidence shape, a private helper type and a reopenable interface all evade a
+ * known-symbol sweep simply by being named something new; none of them evades an exact statement
+ * census. The permitted surface is exactly the eight exported aliases and nothing else — no import
+ * among them, because the port is a graph leaf again.
  */
-const CONTRACT_TOP_LEVEL_KINDS = ["ImportDeclaration", "TypeAliasDeclaration", "TypeAliasDeclaration"]
-
-test("A1b: the port's complete top-level surface is one import and exactly the two exported contract aliases", async () => {
+test("A1b: the port's complete top-level surface is exactly the eight exported contract aliases", async () => {
   const { ts, sourceFile } = await parseEvidencePort()
   const statements = [...sourceFile.statements]
 
-  assert.deepEqual(statements.map((statement) => ts.SyntaxKind[statement.kind]), CONTRACT_TOP_LEVEL_KINDS,
-    `${EVIDENCE_PORT} must contain exactly one import and two type aliases, in that order, and no fourth statement`)
+  assert.deepEqual(statements.map((statement) => ts.SyntaxKind[statement.kind]),
+    CONTRACT_SYMBOLS.map(() => "TypeAliasDeclaration"),
+    `${EVIDENCE_PORT} must contain exactly the contract aliases and no other statement`)
 
   // Spelled out per kind as well, so a failure names what arrived rather than only that something
-  // did. `total` closes the census: with one import and two aliases there is no room for a
+  // did. `total` closes the census: with eight aliases and nothing else there is no room for a
   // statement kind this list forgot to enumerate.
   assert.deepEqual({
     total: statements.length,
@@ -257,9 +266,9 @@ test("A1b: the port's complete top-level surface is one import and exactly the t
     exportDeclarations: statements.filter(ts.isExportDeclaration).length,
     exportAssignments: statements.filter(ts.isExportAssignment).length,
   }, {
-    total: 3,
-    imports: 1,
-    typeAliases: 2,
+    total: CONTRACT_SYMBOLS.length,
+    imports: 0,
+    typeAliases: CONTRACT_SYMBOLS.length,
     interfaces: 0,
     enums: 0,
     namespaces: 0,
@@ -272,7 +281,7 @@ test("A1b: the port's complete top-level surface is one import and exactly the t
 
   const aliases = statements.filter(ts.isTypeAliasDeclaration)
   assert.deepEqual(aliases.map((alias) => alias.name.text), CONTRACT_SYMBOLS,
-    "the two aliases are exactly the contract types — no third type, and no private helper type")
+    "the aliases are exactly the contract types, in order — no extra type, and no private helper type")
   for (const alias of aliases) {
     assert.ok((alias.modifiers ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword),
       `${alias.name.text} must be exported — the contract surface is public, and nothing else exists to be private`)
@@ -281,7 +290,7 @@ test("A1b: the port's complete top-level surface is one import and exactly the t
 
 // ─── A2 — type-only contract module ─────────────────────────────────────────────
 
-test("A2: the evidence port declares no runtime value and its only dependency is erased", async () => {
+test("A2: the evidence port declares no runtime value and depends on nothing", async () => {
   const { ts, source, sourceFile } = await parseEvidencePort()
 
   const runtime = sourceFile.statements.filter((statement) =>
@@ -291,15 +300,14 @@ test("A2: the evidence port declares no runtime value and its only dependency is
   assert.deepEqual(runtime.map((statement) => statement.getText(sourceFile).slice(0, 60)), [],
     `${EVIDENCE_PORT} must declare no const, let, var, function, class or enum`)
 
-  const imports = sourceFile.statements.filter(ts.isImportDeclaration)
-  assert.equal(imports.length, 1, `${EVIDENCE_PORT} must have exactly one import`)
-  assert.equal(imports[0].importClause?.isTypeOnly, true,
-    "the NormalizedToolSignal dependency must be a type-only import")
-  assert.equal((imports[0].moduleSpecifier as import("typescript").StringLiteral).text, "../toolSignal/types.ts")
+  // The first shape of this contract paired evidence with a NormalizedToolSignal and therefore had
+  // one type-only import. Removing that pairing removed the edge; the port is a leaf again, and an
+  // import of any kind returning here is the visible signal that the pairing came back.
+  assert.deepEqual(sourceFile.statements.filter(ts.isImportDeclaration), [],
+    `${EVIDENCE_PORT} must import nothing at all`)
 
-  // The decisive check: what survives compilation. A type-only edge is erased, so the emitted
-  // module must carry no dependency at all — this is what keeps the port a runtime leaf.
-  // Comments are removed first: prose about imports is not an import.
+  // The decisive check: what survives compilation. Comments are removed first, because prose about
+  // imports is not an import.
   const emitted = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, removeComments: true },
   }).outputText
@@ -312,123 +320,173 @@ test("A2: the evidence port declares no runtime value and its only dependency is
   assert.equal(residue, "", `${EVIDENCE_PORT} must emit no runtime code at all, got:\n${emitted}`)
 })
 
-// ─── A3 — exact AcquisitionEvidence shape ───────────────────────────────────────
+// ─── A3 — exact AcquisitionCapture shape ────────────────────────────────────────
 
-const EVIDENCE_FIELDS = [
-  { name: "providerObjectKey", optional: false, readonly: true, type: "string" },
+const CAPTURE_FIELDS = [
+  { name: "kind", optional: false, readonly: true, type: '"CAPTURE"' },
+  { name: "captureId", optional: false, readonly: true, type: "AcquisitionCaptureId" },
+  { name: "tenantPartition", optional: false, readonly: true, type: "AcquisitionTenantPartition" },
+  { name: "acquisitionMode", optional: false, readonly: true, type: "AcquisitionMode" },
+  { name: "identity", optional: false, readonly: true, type: "ProviderIdentityProvenance" },
+  { name: "retainedContent", optional: false, readonly: true, type: "RetainedProviderContent" },
+  { name: "contentScope", optional: false, readonly: true, type: "ContentScopeBinding" },
   { name: "observedAt", optional: false, readonly: true, type: "string" },
   { name: "sourceEventAt", optional: false, readonly: true, type: "string | null" },
-  { name: "contentDigest", optional: false, readonly: true, type: "string" },
 ]
 
-test("A3: AcquisitionEvidence is exactly four required readonly fields, in order", async () => {
+test("A3: AcquisitionCapture is exactly nine required readonly fields, in order", async () => {
   const { ts, sourceFile } = await parseEvidencePort()
-  const alias = aliasOf(ts, sourceFile, "AcquisitionEvidence")
+  const alias = aliasOf(ts, sourceFile, "AcquisitionCapture")
 
   // deepEqual on the ordered descriptor list rejects every A3 case at once: an extra field, a
   // missing field, a reordering, an optional field, a dropped readonly and a changed type.
-  assert.deepEqual(fieldsOf(ts, alias, sourceFile), EVIDENCE_FIELDS,
-    "AcquisitionEvidence's field set, order, optionality, readonly-ness and types are all pinned")
+  assert.deepEqual(fieldsOf(ts, alias, sourceFile), CAPTURE_FIELDS,
+    "AcquisitionCapture's field set, order, optionality, readonly-ness and types are all pinned")
 
-  assert.equal(alias.typeParameters, undefined, "AcquisitionEvidence must not be generic")
-  assert.equal(ts.isIntersectionTypeNode(alias.type), false, "AcquisitionEvidence must not be an intersection")
-  assert.equal(ts.isTypeReferenceNode(alias.type), false, "AcquisitionEvidence must not alias another type")
+  assert.equal(alias.typeParameters, undefined, "AcquisitionCapture must not be generic")
+  assert.equal(ts.isIntersectionTypeNode(alias.type), false, "AcquisitionCapture must not be an intersection")
   assert.deepEqual(sourceFile.statements.filter(ts.isInterfaceDeclaration), [],
     "no interface may be declared — an interface can be reopened and extended elsewhere")
+
+  // `recordedAt` is absent, and its absence is the contract: recording is the producer's act, and a
+  // slot for it here would invite acquisition to state a time it does not own.
+  assert.deepEqual(CAPTURE_FIELDS.map((field) => field.name).filter((name) => name === "recordedAt"), [],
+    "acquisition must have no recordedAt slot")
 })
 
-// ─── A4 — exact observation envelope ────────────────────────────────────────────
+// ─── A4 — exact component shapes ────────────────────────────────────────────────
 
-test("A4: AcquiredSignalObservation is exactly the signal and its evidence", async () => {
+test("A4: every component of a capture is pinned, including the two closed unions", async () => {
   const { ts, sourceFile } = await parseEvidencePort()
-  const alias = aliasOf(ts, sourceFile, "AcquiredSignalObservation")
-  assert.deepEqual(fieldsOf(ts, alias, sourceFile), [
-    { name: "signal", optional: false, readonly: true, type: "NormalizedToolSignal" },
-    { name: "evidence", optional: false, readonly: true, type: "AcquisitionEvidence" },
-  ], "the envelope is exactly two required readonly fields and no third")
-  assert.equal(alias.typeParameters, undefined, "AcquiredSignalObservation must not be generic")
-  assert.equal(ts.isTypeLiteralNode(alias.type), true, "the envelope must be a plain object type literal")
+
+  assert.deepEqual(fieldsOf(ts, aliasOf(ts, sourceFile, "ProviderIdentityProvenance"), sourceFile), [
+    { name: "providerNamespace", optional: false, readonly: true, type: "string" },
+    { name: "providerObjectKey", optional: false, readonly: true, type: "string" },
+    { name: "identityProfileId", optional: false, readonly: true, type: "string" },
+    { name: "identityProfileVersion", optional: false, readonly: true, type: "string" },
+  ], "identity provenance carries the key and the profile version it is admissible under")
+
+  assert.deepEqual(fieldsOf(ts, aliasOf(ts, sourceFile, "ContentScopeBinding"), sourceFile), [
+    { name: "contentScopeProfileId", optional: false, readonly: true, type: "string" },
+    { name: "contentScopeProfileVersion", optional: false, readonly: true, type: "string" },
+    { name: "contentDigest", optional: false, readonly: true, type: "string" },
+  ], "a digest is comparable only within a profile version, so the version travels with it")
+
+  // Retention: inline bytes only. A locator arm would be the point at which a pointer whose target
+  // can change could stand in for retained content, so it is absent until a retention store exists.
+  assert.deepEqual(fieldsOf(ts, aliasOf(ts, sourceFile, "RetainedProviderContent"), sourceFile), [
+    { name: "retention", optional: false, readonly: true, type: '"INLINE_BYTES"' },
+    { name: "bytesBase64", optional: false, readonly: true, type: "string" },
+  ], "retention is inline bytes only")
+
+  // The acquisition mode union is the authorization surface: no fixture mode, and no live mode.
+  const mode = aliasOf(ts, sourceFile, "AcquisitionMode")
+  const modes = ts.isUnionTypeNode(mode.type)
+    ? mode.type.types.map((node) => node.getText(sourceFile))
+    : [mode.type.getText(sourceFile)]
+  assert.deepEqual(modes, ['"HUMAN_TRIGGERED_PROVIDER_EXPORT"'],
+    "exactly one acquisition mode is authorized; widening it must be a visible contract change")
+  for (const forbidden of [/FIXTURE/i, /LIVE/i, /SYNTHETIC/i, /SEED/i, /MOCK/i]) {
+    assert.equal(forbidden.test(modes.join(" ")), false, `no acquisition mode may match ${forbidden}`)
+  }
+
+  // The two brands exist to stop assignment in the wrong direction: a source identity must not be
+  // assignable to a capture id, and an unvalidated projection string must not be assignable to a
+  // tenant partition.
+  for (const brand of ["AcquisitionCaptureId", "AcquisitionTenantPartition"]) {
+    const alias = aliasOf(ts, sourceFile, brand)
+    assert.equal(ts.isIntersectionTypeNode(alias.type), true, `${brand} must stay a branded intersection`)
+    assert.equal(alias.type.getText(sourceFile).startsWith("string &"), true,
+      `${brand} must brand a string rather than replace it`)
+  }
+
+  // The boundary union has exactly one arm today. It is named separately so a second form of
+  // evidence — a replay above all — has to arrive here, in a reviewable diff.
+  const evidence = aliasOf(ts, sourceFile, "AcquisitionEvidence")
+  assert.equal(evidence.type.getText(sourceFile), "AcquisitionCapture",
+    "AcquisitionEvidence is exactly a capture until a second evidence form is reviewed")
 })
 
 // ─── A5 — forbidden duplicate ownership ─────────────────────────────────────────
 
-// Ownership is partitioned. These belong to NormalizedToolSignal, to a future canonical Source
-// producer, or to SourceRecordV1 — never to the evidence envelope. Duplicating one "for
-// convenience" creates a second place the same fact can be stated, and therefore disagree.
+// Ownership is partitioned. These belong to NormalizedToolSignal, to the canonical Source producer,
+// or to SourceRecordV1 — never to a capture. Duplicating one "for convenience" creates a second
+// place the same fact can be stated, and therefore disagree.
 const FORBIDDEN_EVIDENCE_FIELDS = [
   "tenantId", "provider", "signalType", "title", "summary", "sourceUrl", "actor", "assignee",
   "repository", "priorityHint", "dueAt", "createdAt", "updatedAt",
   "declaredSourceRef", "recordedAt", "recordVersion",
 ]
 
-test("A5: AcquisitionEvidence duplicates no signal, record or producer-owned field", async () => {
+test("A5: no contract type duplicates a signal-, record- or producer-owned field", async () => {
   const { ts, sourceFile } = await parseEvidencePort()
-  const names = fieldsOf(ts, aliasOf(ts, sourceFile, "AcquisitionEvidence"), sourceFile).map((f) => f.name)
-  // Non-vacuity: the intersection is empty because the guarded list is real, not because the
-  // field list came back empty.
-  assert.equal(names.length, EVIDENCE_FIELDS.length, "the evidence field list must be non-empty")
+  const objectAliases = ["AcquisitionCapture", "ProviderIdentityProvenance", "ContentScopeBinding",
+    "RetainedProviderContent"]
+  const names = objectAliases.flatMap((name) =>
+    fieldsOf(ts, aliasOf(ts, sourceFile, name), sourceFile).map((field) => field.name))
+  // Non-vacuity: the intersection is empty because the guarded list is real, not because the field
+  // list came back empty.
+  assert.ok(names.length > 15, "the contract field sweep must be non-empty")
   assert.deepEqual(names.filter((name) => FORBIDDEN_EVIDENCE_FIELDS.includes(name)), [],
-    "AcquisitionEvidence must not duplicate a field owned by another contract")
+    "the acquisition contract must not duplicate a field owned by another contract")
 })
 
-// ─── A6 — SourceRecord independence ─────────────────────────────────────────────
+// ─── A6 — SourceRecord independence, and exactly one record consumer ────────────
 
-test("A6: the evidence port has no SourceRecord relationship and SourceRecord has no consumer", async () => {
+test("A6: the evidence port has no SourceRecord relationship and the record has one consumer", async () => {
   const { ts, sourceFile } = await parseEvidencePort()
 
   // Structural, not textual. The port's comments necessarily discuss SourceRecordV1 — explaining
   // that the two are unrelated is the whole point of the boundary note — so the check reads the
-  // declared structure: every import specifier, and every field's declared type. Prose cannot
-  // trip it, and an actual dependency cannot hide from it.
+  // declared structure: every import specifier, and every field's declared type. Prose cannot trip
+  // it, and an actual dependency cannot hide from it.
   const specifiers = sourceFile.statements.filter(ts.isImportDeclaration)
     .map((node) => (node.moduleSpecifier as import("typescript").StringLiteral).text)
   const declaredTypes = sourceFile.statements
     .filter(ts.isTypeAliasDeclaration)
     .flatMap((alias) => [
       alias.name.text,
-      ...fieldsOf(ts, alias, sourceFile).flatMap((field) => [field.name, field.type]),
+      ...(ts.isTypeLiteralNode(alias.type)
+        ? fieldsOf(ts, alias, sourceFile).flatMap((field) => [field.name, field.type])
+        : [alias.type.getText(sourceFile)]),
     ])
-  // Non-vacuity: both lists are real, so an absent token is a real absence.
-  assert.equal(specifiers.length, 1, "the import sweep must observe the port's one import")
-  assert.ok(declaredTypes.length > 10, "the declared-type sweep must not be empty")
+  // Non-vacuity: the declared-type list is real, so an absent token is a real absence.
+  assert.deepEqual(specifiers, [], "the port must have no import specifier at all")
+  assert.ok(declaredTypes.length > 20, "the declared-type sweep must not be empty")
 
   for (const token of ["SourceRecord", "domain/source", "declaredSourceRef", "recordedAt"]) {
-    assert.deepEqual(specifiers.filter((value) => value.includes(token)), [],
-      `${EVIDENCE_PORT} must not import ${token}`)
     assert.deepEqual(declaredTypes.filter((value) => value.includes(token)), [],
       `${EVIDENCE_PORT} must declare no type or field referencing ${token}`)
   }
 
+  // The canonical record now has a production consumer, and exactly one: the producer. The domain
+  // module's own files are excluded, as ever. A second consumer — a route, a repository, a UI
+  // projection — must fail here until it is reviewed.
   const edges = await scanModuleGraph(rootDir, ["app", "scripts"])
   assert.ok(edges.length > 100, "the production scan must not be empty")
-  const consumers = edges
+  const consumers = [...new Set(edges
     .filter((edge) => edge.resolvedTarget.startsWith("app/lib/domain/source/")
       && !edge.file.startsWith("app/lib/domain/source/"))
-    .map((edge) => `${edge.file} -> ${edge.specifier}`)
-  assert.deepEqual(consumers, [], `SOURCE_RECORD_CONSUMERS must stay 0:\n${consumers.join("\n")}`)
+    .map((edge) => edge.file))].sort()
+  assert.deepEqual(consumers, [SOURCE_PRODUCER],
+    `the canonical record's only production consumer is its producer:\n${consumers.join("\n")}`)
 })
 
-// ─── A7 — zero provider wiring ──────────────────────────────────────────────────
+// ─── A7 — provider wiring is exactly the profiled provider ──────────────────────
 
 /**
- * PROVIDER_CONTRACT_DEPENDENCY_WIRING = 0. No current GitHub, Slack or Calendar production module
- * depends on the acquisition-evidence contract.
+ * Provider wiring is now non-zero, and the claim is an exact set rather than an absence: the GitHub
+ * acquisition adapter depends on the contract because a reviewed GitHub issue profile exists. Slack
+ * and Calendar have no proven profile, so a dependency from either is a defect, and so is a second
+ * GitHub module arriving without review.
  *
- * That is the whole claim, and it is deliberately narrower than "no provider path can claim
- * conforming evidence". TypeScript is structurally typed; a provider could assemble an object with
- * the same four fields without importing anything, and no test can prevent that. What such an
- * object would not be is *authorized* conforming evidence — see the contract module's own note and
- * the suite header. Conformance is established by a reviewed provider identity and content-scope
- * profile, not by field shape, and no provider has one.
- *
- * So this proves the thing that is provable and load-bearing: the wiring is absent. It is read off
- * the resolved module graph, which covers every dependency syntax the scanner resolves — plain,
- * aliased, default, namespace, type-only, inline-type, side-effect, re-export, import-equals,
- * dynamic import, `require` and import-type expressions — and which, being a resolution rather than
- * a text match, is indifferent to how the specifier is spelled. A comment naming the contract is
- * not a dependency and must not fail here.
+ * Read off the resolved module graph, which covers every dependency syntax the scanner resolves —
+ * plain, aliased, default, namespace, type-only, inline-type, side-effect, re-export,
+ * import-equals, dynamic import, `require` and import-type expressions — and which, being a
+ * resolution rather than a text match, is indifferent to how the specifier is spelled. A comment
+ * naming the contract is not a dependency and must not fail here.
  */
-test("A7: no provider production module depends on the acquisition-evidence contract", async () => {
+test("A7: the only provider module wired to the contract is the profiled GitHub adapter", async () => {
   const providerFiles: string[] = []
   for (const root of PROVIDER_ROOTS) {
     const files = await collectCodeFiles(path.join(rootDir, root))
@@ -440,13 +498,21 @@ test("A7: no provider production module depends on the acquisition-evidence cont
   assertResolverNamesEvidencePort(providerFiles[0])
 
   const edges = await scanModuleGraph(rootDir, PROVIDER_ROOTS)
-  // Non-vacuity: the provider modules really do have dependencies, so an empty contract-dependency
-  // set is a fact about the contract and not about a scan that resolved nothing.
+  // Non-vacuity: the provider modules really do have dependencies, so the contract-dependency set
+  // is a fact about the contract and not about a scan that resolved nothing.
   assert.ok(edges.length > providerFiles.length, "the provider module-graph scan must not be vacuous")
 
-  const dependencies = contractDependencies(edges).map(describeEdge)
-  assert.deepEqual(dependencies, [],
-    `PROVIDER_CONTRACT_DEPENDENCY_WIRING must stay 0:\n${dependencies.join("\n")}`)
+  const wired = [...new Set(contractDependencies(edges).map((edge) => edge.file))].sort()
+  assert.deepEqual(wired, [GITHUB_ACQUISITION],
+    `provider wiring is exactly the profiled GitHub adapter:\n${contractDependencies(edges).map(describeEdge).join("\n")}`)
+
+  // The unproven providers stay unwired, stated separately so a failure names the provider.
+  for (const provider of ["slack", "calendar"]) {
+    const offenders = contractDependencies(edges)
+      .filter((edge) => edge.file.includes(`/external/${provider}/`))
+      .map(describeEdge)
+    assert.deepEqual(offenders, [], `${provider} has no proven profile and must stay unwired`)
+  }
 })
 
 // ─── A8 — NormalizedToolSignal unchanged ────────────────────────────────────────
@@ -472,9 +538,11 @@ test("A8: the 14-field signal contract is unchanged and its boundary suite still
   })
   assert.deepEqual(observed, fixture.signalFields, "the signal's field set, order and types are unchanged")
 
-  // Evidence lives in a separate envelope. None of the four evidence facts may leak into the signal.
+  // Evidence lives in a separate envelope. No capture-owned fact may leak into the signal.
   const signalNames = observed.map((field) => field.name)
-  assert.deepEqual(EVIDENCE_FIELDS.map((f) => f.name).filter((name) => signalNames.includes(name)), [],
+  const evidenceOwned = ["captureId", "tenantPartition", "acquisitionMode", "identity",
+    "retainedContent", "contentScope", "observedAt", "sourceEventAt"]
+  assert.deepEqual(evidenceOwned.filter((name) => signalNames.includes(name)), [],
     "no acquisition-evidence field may be copied into NormalizedToolSignal")
 
   // Bound, not merely referenced: the boundary suite is executed, so this contract cannot be
@@ -495,21 +563,34 @@ test("A8: the 14-field signal contract is unchanged and its boundary suite still
   assert.ok(passed > 10, `${SIGNAL_BOUNDARY_SUITE} must report real passing tests, got ${passed}`)
 })
 
-// ─── A9 — all provider profiles remain unproven ─────────────────────────────────
+// ─── A9 — only the reviewed provider's gates moved ──────────────────────────────
 
-const PROFILE_GATES = [
-  "GitHub identity profile", "Slack identity profile", "Google Calendar identity profile",
-  "GitHub content-scope profile", "Slack content-scope profile", "Google Calendar content-scope profile",
+/**
+ * Two gates moved, for one provider resource, on the strength of a reviewed profile. Every other
+ * gate must stay `REQUIRED_UNPROVEN`, and the moved pair must stay scoped to GitHub issues: a gate
+ * that quietly widens from "GitHub issues" to "GitHub" is the same defect as one that promotes
+ * itself out of `REQUIRED_UNPROVEN` without a profile.
+ */
+const UNPROVEN_GATES = [
+  "GitHub identity profile, other resources", "Slack identity profile", "Google Calendar identity profile",
+  "GitHub content-scope profile, other resources", "Slack content-scope profile",
+  "Google Calendar content-scope profile",
 ]
+// Only ONE of the two moved gates is proven. Identity is not: it carries a PM-accepted Phase-1
+// exception over five unproven requirements, so it must read the scoped state and must not read
+// `PROVEN`. Listing it here as proven would be the false-proof claim this suite is meant to catch.
+const PROVEN_GATES = ["GitHub issue content-scope profile"]
+const SCOPED_EXCEPTION_GATE = "GitHub issue identity profile"
+const SCOPED_EXCEPTION_STATE = "PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL"
 const GATE_STATE = "REQUIRED_UNPROVEN"
 const FORBIDDEN_GATE_STATES = [
   /\bRATIFIED\b/, /\bPROVEN\b/, /\bCOMPLETE\b/, /\bDONE\b/, /\bSATISFIED\b/, /\bAUTHORIZED\b/,
 ]
 
-test("A9: declaring the contract promoted no provider profile gate", async () => {
+test("A9: only the reviewed GitHub issue gates moved, and the profile doc backs them", async () => {
   const raw = await read(SEMANTICS_DOC)
   const lines = raw.split("\n")
-  for (const gate of PROFILE_GATES) {
+  for (const gate of UNPROVEN_GATES) {
     const gateLines = lines.filter((line) => line.includes(gate) && line.includes("="))
     assert.equal(gateLines.length, 1, `${gate} must have exactly one gate line`)
     assert.ok(gateLines[0].includes(GATE_STATE), `${gate} must stay ${GATE_STATE}: ${gateLines[0]}`)
@@ -518,24 +599,53 @@ test("A9: declaring the contract promoted no provider profile gate", async () =>
     assert.deepEqual(FORBIDDEN_GATE_STATES.filter((p) => p.test(withoutState)).map(String), [],
       `${gate} must not be promoted: ${gateLines[0]}`)
   }
+  for (const gate of PROVEN_GATES) {
+    const gateLines = lines.filter((line) => line.includes(gate) && line.includes("="))
+    assert.equal(gateLines.length, 1, `${gate} must have exactly one gate line`)
+    assert.ok(/=\s*PROVEN\b/.test(gateLines[0]), `${gate} must read PROVEN: ${gateLines[0]}`)
+  }
 
-  // The contract must not assert a concrete provider identity field or content scope, which would
-  // present a guess as a proven profile.
+  const identityGate = lines.filter(
+    (line) => line.includes(SCOPED_EXCEPTION_GATE) && line.includes("="))
+  assert.equal(identityGate.length, 1, `${SCOPED_EXCEPTION_GATE} must have exactly one gate line`)
+  assert.ok(new RegExp(`=\\s*${SCOPED_EXCEPTION_STATE}\\b`).test(identityGate[0]),
+    `${SCOPED_EXCEPTION_GATE} must read ${SCOPED_EXCEPTION_STATE}: ${identityGate[0]}`)
+  assert.equal(/=\s*PROVEN\b/.test(identityGate[0]), false,
+    `${SCOPED_EXCEPTION_GATE} must not be promoted to PROVEN: ${identityGate[0]}`)
+
+  // A moved gate is only as good as the profile behind it. The profile document must exist, must
+  // scope itself to issues, and must name the exact profile identifiers the code uses. For the
+  // identity half it must also carry the scoped state and the residuals, so the acceptance cannot
+  // be read anywhere as a proof.
+  const profile = await read("docs/architecture/GITHUB_ISSUE_ACQUISITION_PROFILE.md")
+  for (const required of [
+    "github.issue.rest.database-primary-key", "github.issue.rest.retained-response-body",
+    "github.com/rest/issues", "Identifies the primary key from the database",
+    "GitHub issues only", SCOPED_EXCEPTION_STATE,
+    "REST issue `id` lifetime immutability",
+    "non-reuse of a REST issue `id` after deletion",
+    "persistence of a REST issue `id` across repository transfer",
+    "provider-backed collision guarantee for github.com/rest/issues",
+    "normative REST `id` = GraphQL `databaseId` equivalence",
+  ]) {
+    assert.ok(profile.includes(required), `the profile document must record ${required}`)
+  }
+
+  // The contract module itself still asserts no provider identifier: naming one there would present
+  // a guess as a proven profile for every provider at once.
   const evidence = await read(EVIDENCE_PORT)
   for (const pattern of [/\bnode[_ ]?id\b/i, /\bdatabase id\b/i, /\bts tuple\b/i, /\bevent id tuple\b/i]) {
     assert.equal(pattern.test(evidence), false, `${EVIDENCE_PORT} must assert no provider identifier: ${pattern}`)
   }
-  assert.ok(raw.includes("ACQUISITION_SCOPE_CHANGE_REQUIRED = YES"),
-    "the declared contract does not by itself satisfy the acquisition scope change")
 })
 
-// ─── A10 — no digest implementation ─────────────────────────────────────────────
+// ─── A10 — no digest implementation at the contract ─────────────────────────────
 
 test("A10: the evidence port carries a digest and computes none", async () => {
   const source = await read(EVIDENCE_PORT)
   for (const token of [
     "node:crypto", 'from "crypto"', "require(\"crypto\")", "createHash", "subtle.digest", "subtle",
-    "canonicalizeProviderContent", "JSON.stringify", "TextEncoder", "sha256(", "sha1(", "md5(",
+    "JSON.stringify", "TextEncoder", "sha256(", "sha1(", "md5(",
   ]) {
     assert.equal(source.includes(token), false, `${EVIDENCE_PORT} must not contain ${token}`)
   }
@@ -546,30 +656,30 @@ test("A10: the evidence port carries a digest and computes none", async () => {
 
 // ─── A11 — exact port-layer edge set ────────────────────────────────────────────
 
-// Proven here as well as in the architecture suite, deliberately. The architectural exception was
-// created for this contract, so it is part of this contract's own proof: the exception cannot be
-// widened in the architecture suite alone without also failing here.
-test("A11: the port layer's complete outbound edge set is exactly the one approved type edge", async () => {
+// Proven here as well as in the architecture suite, deliberately. The layer's edge set is part of
+// this contract's own proof: it cannot be widened in the architecture suite alone without also
+// failing here.
+test("A11: the port layer has no outbound edge at all", async () => {
   const edges = await scanModuleGraph(rootDir, ["app/lib/ports"])
-  assert.deepEqual(edges.map((edge) => `${edge.file} | ${edge.kind} | ${edge.resolvedTarget}`).sort(),
-    [APPROVED_PORT_EDGE],
-    "exactly one port-to-port import-type edge: no second edge, no value edge, no other layer")
-  assert.deepEqual(edges.filter((edge) => edge.file === SIGNAL_PORT), [],
-    "the tool signal port must stay a leaf")
+  const portFiles = await collectCodeFiles(path.join(rootDir, "app/lib/ports"))
+  // Non-vacuity: an empty edge set proves nothing unless the layer actually contains code.
+  assert.ok(portFiles.length >= 2, "the ports layer must contain scanned modules")
+  assert.deepEqual(edges.map((edge) => `${edge.file} | ${edge.kind} | ${edge.resolvedTarget}`).sort(), [],
+    "every port module is a graph leaf: no port-to-port edge, no value edge, no other layer")
 })
 
-// ─── A12 — no consumer outside the ports layer ──────────────────────────────────
+// ─── A12 — the contract's consumers are exactly two ─────────────────────────────
 
 /**
- * ACQUISITION_CONTRACT_DEPENDENCY_WIRING = 0 outside `app/lib/ports/**`. Broader than A7: not the
- * three provider trees, but every production module under `app/**` and `scripts/**`.
+ * The contract's complete production dependency set, across every module under `app/**` and
+ * `scripts/**`: the GitHub acquisition adapter and the canonical producer, and nothing else.
  *
- * Same standard of proof, and the same deliberate limit. A dependency is forbidden; a textual
- * mention is irrelevant, and a module that happens to contain the words — in a comment, in a
- * document string, in an unrelated local identifier — does not fail. After this WorkUnit the
- * contract is declared and depended on by nothing.
+ * A dependency is what counts; a textual mention is irrelevant, and a module that happens to
+ * contain the words — in a comment, in a document string, in an unrelated local identifier — does
+ * not fail. A third consumer is the arrival this ratchet exists to stop, whether it is a route, a
+ * repository, a UI projection or a second provider adapter.
  */
-test("A12: no production module outside the ports layer depends on the acquisition-evidence contract", async () => {
+test("A12: the contract's production consumers are exactly the reviewed pair", async () => {
   const outsidePorts = (await collectCodeFiles(path.join(rootDir, "app")))
     .filter((file) => !path.relative(rootDir, file).split(path.sep).join("/").startsWith(PORTS_LAYER))
   assert.ok(outsidePorts.length > 50, "the production sweep must observe real modules outside the ports layer")
@@ -578,9 +688,9 @@ test("A12: no production module outside the ports layer depends on the acquisiti
   const edges = await scanModuleGraph(rootDir, ["app", "scripts"])
   assert.ok(edges.length > 100, "the production module-graph scan must not be vacuous")
 
-  const consumers = contractDependencies(edges)
+  const consumers = [...new Set(contractDependencies(edges)
     .filter((edge) => !edge.file.startsWith(PORTS_LAYER))
-    .map(describeEdge)
-  assert.deepEqual(consumers, [],
-    `PRODUCTION_CONTRACT_CONSUMERS_OUTSIDE_PORTS must stay 0:\n${consumers.join("\n")}`)
+    .map((edge) => edge.file))].sort()
+  assert.deepEqual(consumers, AUTHORIZED_CONTRACT_CONSUMERS,
+    `the acquisition contract's consumers are pinned:\n${consumers.join("\n")}`)
 })

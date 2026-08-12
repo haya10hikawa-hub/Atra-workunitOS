@@ -369,14 +369,32 @@ test("T10: optional omission and every provider branch behave as recorded", asyn
 
 // ─── T11, T12 — no SourceRecordV1 relationship, no persistence coupling ──────────
 
-test("T11: no production module consumes app/lib/domain/source, and no mapper mentions SourceRecordV1", async () => {
+// T11 formerly asserted that nothing under app/** or scripts/** consumed app/lib/domain/source. A
+// separately authorized WorkUnit built the canonical producer, so the record now has exactly one
+// production consumer and the zero is superseded. What the zero was protecting is not: the record
+// must not acquire a second consumer without review, and above all the signal path must stay
+// unrelated to it. Both are asserted directly below, and the scan stays whole rather than being
+// narrowed to the modules currently expected to be clean.
+const AUTHORIZED_SOURCE_CONSUMER = "app/lib/application/source/sourceRecordProduction.ts"
+
+test("T11: the only production consumer of app/lib/domain/source is its producer, and no mapper mentions SourceRecordV1", async () => {
   const edges = await scanModuleGraph(rootDir, ["app", "scripts"])
   assert.ok(edges.length > 100, "the production scan must not be empty")
-  const consumers = edges
+  const consumers = [...new Set(edges
     .filter((edge) => edge.resolvedTarget.startsWith("app/lib/domain/source/")
       && !edge.file.startsWith("app/lib/domain/source/"))
-    .map((edge) => `${edge.file} -> ${edge.specifier}`)
-  assert.deepEqual(consumers, [], `SourceRecordV1 must have no production consumer:\n${consumers.join("\n")}`)
+    .map((edge) => edge.file))].sort()
+  assert.deepEqual(consumers, [AUTHORIZED_SOURCE_CONSUMER],
+    `SourceRecordV1 must have exactly one production consumer:\n${consumers.join("\n")}`)
+
+  // The provider-ingress path is not among them, and that is the boundary this test was written
+  // for: no mapper, no route, no repository and no UI projection may reach the canonical record.
+  const signalPathConsumers = consumers.filter((file) =>
+    MAPPERS.includes(file) || file === SIGNAL_PORT || file === COMPAT_MODULE
+    || file.startsWith("app/lib/workunitInbox/") || file.startsWith("app/api/")
+    || file.startsWith("app/components/"))
+  assert.deepEqual(signalPathConsumers, [],
+    "the signal, inbox, route and UI paths must not consume the canonical record")
 
   const ts = await typescript()
   const mentions: string[] = []
@@ -458,21 +476,16 @@ test("T13: the compatibility surface and the mappers emit no runtime edge to the
     "a value re-export must be detected as a runtime edge, or this test proves nothing")
 })
 
-// ─── T14 — the signal port is a leaf, and the layer has exactly one approved edge ─
+// ─── T14 — the signal port is a leaf, and so is the whole layer again ────────────
 
-// T14 formerly asserted that app/lib/ports had zero outbound edges, which conflated two separate
-// invariants. A separately authorized WorkUnit declared the acquisition-evidence contract, which
-// depends type-only on this port. Only the layer-wide zero is superseded; the leaf property of
-// NormalizedToolSignal — the reason the layer-wide zero was worth having — is now asserted
-// directly, and the layer scan stays whole rather than being narrowed to SIGNAL_PORT.
-const EVIDENCE_PORT = "app/lib/ports/acquisitionEvidence/types.ts"
-const APPROVED_PORT_EDGE = `${EVIDENCE_PORT} | import-type | ${SIGNAL_PORT}`
+// T14 briefly permitted one approved edge, because the first acquisition-evidence contract paired
+// evidence with a NormalizedToolSignal and so depended type-only on this port. That pairing was the
+// defect it looked like — it left the integrity evidence with no subject other than the projection
+// beside it — and the edge was removed with it. The layer-wide zero is restored, and the leaf
+// property of NormalizedToolSignal stays asserted directly rather than only as a consequence of it.
 
 test("T14-A: the tool signal port imports nothing and no domain module depends on the layer", async () => {
   const portEdges = await scanModuleGraph(rootDir, ["app/lib/ports"])
-  // Non-vacuity: the layer does have an edge, so an empty leaf set is a real result rather than
-  // an artifact of a scan root that found no code.
-  assert.ok(portEdges.length > 0, "the port layer scan must observe at least the approved edge")
   assert.deepEqual(portEdges.filter((edge) => edge.file === SIGNAL_PORT), [],
     "NormalizedToolSignal is the leaf declaration: the signal port must import nothing at all")
 
@@ -483,12 +496,16 @@ test("T14-A: the tool signal port imports nothing and no domain module depends o
     "no domain module may depend on the ports layer")
 })
 
-test("T14-B: the port layer's complete outbound edge set is exactly one approved type edge", async () => {
+test("T14-B: the port layer has no outbound edge at all", async () => {
+  // Non-vacuity: an empty edge set proves nothing unless the scan root contains code, and the edge
+  // set itself can no longer serve as that control. The file census is the control instead.
+  const portFiles = await collectCodeFiles(path.join(rootDir, "app/lib/ports"))
+  assert.ok(portFiles.length >= 2, "the ports layer must contain scanned code files")
+
   const portEdges = await scanModuleGraph(rootDir, ["app/lib/ports"])
   assert.deepEqual(
-    portEdges.map((edge) => `${edge.file} | ${edge.kind} | ${edge.resolvedTarget}`).sort(),
-    [APPROVED_PORT_EDGE],
-    "no second port edge, no runtime edge, no domain, application or infrastructure edge",
+    portEdges.map((edge) => `${edge.file} | ${edge.kind} | ${edge.resolvedTarget}`).sort(), [],
+    "no port-to-port edge, no runtime edge, no domain, application or infrastructure edge",
   )
 })
 

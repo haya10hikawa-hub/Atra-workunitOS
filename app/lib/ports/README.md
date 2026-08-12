@@ -10,20 +10,16 @@
 - `app/lib/ports/**`
 - `app/lib/domain/**`
 
-The allowlist above is the layer policy, not the live edge set. Exactly one
-outbound edge from this layer is authorized:
+The allowlist above is the layer policy, not the live edge set. The live edge set
+is **empty**: every port module is a graph leaf and imports nothing at all.
 
-```text
-app/lib/ports/acquisitionEvidence/types.ts
-  | import-type |
-app/lib/ports/toolSignal/types.ts
-```
-
-`acquisitionEvidence` may depend type-only on `toolSignal`. `toolSignal` remains
-a leaf and imports nothing at all — the dependency never runs the other way. Any
-second port-to-port edge, any value/runtime edge, and any edge to another layer
-is unauthorized and fails a permanent ratchet. This is one reviewed exception,
-not general permission for port-to-port imports.
+`acquisitionEvidence` briefly held one reviewed `import-type` edge to
+`toolSignal`, because its first shape paired evidence with a
+`NormalizedToolSignal`. That pairing was the defect — it left the integrity
+evidence with no subject other than the Atra projection sitting beside it — so
+the envelope and the edge were removed together. Any port-to-port edge, any
+value/runtime edge, and any edge to another layer is unauthorized and fails a
+permanent ratchet.
 
 ## Forbidden imports
 - `app/lib/application/**`
@@ -36,14 +32,25 @@ not general permission for port-to-port imports.
 ## Canonical files
 - `toolSignal/types.ts` — sole declaration of `NormalizedToolProvider`,
   `NormalizedToolSignalType`, `WorkUnitPriority` and `NormalizedToolSignal`.
-- `acquisitionEvidence/types.ts` — sole declaration of `AcquisitionEvidence` and
-  `AcquiredSignalObservation`.
+- `acquisitionEvidence/types.ts` — sole declaration of `AcquisitionEvidence`,
+  `AcquisitionCapture`, `AcquisitionCaptureId`, `AcquisitionTenantPartition`,
+  `AcquisitionMode`, `RetainedProviderContent`, `ContentScopeBinding` and
+  `ProviderIdentityProvenance`.
 
 ## `acquisitionEvidence` non-ownership
 It is a contract declaration only. It owns no provider I/O, no orchestration, no
 hashing, no canonicalization, no SourceRecord production, no persistence and no
 provider profile. Its existence proves no provider identity profile and no
-provider content-scope profile; all six stay `REQUIRED_UNPROVEN`.
+provider content-scope profile.
+
+Provider profiles are reviewed elsewhere, per provider and per resource, and never
+by this contract. The GitHub **issue** profiles are recorded in
+`docs/architecture/GITHUB_ISSUE_ACQUISITION_PROFILE.md` and implemented at
+`app/lib/infrastructure/external/github/recordedIssueCapture.ts`: the content-scope
+profile is proven, and the identity profile is **not** — it reads
+`PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL`, accepted by the PM for Phase-1
+bounded experimental use with five named requirements left unproven. Every other
+provider profile gate stays `REQUIRED_UNPROVEN`.
 
 ## Common mistakes
 - Importing an application type to describe a port; the dependency runs the other way.

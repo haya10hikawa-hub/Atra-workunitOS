@@ -96,6 +96,22 @@ Every status below was re-verified against the evidence snapshot before being wr
 
 `COMPLETE on merge of this record` is a conditional status, not a claim that the phase was already complete before this pull request. Until this pull request merges, P0-1, P0-2 and P0-3 are `IN_PROGRESS`.
 
+The evidence column above is pinned to snapshot `e29f08cc` and is not rewritten as the tree moves; changes since that snapshot are recorded below it instead.
+
+### Movement since the `e29f08cc` evidence snapshot
+
+**P1-1 status is unchanged: `PARTIAL`.** Its evidence has changed. A separately authorized implementation WorkUnit closed the first vertical slice, so the snapshot sentence "No adapter, producer or consumer exists" no longer describes the tree. One real recorded provider source now reaches `SourceRecordV1` through a production path:
+
+```text
+retained GitHub issue export
+  → app/lib/infrastructure/external/github/recordedIssueCapture.ts   (acquisition + provider profile)
+  → app/lib/ports/acquisitionEvidence/types.ts                       (AcquisitionCapture)
+  → app/lib/application/source/sourceRecordProduction.ts             (producer)
+  → SourceRecordV1
+```
+
+`PARTIAL` remains the honest status: it is one provider resource under one acquisition mode, with no persistence, no correlation, and no consumer of the record beyond its producer. The two GitHub **issue** provider profiles are recorded in `docs/architecture/GITHUB_ISSUE_ACQUISITION_PROFILE.md`, and they did not land in the same state: the content-scope profile is proven, while the identity profile is **not** proven and reads `PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL` — a PM-accepted, GitHub-Issue-only, Phase-1-only exception over five named unproven requirements (`SOURCE_RECORD_V1_SEMANTICS.md` §4.1). Every other provider profile gate stays `REQUIRED_UNPROVEN`. P1-2 is untouched and no new canonical record was declared, so the just-in-time allowlist expansion recorded below stays at zero.
+
 ## Semantic Authority Decision
 
 The human PM selected decision **C**: ratify the three Phase-1 semantic authority names now, but expand the machine-enforced canonical-record allowlist only just-in-time, inside the WorkUnit that actually introduces each record.
