@@ -199,14 +199,23 @@ test("R4: hashing an Atra-side representation is explicitly not a contentDigest"
 
 // ─── R5 — every provider profile stays unproven ─────────────────────────────
 
+// Two of the six gates were closed for one provider RESOURCE — GitHub issues — by a separately
+// authorized profile WorkUnit. Two of them, and only two. The labels below are the exact remaining
+// unproven ones, spelled as the document spells them, so a gate that widens from "GitHub issues"
+// to "GitHub" fails here rather than passing on a substring.
 const PROFILE_GATES = [
-  "GitHub identity profile",
+  "GitHub identity profile, other resources",
   "Slack identity profile",
   "Google Calendar identity profile",
-  "GitHub content-scope profile",
+  "GitHub content-scope profile, other resources",
   "Slack content-scope profile",
   "Google Calendar content-scope profile",
 ]
+
+// The pair a reviewed profile moved, and the document that must back them. A gate reading `PROVEN`
+// without that document is exactly the failure this pin exists to catch.
+const PROVEN_PROFILE_GATES = ["GitHub issue identity profile", "GitHub issue content-scope profile"]
+const PROVIDER_PROFILE_DOC = "docs/architecture/GITHUB_ISSUE_ACQUISITION_PROFILE.md"
 
 const GATE_STATE = "REQUIRED_UNPROVEN"
 
@@ -222,9 +231,30 @@ const UNVERIFIED_PROVIDER_FIELDS = [
   /\bnode[_ ]?id\b/i, /\bdatabase id\b/i, /\bts tuple\b/i, /\bevent id tuple\b/i,
 ]
 
-test("R5: all six provider profile gates stay REQUIRED_UNPROVEN", async () => {
+test("R5: every gate without a reviewed profile stays REQUIRED_UNPROVEN", async () => {
   const raw = await read(SEMANTICS_DOC)
   const lines = raw.split("\n")
+
+  // The two moved gates, and the proof that had to exist before they could move. Checked first, so
+  // a document that promotes a gate with no profile behind it fails on the missing proof rather
+  // than on an unrelated assertion further down.
+  for (const gate of PROVEN_PROFILE_GATES) {
+    const gateLines = lines.filter((line) => line.includes(gate) && line.includes("="))
+    assert.equal(gateLines.length, 1, `${gate} must have exactly one gate line`)
+    assert.ok(/=\s*PROVEN\b/.test(gateLines[0]), `${gate} must read PROVEN: ${gateLines[0]}`)
+  }
+  const profileDoc = await read(PROVIDER_PROFILE_DOC)
+  for (const required of [
+    "github.issue.rest.database-primary-key", "github.issue.rest.retained-response-body",
+    "Identifies the primary key from the database", "GitHub issues only",
+  ]) {
+    assert.ok(profileDoc.includes(required),
+      `${PROVIDER_PROFILE_DOC} must record ${required} for the moved gates to mean anything`)
+  }
+  // Scope, not just existence: the moved gates are for issues. The profile must say so about the
+  // identifier GitHub itself has already re-issued, or the exclusion is only implied.
+  assert.ok(/node[_ ]?id/i.test(profileDoc),
+    `${PROVIDER_PROFILE_DOC} must state why node_id is excluded rather than leave it unmentioned`)
 
   for (const gate of PROFILE_GATES) {
     const gateLines = lines.filter((line) => line.includes(gate) && line.includes("="))
@@ -253,23 +283,24 @@ test("R5: all six provider profile gates stay REQUIRED_UNPROVEN", async () => {
     "no unverified provider identifier may be asserted as a profile")
 })
 
-// ─── R6 — the acquisition implementation stays unstarted ────────────────────
+// ─── R6 — the acquisition implementation is exactly the reviewed slice ──────
 
-// R6 was written while acquisition-evidence DECLARATION was also unstarted, so the two contract
-// type names sat in the denylist below alongside genuine implementation symbols. A separately
-// authorized WorkUnit has since declared the neutral contract, and only that part is superseded:
+// R6 was written while acquisition was unstarted, and asserted absence. Two separately authorized
+// WorkUnits have since declared the contract and then built one vertical slice through it, so
+// absence is superseded by an exact, path-bound set:
 //
-//   ACQUISITION_EVIDENCE_CONTRACT   = DECLARED
-//   PROVIDER_PROFILE_IMPLEMENTATION = ABSENT
-//   PROVIDER_WIRING                 = ABSENT
-//   DIGEST_COMPUTATION              = ABSENT
-//   SOURCE_RECORD_PRODUCER          = ABSENT
-//   SOURCE_RECORD_CONSUMERS         = 0
+//   ACQUISITION_EVIDENCE_CONTRACT   = DECLARED, at one module
+//   PROVIDER_PROFILE_IMPLEMENTATION = GitHub issues only, at one module
+//   PROVIDER_WIRING                 = GitHub issues only, at one module
+//   DIGEST_COMPUTATION              = at the GitHub acquisition module only
+//   SOURCE_RECORD_PRODUCER          = one module
+//   SOURCE_RECORD_CONSUMERS         = 1, its producer
 //
-// Declaring a contract shape is not implementing acquisition. Every symbol that would exist only
-// because production code began producing, adapting or digesting a SourceRecordV1, or began
-// implementing a provider profile, stays forbidden below — the denylist lost exactly two names
-// and gained no permission.
+// What R6 protected has not changed: nothing else may produce, adapt, digest or profile a
+// SourceRecordV1. So the denylist below is kept in full and made path-bound instead of being
+// deleted. Each name may be declared only at a reviewed module, and a second producer, a second
+// digest site or a second provider profile fails here whatever it is called — including under one
+// of these names at a new path, which is how the check would otherwise have been evaded by renaming.
 const UNSTARTED_IMPLEMENTATION_SYMBOLS = [
   "toSourceRecordV1", "buildSourceRecordV1", "createSourceRecordV1", "makeSourceRecordV1",
   "sourceRecordFrom", "SourceRecordAdapter", "SourceRecordProducer", "SourceRecordRepository",
@@ -278,45 +309,63 @@ const UNSTARTED_IMPLEMENTATION_SYMBOLS = [
   "providerObjectKeyFor",
 ]
 
+// The two modules the reviewed slice authorized, pinned by resolved path. No third module may
+// acquire, produce, digest or profile, whatever it is named.
+const GITHUB_ACQUISITION = "app/lib/infrastructure/external/github/recordedIssueCapture.ts"
+const SOURCE_PRODUCER = "app/lib/application/source/sourceRecordProduction.ts"
+const AUTHORIZED_IMPLEMENTATION_MODULES = [GITHUB_ACQUISITION, SOURCE_PRODUCER]
+
 // The declared contract, and the single module allowed to declare it. The pair is pinned by
 // resolved path so "declared" cannot decay into "declared anywhere".
 const EVIDENCE_PORT = "app/lib/ports/acquisitionEvidence/types.ts"
-const EVIDENCE_CONTRACT_SYMBOLS = ["AcquisitionEvidence", "AcquiredSignalObservation"]
+const EVIDENCE_CONTRACT_SYMBOLS = [
+  "AcquisitionCaptureId", "AcquisitionTenantPartition", "AcquisitionMode",
+  "RetainedProviderContent", "ContentScopeBinding", "ProviderIdentityProvenance",
+  "AcquisitionCapture", "AcquisitionEvidence",
+]
 
-test("R6: no production module produces, adapts, digests or profiles a SourceRecordV1", async () => {
+test("R6: only the reviewed slice produces, adapts, digests or profiles a SourceRecordV1", async () => {
   const declared: string[] = []
   const evidenceSites: string[] = []
   let scanned = 0
   for (const root of ["app", "scripts"]) {
     for (const file of await collectCodeFiles(path.join(rootDir, root))) {
+      const relative = path.relative(rootDir, file).split(path.sep).join("/")
       const source = await readFile(file, "utf8")
       scanned += 1
       for (const symbol of UNSTARTED_IMPLEMENTATION_SYMBOLS) {
-        if (new RegExp(`\\b(?:type|interface|class|enum|const|let|var|function)\\s+${symbol}\\b`).test(source)) {
-          declared.push(`${path.relative(rootDir, file)} declares ${symbol}`)
+        if (new RegExp(`\\b(?:type|interface|class|enum|const|let|var|function)\\s+${symbol}\\b`).test(source)
+          && !AUTHORIZED_IMPLEMENTATION_MODULES.includes(relative)) {
+          declared.push(`${relative} declares ${symbol}`)
         }
       }
       for (const symbol of EVIDENCE_CONTRACT_SYMBOLS) {
         if (new RegExp(`\\b(?:type|interface|class|enum|const|let|var|function)\\s+${symbol}\\b`).test(source)) {
-          evidenceSites.push(`${path.relative(rootDir, file)} declares ${symbol}`)
+          evidenceSites.push(`${relative} declares ${symbol}`)
         }
       }
     }
   }
   assert.ok(scanned > 100, "the production scan must not be vacuous")
   assert.deepEqual(declared, [],
-    `P1-1 acquisition implementation is not authorized here:\n${declared.join("\n")}`)
+    `P1-1 acquisition implementation is authorized only at the reviewed modules:\n${declared.join("\n")}`)
 
-  // ACQUISITION_EVIDENCE_CONTRACT = DECLARED, and declared in exactly one place. Dropping the two
-  // names from the denylist above must not become permission to declare them anywhere, nor may the
-  // contract quietly disappear while this test still reports the state as DECLARED.
+  // Non-vacuity for the path-bound exemption: it must actually be reachable. Both authorized
+  // modules must exist, or the allowance above silently guards nothing and a moved module would
+  // pass by disappearing rather than by being reviewed.
+  for (const authorized of AUTHORIZED_IMPLEMENTATION_MODULES) {
+    await assert.doesNotReject(read(authorized), `${authorized} must exist for its exemption to mean anything`)
+  }
+
+  // ACQUISITION_EVIDENCE_CONTRACT = DECLARED, and declared in exactly one place. The contract may
+  // neither be declared a second time nor quietly disappear while this test reports it as DECLARED.
   assert.deepEqual(evidenceSites.sort(), EVIDENCE_CONTRACT_SYMBOLS
     .map((symbol) => `${EVIDENCE_PORT} declares ${symbol}`).sort(),
     `the acquisition evidence contract must be declared exactly once, at ${EVIDENCE_PORT}`)
 
-  // DIGEST_COMPUTATION = ABSENT, at the one module now authorized to name the digest. The
-  // contract carries attested evidence; a hashing primitive here would start the implementation
-  // this WorkUnit is not authorized to make.
+  // DIGEST_COMPUTATION stays out of the contract module. The digest is computed by the provider
+  // profile, over retained provider bytes; a hashing primitive at the contract would put it where
+  // there is no retained subject to hash.
   const evidenceSource = await read(EVIDENCE_PORT)
   for (const token of ["createHash", "subtle", "node:crypto", 'from "crypto"', "digest(", "TextEncoder"]) {
     assert.equal(evidenceSource.includes(token), false,
@@ -330,26 +379,39 @@ test("R6: no production module produces, adapts, digests or profiles a SourceRec
     `${RECORD_MODULE_DIR} must stay the record, its validator and their surface`)
 
   // The stronger edge-level ratchet lives in the WU-02 boundary suite. This does not repeat it —
-  // it binds it, so the "no production consumer" guarantee cannot be deleted by a later WorkUnit
-  // while this clarification still claims it holds.
+  // it binds it, so the exact-consumer guarantee cannot be loosened to "any consumer" by a later
+  // WorkUnit while this clarification still claims it holds.
   assertDeclares(flatten(await read(CONSUMER_RATCHET)), [
-    "no production module consumes app/lib/domain/source",
-    "SourceRecordV1 must have no production consumer",
+    "the only production consumer of app/lib/domain/source is its producer",
+    "SourceRecordV1 must have exactly one production consumer",
+    SOURCE_PRODUCER,
   ], `${CONSUMER_RATCHET} production-consumer ratchet`)
 
   const raw = await read(SEMANTICS_DOC)
   assertDeclares(section(raw, "## 5. Acquisition Consequence"), [
-    "ACQUISITION_SCOPE_CHANGE_REQUIRED = YES",
+    "ACQUISITION_SCOPE_CHANGE_REQUIRED = YES, except for GitHub issues, where it has been made",
     "neither enough provider-native identity",
     "nor the full provider content",
-    "does not authorize the change it names",
+    "For every other provider and every other GitHub resource, acquisition scope is unchanged",
   ], `${SEMANTICS_DOC} acquisition consequence`)
+  // Section 6 is the historical boundary of the clarification itself, and its wording is preserved
+  // verbatim. It is only honest alongside section 7, which records what later WorkUnits crossed —
+  // so the two are pinned together, and deleting section 7 fails here rather than leaving section 6
+  // reading as a claim about the current tree.
   assertDeclares(section(raw, "## 6. Explicit Non-Goals"), [
+    "the boundary of **this clarification**",
+    "not a standing prohibition on every later WorkUnit",
     "P1-1 remains `PARTIAL`",
     "runtime producer remains absent",
     "authorizing or implementing a `SourceRecordV1` producer, adapter, consumer or persistence path",
     "authorizing or implementing content canonicalization or digest computation",
   ], `${SEMANTICS_DOC} non-goals`)
+  assertDeclares(section(raw, "## 7. What later WorkUnits have since crossed"), [
+    SOURCE_PRODUCER,
+    GITHUB_ACQUISITION,
+    "No persistence path exists",
+    "**P1-1 remains `PARTIAL`**",
+  ], `${SEMANTICS_DOC} superseding record`)
 })
 
 // ─── R7 — the fixture cannot masquerade as a provider profile ───────────────
