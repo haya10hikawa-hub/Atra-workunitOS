@@ -4,8 +4,13 @@
  * Turns one retained human-triggered GitHub REST export into one
  * `AcquisitionCapture`. It is the GitHub half of P1-1: the module that knows a
  * provider's identity and content contracts, and the only module authorized to state
- * them. Its proof is recorded in
- * docs/architecture/GITHUB_ISSUE_ACQUISITION_PROFILE.md.
+ * them. What is actually established about each is recorded in
+ * docs/architecture/GITHUB_ISSUE_ACQUISITION_PROFILE.md: the content-scope profile is
+ * PROVEN, and the identity profile is NOT — it is
+ * PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL, a PM-accepted Phase-1 exception over
+ * five named unproven requirements. No behaviour here depends on that distinction:
+ * this module derives values from the retained bytes and asserts no guarantee about
+ * the provider's identifier beyond what those bytes state.
  *
  * PURE. No network, no clock, no randomness, no filesystem, no persistence. The
  * caller supplies the retained archive text; this module never fetches anything, so

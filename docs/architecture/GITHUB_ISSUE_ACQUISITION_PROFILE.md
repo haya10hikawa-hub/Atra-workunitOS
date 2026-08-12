@@ -7,13 +7,19 @@ Subordinate to:
 - `docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md` — Product / Roadmap Authority
 - `docs/architecture/SOURCE_RECORD_V1_SEMANTICS.md` — the generic B1-A / B2-P1 semantics this profile must satisfy
 
-This document closes exactly two of the six provider profile gates named in
+This document addresses exactly two of the six provider profile gates named in
 `SOURCE_RECORD_V1_SEMANTICS.md` §4, for one provider and one resource type. It proves nothing
 about Slack, about Google Calendar, about GitHub pull requests, comments, reviews, commits or
 repositories, or about any other GitHub resource. Those gates stay `REQUIRED_UNPROVEN`.
 
+The two gates did not move to the same state, and this document does not pretend they did. The
+content-scope gate is proven. The identity gate is **not** proven: the human PM accepted it for
+Phase-1 bounded experimental use with named requirements left unproven, and §2.1 records those
+residuals rather than arguing them away.
+
 ```text
-GitHub ISSUE identity profile      = PROVEN, github.issue.rest.database-primary-key v1
+GitHub ISSUE identity profile      = PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL,
+                                     github.issue.rest.database-primary-key v1
 GitHub ISSUE content-scope profile = PROVEN, github.issue.rest.retained-response-body v1
 ```
 
@@ -48,22 +54,23 @@ Issue.id              "The Node ID of the Issue object"
 Issue.number          "Identifies the issue number."
 ```
 
-The REST `id` and the GraphQL `databaseId` are the same value for the same object. For the object
-acquired by this slice, REST returned `"id": 4968607486` and GraphQL returned
-`databaseId: 4968607486` and `fullDatabaseId: "4968607486"` — the provider stating one identity
-across two of its own surfaces.
+For the object acquired by this slice, REST returned `"id": 4968607486` and GraphQL returned
+`databaseId: 4968607486` and `fullDatabaseId: "4968607486"`. That is an **observation about one
+object on one day**, not a provider commitment. GitHub publishes no contract stating that the REST
+`id` and the GraphQL `databaseId` are the same value for every issue, and this document asserts no
+such equivalence. It is residual **R5** in §2.1.
 
-That satisfies the four requirements the semantics place on identity material:
+Against the four requirements the semantics place on identity material, the honest reading is:
 
-| Requirement | Evidence |
-| --- | --- |
-| provider-native | It is a member of GitHub's own representation of the resource, present in the retained response bytes. Atra neither mints nor derives it |
-| identity-participating | GitHub calls it *the primary key from the database*. GitHub's own durable global reference is built from it — see below |
-| lifetime-immutable | A primary key identifies the row for the row's lifetime; GitHub has never re-issued one, and the value is the input its node IDs are constructed from. The one identifier GitHub *has* changed is `node_id`, not this |
-| collision-safe in namespace | A primary key is unique within the table it keys. The namespace `github.com/rest/issues` is exactly that scope, and the profile claims uniqueness nowhere wider |
+| Requirement | Status | Basis |
+| --- | --- | --- |
+| provider-issued | **PROVEN** | It is a member of GitHub's own representation of the resource, present in the retained response bytes. Atra neither mints, derives nor substitutes it |
+| identity-participating | **supported at the Phase-1 acceptance level** | GitHub's own schema calls it *the primary key from the database*, and the node ID decoding below shows GitHub composing references out of it. That is provider-stated support for identity participation; it is not a published guarantee, so it is accepted at Phase-1 level rather than recorded as proven |
+| lifetime-immutable | **UNPROVEN** | GitHub publishes no lifetime-immutability commitment for the issue `id`. "It is a primary key" describes a database column, not a provider guarantee to consumers, and no number of unchanged observations is a proof. Residual **R1** |
+| collision-safe in namespace | **UNPROVEN** | GitHub publishes no uniqueness or non-reuse guarantee for `github.com/rest/issues` to consumers. Uniqueness of a key inside GitHub's own table is an inference about their storage, not a provider-backed contract Atra may rely on. Residuals **R2** and **R4** |
 
-GitHub's next-format global node ID for the acquired object decodes to the provider's own
-composition of two primary keys:
+GitHub's next-format global node ID for the acquired object decodes to a composition that includes
+two database primary keys:
 
 ```text
 node_id  I_kwDOR1Wbq88AAAABKCbu_g
@@ -73,9 +80,11 @@ payload  93 00 ce 47559bab cf 000000012826eefe
 ```
 
 Both values were confirmed against GraphQL independently (`repository.databaseId` = 1196792747,
-`issue.databaseId` = 4968607486). GitHub therefore treats the issue's database primary key as the
-identity material its own reference identifiers are made of. This decoding is corroboration of
-that claim; it is not the profile, and no Atra code decodes a node ID.
+`issue.databaseId` = 4968607486). For this object, GitHub's own reference identifier is built out
+of the issue's database primary key. That is corroboration for identity participation, at the level
+§2.1 records: it is one decoded example of an encoding GitHub tells consumers to treat as opaque,
+not a published commitment about every issue or about the future. It is not the profile, and no
+Atra code decodes a node ID.
 
 ### Why not `node_id`
 
@@ -84,6 +93,10 @@ down and replaced with a new format", and GitHub's own guidance is that consumer
 [their] service to treat these IDs as opaque strings". A value the provider has re-issued once, in
 a documented migration, cannot be asserted as lifetime-immutable identity material — so it is
 excluded, and excluded for a reason recorded here rather than by omission.
+
+The contrast is narrower than it looks, and stating it precisely matters: `node_id` is **known to
+have changed**, while `id` is **not known either way** (R1). Choosing `id` therefore avoids a
+demonstrated re-issue; it does not acquire a guarantee `node_id` lacks.
 
 ### Why not `number`, and not a composite
 
@@ -103,13 +116,74 @@ No URL, permalink, `html_url`, display name, repository name, login, title, arra
 observation instant or Atra-generated value participates in `providerObjectKey`. The key is carried
 byte-for-byte from the provider's digits: not trimmed, not case-folded, not re-encoded, not padded.
 
-### Representability
+### Representability — PROVEN, fail-closed
 
 `id` is parsed from JSON as a number. A value outside the exactly-representable integer range would
 be rounded by any JSON parser, so the digits produced would not be GitHub's. Acquisition refuses
 such a value (`provider_identity_unrepresentable`) rather than emitting an approximation. GitHub
 issue ids are far below that bound today; the check exists so the day they are not is a refusal and
 not a silent corruption.
+
+This one is proven, and it is proven the only way a property of this kind can be: the failing case
+refuses. The refusal is a code path in the acquisition module, not a claim about GitHub.
+
+## 2.1 Unproven residuals, and the acceptance that stands over them
+
+The identity profile is used at Phase 1 with the following requirements **not proven**. They are
+listed so that no later reader has to reconstruct what was known; none of them may be rewritten as
+proven without new provider authority.
+
+```text
+R1  REST issue `id` lifetime immutability ......................... UNPROVEN
+R2  non-reuse of a REST issue `id` after deletion ................. UNPROVEN
+R3  persistence of a REST issue `id` across repository transfer ... UNPROVEN
+R4  provider-backed collision guarantee for github.com/rest/issues  UNPROVEN
+R5  normative REST `id` = GraphQL `databaseId` equivalence ........ UNPROVEN
+```
+
+What each one means, and why observation does not close it:
+
+- **R1 — lifetime immutability.** GitHub publishes no statement that an issue's `id` will not
+  change. The schema describes what the value *is* today, not what GitHub commits it will remain.
+- **R2 — non-reuse after deletion.** GitHub issues can be deleted. Nothing published says the
+  freed identifier is never assigned to a later object, so a key that has been seen once is not
+  guaranteed to still denote the same object.
+- **R3 — repository transfer.** Issues move with a transferred repository, and GitHub publishes no
+  statement about whether the issue's `id` survives that move unchanged.
+- **R4 — collision guarantee.** Uniqueness within GitHub's own table is an inference about their
+  storage. It is not a guarantee GitHub extends to consumers of `github.com/rest/issues`, and this
+  profile relies on it, so it is recorded as relied-upon and unproven rather than as proven.
+- **R5 — surface equivalence.** REST `id` and GraphQL `databaseId` matched for the acquired object.
+  One matching pair is not a normative equivalence, and GitHub publishes none.
+
+### Status, and the acceptance it rests on
+
+```text
+provider-issued .......................... PROVEN
+representability ......................... PROVEN / fail-closed
+identity-participating ................... supported at the Phase-1 acceptance level
+lifetime immutability .................... UNPROVEN   (R1)
+non-reuse ................................ UNPROVEN   (R2)
+transfer persistence ..................... UNPROVEN   (R3)
+collision guarantee ...................... UNPROVEN   (R4)
+surface equivalence ...................... UNPROVEN   (R5)
+
+overall  PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL
+```
+
+The human PM reviewed R1–R5 and accepted them **explicitly**, for Phase-1 bounded experimental use
+of GitHub issues under this profile version and nothing else. The acceptance is a product decision
+to proceed while knowing what is not known. It is not evidence, it does not discharge R1–R5, and it
+grants nothing to any other provider, any other GitHub resource, any other profile version or any
+production identity certification.
+
+**Revisit condition.** The acceptance expires when Phase-1 bounded experimental use ends. Any of
+the following also reopens it before then: a proposal to persist, correlate or deduplicate on
+`providerObjectKey` beyond Phase-1 experimental use; a second GitHub resource or a second provider
+seeking the same treatment; a bump of the identity profile version; or GitHub publishing authority
+that would close any of R1–R5. Closing a residual requires provider authority reviewed in a
+separately authorized WorkUnit — never an accumulation of observations, and never this document
+edited in place.
 
 ## 3. Content-scope profile — `github.issue.rest.retained-response-body` v1
 
@@ -187,3 +261,8 @@ This profile authorizes production from GitHub **issues** only, under the two pr
 named above, and only through the module pair recorded in the slice. It grants nothing to any other
 provider, resource, profile version or acquisition mode. Widening any of those is a separate
 reviewed change.
+
+The identity half of that authorization carries R1–R5 with it. It is Phase-1 bounded experimental
+use, not a production identity certification, and it is not a licence for any other GitHub resource
+to be treated the same way on the grounds that issues were. The content-scope profile is unaffected
+by the residuals: they are statements about identity, and §3 rests on the retained bytes.

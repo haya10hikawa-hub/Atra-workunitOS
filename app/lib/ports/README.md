@@ -43,10 +43,13 @@ hashing, no canonicalization, no SourceRecord production, no persistence and no
 provider profile. Its existence proves no provider identity profile and no
 provider content-scope profile.
 
-Provider profiles are proven elsewhere, per provider and per resource, and never
-by this contract. The GitHub **issue** identity and content-scope profiles are
-proven in `docs/architecture/GITHUB_ISSUE_ACQUISITION_PROFILE.md` and implemented
-at `app/lib/infrastructure/external/github/recordedIssueCapture.ts`; every other
+Provider profiles are reviewed elsewhere, per provider and per resource, and never
+by this contract. The GitHub **issue** profiles are recorded in
+`docs/architecture/GITHUB_ISSUE_ACQUISITION_PROFILE.md` and implemented at
+`app/lib/infrastructure/external/github/recordedIssueCapture.ts`: the content-scope
+profile is proven, and the identity profile is **not** — it reads
+`PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL`, accepted by the PM for Phase-1
+bounded experimental use with five named requirements left unproven. Every other
 provider profile gate stays `REQUIRED_UNPROVEN`.
 
 ## Common mistakes

@@ -110,7 +110,7 @@ retained GitHub issue export
   → SourceRecordV1
 ```
 
-`PARTIAL` remains the honest status: it is one provider resource under one acquisition mode, with no persistence, no correlation, and no consumer of the record beyond its producer. The two GitHub **issue** provider profiles are proven in `docs/architecture/GITHUB_ISSUE_ACQUISITION_PROFILE.md`; every other provider profile gate stays `REQUIRED_UNPROVEN`. P1-2 is untouched and no new canonical record was declared, so the just-in-time allowlist expansion recorded below stays at zero.
+`PARTIAL` remains the honest status: it is one provider resource under one acquisition mode, with no persistence, no correlation, and no consumer of the record beyond its producer. The two GitHub **issue** provider profiles are recorded in `docs/architecture/GITHUB_ISSUE_ACQUISITION_PROFILE.md`, and they did not land in the same state: the content-scope profile is proven, while the identity profile is **not** proven and reads `PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL` — a PM-accepted, GitHub-Issue-only, Phase-1-only exception over five named unproven requirements (`SOURCE_RECORD_V1_SEMANTICS.md` §4.1). Every other provider profile gate stays `REQUIRED_UNPROVEN`. P1-2 is untouched and no new canonical record was declared, so the just-in-time allowlist expansion recorded below stays at zero.
 
 ## Semantic Authority Decision
 

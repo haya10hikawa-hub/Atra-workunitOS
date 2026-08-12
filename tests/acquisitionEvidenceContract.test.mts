@@ -576,7 +576,12 @@ const UNPROVEN_GATES = [
   "GitHub content-scope profile, other resources", "Slack content-scope profile",
   "Google Calendar content-scope profile",
 ]
-const PROVEN_GATES = ["GitHub issue identity profile", "GitHub issue content-scope profile"]
+// Only ONE of the two moved gates is proven. Identity is not: it carries a PM-accepted Phase-1
+// exception over five unproven requirements, so it must read the scoped state and must not read
+// `PROVEN`. Listing it here as proven would be the false-proof claim this suite is meant to catch.
+const PROVEN_GATES = ["GitHub issue content-scope profile"]
+const SCOPED_EXCEPTION_GATE = "GitHub issue identity profile"
+const SCOPED_EXCEPTION_STATE = "PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL"
 const GATE_STATE = "REQUIRED_UNPROVEN"
 const FORBIDDEN_GATE_STATES = [
   /\bRATIFIED\b/, /\bPROVEN\b/, /\bCOMPLETE\b/, /\bDONE\b/, /\bSATISFIED\b/, /\bAUTHORIZED\b/,
@@ -600,13 +605,28 @@ test("A9: only the reviewed GitHub issue gates moved, and the profile doc backs 
     assert.ok(/=\s*PROVEN\b/.test(gateLines[0]), `${gate} must read PROVEN: ${gateLines[0]}`)
   }
 
+  const identityGate = lines.filter(
+    (line) => line.includes(SCOPED_EXCEPTION_GATE) && line.includes("="))
+  assert.equal(identityGate.length, 1, `${SCOPED_EXCEPTION_GATE} must have exactly one gate line`)
+  assert.ok(new RegExp(`=\\s*${SCOPED_EXCEPTION_STATE}\\b`).test(identityGate[0]),
+    `${SCOPED_EXCEPTION_GATE} must read ${SCOPED_EXCEPTION_STATE}: ${identityGate[0]}`)
+  assert.equal(/=\s*PROVEN\b/.test(identityGate[0]), false,
+    `${SCOPED_EXCEPTION_GATE} must not be promoted to PROVEN: ${identityGate[0]}`)
+
   // A moved gate is only as good as the profile behind it. The profile document must exist, must
-  // scope itself to issues, and must name the exact profile identifiers the code uses.
+  // scope itself to issues, and must name the exact profile identifiers the code uses. For the
+  // identity half it must also carry the scoped state and the residuals, so the acceptance cannot
+  // be read anywhere as a proof.
   const profile = await read("docs/architecture/GITHUB_ISSUE_ACQUISITION_PROFILE.md")
   for (const required of [
     "github.issue.rest.database-primary-key", "github.issue.rest.retained-response-body",
     "github.com/rest/issues", "Identifies the primary key from the database",
-    "GitHub issues only",
+    "GitHub issues only", SCOPED_EXCEPTION_STATE,
+    "REST issue `id` lifetime immutability",
+    "non-reuse of a REST issue `id` after deletion",
+    "persistence of a REST issue `id` across repository transfer",
+    "provider-backed collision guarantee for github.com/rest/issues",
+    "normative REST `id` = GraphQL `databaseId` equivalence",
   ]) {
     assert.ok(profile.includes(required), `the profile document must record ${required}`)
   }

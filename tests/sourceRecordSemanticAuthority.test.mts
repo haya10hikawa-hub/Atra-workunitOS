@@ -212,9 +212,17 @@ const PROFILE_GATES = [
   "Google Calendar content-scope profile",
 ]
 
-// The pair a reviewed profile moved, and the document that must back them. A gate reading `PROVEN`
+// The gates a reviewed profile moved, and the document that must back them. A gate reading `PROVEN`
 // without that document is exactly the failure this pin exists to catch.
-const PROVEN_PROFILE_GATES = ["GitHub issue identity profile", "GitHub issue content-scope profile"]
+//
+// The two moved gates did NOT move to the same state, and collapsing them back into one list is
+// the defect this split exists to prevent. Content scope was proven against GitHub's own published
+// contract. Identity was not: the PM accepted it for Phase-1 with five requirements unproven, so it
+// carries the scoped-exception state instead. A later edit that promotes identity to `PROVEN`
+// presents an accepted risk as evidence, and fails here.
+const PROVEN_PROFILE_GATES = ["GitHub issue content-scope profile"]
+const SCOPED_EXCEPTION_GATE = "GitHub issue identity profile"
+const SCOPED_EXCEPTION_STATE = "PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL"
 const PROVIDER_PROFILE_DOC = "docs/architecture/GITHUB_ISSUE_ACQUISITION_PROFILE.md"
 
 const GATE_STATE = "REQUIRED_UNPROVEN"
@@ -243,6 +251,19 @@ test("R5: every gate without a reviewed profile stays REQUIRED_UNPROVEN", async 
     assert.equal(gateLines.length, 1, `${gate} must have exactly one gate line`)
     assert.ok(/=\s*PROVEN\b/.test(gateLines[0]), `${gate} must read PROVEN: ${gateLines[0]}`)
   }
+
+  // The accepted-with-residual gate. Two separate assertions on purpose: that it reads the scoped
+  // state, and that it does not read `PROVEN`. A single positive check would still pass a line
+  // that had acquired both.
+  const identityGateLines = lines.filter(
+    (line) => line.includes(SCOPED_EXCEPTION_GATE) && line.includes("="))
+  assert.equal(identityGateLines.length, 1,
+    `${SCOPED_EXCEPTION_GATE} must have exactly one gate line`)
+  assert.ok(new RegExp(`=\\s*${SCOPED_EXCEPTION_STATE}\\b`).test(identityGateLines[0]),
+    `${SCOPED_EXCEPTION_GATE} must read ${SCOPED_EXCEPTION_STATE}: ${identityGateLines[0]}`)
+  assert.equal(/=\s*PROVEN\b/.test(identityGateLines[0]), false,
+    `${SCOPED_EXCEPTION_GATE} must not be promoted to PROVEN: ${identityGateLines[0]}`)
+
   const profileDoc = await read(PROVIDER_PROFILE_DOC)
   for (const required of [
     "github.issue.rest.database-primary-key", "github.issue.rest.retained-response-body",
@@ -281,6 +302,105 @@ test("R5: every gate without a reviewed profile stays REQUIRED_UNPROVEN", async 
   const asserted = UNVERIFIED_PROVIDER_FIELDS.filter((pattern) => pattern.test(raw))
   assert.deepEqual(asserted.map(String), [],
     "no unverified provider identifier may be asserted as a profile")
+})
+
+// ─── R5b — the identity exception is explicit, scoped, and still an exception ───
+
+// The five requirements the PM accepted as unproven, spelled as both documents spell them. They
+// exist to be READ by a later implementer deciding whether `providerObjectKey` may be persisted,
+// correlated or deduplicated on. A residual that is quietly dropped takes that decision away from
+// them, so each one is pinned in the profile document AND in the semantic authority: a reader who
+// opens only one of the two must not get the reassuring half.
+const IDENTITY_RESIDUALS = [
+  "REST issue `id` lifetime immutability",
+  "non-reuse of a REST issue `id` after deletion",
+  "persistence of a REST issue `id` across repository transfer",
+  "provider-backed collision guarantee for github.com/rest/issues",
+  "normative REST `id` = GraphQL `databaseId` equivalence",
+]
+
+// Claims the superseded profile made, each of which asserted more than GitHub publishes. They are
+// pinned as forbidden rather than merely deleted, because the argument that produced them is the
+// one a later editor is most likely to reconstruct from the same schema text.
+const FALSE_IDENTITY_PROOF_CLAIMS = [
+  /never re-issued/i,
+  /a primary key identifies the row for the row's lifetime/i,
+  /are the same value for the same object/i,
+]
+
+// Providers and resources that must NOT acquire the exception by being mentioned near it. The
+// exception is one provider resource wide; "GitHub issues were accepted, so GitHub was" is exactly
+// the widening this checks for.
+const NON_EXCEPTED_SUBJECTS = ["Slack", "Google Calendar", "other resources"]
+
+test("R5b: the GitHub Issue identity exception is scoped, residual-bearing and not a rule change", async () => {
+  const raw = await read(SEMANTICS_DOC)
+  const profileDoc = await read(PROVIDER_PROFILE_DOC)
+  const gates = section(raw, "## 4. Provider Profile Gates")
+
+  // The generic rule is what the exception is an exception TO. If section 2 stops requiring
+  // provider-lifetime immutability, the exception has silently become the rule and there is
+  // nothing left for it to except.
+  assertDeclares(section(raw, "## 2. Identity Semantics"), [
+    "provider-immutable for the object's lifetime",
+  ], `${SEMANTICS_DOC} generic identity rule survives the exception`)
+
+  // The exception must say the four things that make it reviewable: what is not proven, that a
+  // human accepted it knowing so, how far it reaches, and when it stops.
+  assertDeclares(gates, [
+    "PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL",
+    "GitHub Issues only",
+    "github.issue.rest.database-primary-key v1",
+    "Phase-1 bounded experimental use only",
+    "The human PM reviewed R1–R5 and accepted the residual explicitly",
+    "Acceptance is not evidence",
+    "The exception expires when Phase-1 bounded experimental use ends",
+    "The generic semantics in sections 2 and 3 are untouched by this exception",
+  ], `${SEMANTICS_DOC} scoped exception record`)
+
+  // What the acceptance is NOT. Stated, because every one of these is a reading a later reader
+  // could arrive at from "the PM accepted it" alone.
+  assertDeclares(gates, [
+    "It is not a lifetime-immutability proof",
+    "a production identity certification",
+    "an authorization for any other GitHub resource",
+    "a precedent any second provider or profile may claim",
+  ], `${SEMANTICS_DOC} exception non-grants`)
+
+  for (const residual of IDENTITY_RESIDUALS) {
+    assert.ok(flatten(gates).includes(flatten(residual)),
+      `${SEMANTICS_DOC} §4.1 must keep the residual visible: ${residual}`)
+    assert.ok(flatten(profileDoc).includes(flatten(residual)),
+      `${PROVIDER_PROFILE_DOC} must keep the residual visible: ${residual}`)
+  }
+
+  // The profile document must state the residuals as unproven, not merely mention them, and must
+  // not restate any of the superseded proofs.
+  for (const marker of ["UNPROVEN", "PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL"]) {
+    assert.ok(profileDoc.includes(marker), `${PROVIDER_PROFILE_DOC} must record ${marker}`)
+  }
+  const revived = FALSE_IDENTITY_PROOF_CLAIMS.filter((pattern) => pattern.test(profileDoc))
+  assert.deepEqual(revived.map(String), [],
+    `${PROVIDER_PROFILE_DOC} must not restate a superseded identity proof`)
+
+  // The content-scope profile is untouched by an identity residual, and must not be dragged down
+  // with it: a remediation that downgrades the proven half is as untrue as one that upgrades the
+  // unproven half.
+  assert.ok(/GitHub ISSUE content-scope profile\s*=\s*PROVEN\b/.test(profileDoc),
+    `${PROVIDER_PROFILE_DOC} must keep the content-scope profile PROVEN`)
+
+  // Exactly one exception exists, and it belongs to one provider resource. Every occurrence of the
+  // state is checked, in both documents, so a second gate cannot adopt it and no non-excepted
+  // subject can appear on a line that carries it.
+  for (const [label, doc] of [[SEMANTICS_DOC, raw], [PROVIDER_PROFILE_DOC, profileDoc]] as const) {
+    const carrying = doc.split("\n").filter((line) => line.includes(SCOPED_EXCEPTION_STATE))
+    assert.ok(carrying.length > 0, `${label} must state ${SCOPED_EXCEPTION_STATE}`)
+    for (const line of carrying) {
+      const leaked = NON_EXCEPTED_SUBJECTS.filter((subject) => line.includes(subject))
+      assert.deepEqual(leaked, [],
+        `${label}: the exception must not reach ${leaked.join(", ")}: ${line}`)
+    }
+  }
 })
 
 // ─── R6 — the acquisition implementation is exactly the reviewed slice ──────
