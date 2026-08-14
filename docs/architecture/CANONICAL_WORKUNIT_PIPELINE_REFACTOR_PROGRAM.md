@@ -77,12 +77,33 @@ These are the target decisions proposed by this Draft PR. They become production
 | --- | --- | --- |
 | Source boundary | `CanonicalSourceRecordV1` | Tenant, provider, provider-native ID, immutable source reference, URL when present, capture time, event time, sanitized content, content hash |
 | Correlation | `CorrelationGroupV1` | Non-empty unique source IDs, deterministic rule/version, reasons, conflicts, no ranking side effects |
-| Candidate | `WorkUnitCandidateV1` | Evidence membership, goal/done condition, proposed first action, missing fields, conflicts, confidence, human-review-required |
+| Candidate | `WorkUnitCandidateV1` | Evidence membership, goal/done condition, proposed first action, missing fields, conflicts, confidence, human-review-required; work truth only, never attention state |
 | Human judgment | `WorkUnitCorrectionV1` and `WorkUnitReviewV1` | Actor, timestamp, reason, before/after or patch, append-only replay order |
 | Formal work | `ReviewedWorkUnitV1` | Promotion evidence, resolved required fields, review identity; never created directly from a source route |
 | Action preparation | `ActionPreparationV1` | Reviewed WorkUnit identity and exact intended action; then reuse the existing preview/approval/runtime-authorization separation |
 
 `InboxWorkUnit`, `LauncherWorkUnit`, dashboard models, and Atra workspace models become read projections. They must not construct alternate domain truth.
+
+#### Candidate truth is not attention state
+
+`Candidate truth != attention state` is a hard boundary, on the same footing as `Candidate != ReviewedWorkUnit`, `Preview != Approval` and `Approval != Execution`.
+
+`WorkUnitCandidateV1` contains work truth only. Attention, presentation, visibility, viewed/seen, snooze/defer and display-order state are not canonical Candidate truth. Whether a human has looked at a candidate, dismissed it, deferred it, or where it sat in some list is a fact about a viewing session, not a fact about the work.
+
+The boundary is directional, and only one direction is forbidden:
+
+```text
+canonical Candidate truth  →  projection / future attention policy      allowed
+presentation history       →  canonical Candidate truth                 forbidden
+```
+
+A UI, projection or future attention layer may read canonical Candidate truth. Presentation state must never mutate or redefine it.
+
+This is a semantic boundary, not a field-name rule. `dismissed`, `snoozed`, `snoozedUntil`, `seen`, `viewedAt`, `presentationRank`, `displayOrder`, `attentionScore` and `visible` are examples of the excluded class, not its definition; renaming one of them does not satisfy the boundary. Nor does the boundary narrow the record's own required properties above: evidence membership, missing information, conflicts, confidence and human-review-required are statements about the work and remain canonical Candidate truth.
+
+Mixing presentation history into Candidate truth would make one work truth vary with UI history, contaminate human-correction replay with viewing history, invert the projection dependency so a projection feeds domain truth, and force canonical record semantics to change every time an attention policy changes.
+
+Any future attention or admission state lives outside the canonical Candidate record, as a separate state class, and only if post-Value-Gate evidence justifies it. This boundary authorizes no admission, scheduling, queueing or attention-control implementation, introduces no Phase-1 semantic concept, adds no canonical record and expands no allowlist. It constrains what `WorkUnitCandidateV1` may contain if and when P1-3 is separately authorized to declare it; it does not authorize P1-3.
 
 ### Composition and dependency rules
 
