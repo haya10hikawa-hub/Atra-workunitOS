@@ -810,6 +810,41 @@ test("governance: proposed canonical records are proposal terminology, not runti
   assert.deepEqual(declarations, [], `proposal terminology must not become a runtime declaration:\n${declarations.join("\n")}`)
 })
 
+// `Candidate truth != attention state`. The record this constrains is not declared yet, so there
+// are no fields to scan and a repository-wide search for `dismissed`/`seen` would prove nothing:
+// those names are legitimate in a projection and are examples of the excluded class, not its
+// definition. What is checkable now is where the boundary lives and what it did not add.
+test("governance: canonical Candidate truth excludes attention state", async () => {
+  const doc = await readProgramDoc()
+  assertDocDeclares(doc, [
+    "#### Candidate truth is not attention state",
+    "`WorkUnitCandidateV1` contains work truth only.",
+    "Attention, presentation, visibility, viewed/seen, snooze/defer and display-order state are not canonical Candidate truth.",
+    "A UI, projection or future attention layer may read canonical Candidate truth. Presentation state must never mutate or redefine it.",
+    "This is a semantic boundary, not a field-name rule.",
+    "Any future attention or admission state lives outside the canonical Candidate record",
+    "authorizes no admission, scheduling, queueing or attention-control implementation",
+    "it does not authorize P1-3.",
+  ], "candidate attention boundary")
+
+  // Placement, not restatement: the exclusion sits inside the canonical-ownership row itself, so
+  // the WorkUnitCandidateV1 required-properties list cannot be read without it. A boundary that
+  // lives only in a section of its own is skippable by whoever declares the record at P1-3.
+  const ownershipRow = doc.split("\n").find((line) => line.startsWith("| Candidate | `WorkUnitCandidateV1` |"))
+  assert.ok(ownershipRow, "the canonical ownership table must keep its WorkUnitCandidateV1 row")
+  assert.match(ownershipRow, /work truth only, never attention state/,
+    "the Candidate ownership row must carry the attention-state exclusion in its required properties")
+
+  // Structural: this boundary added no canonical concept. The ownership table is the doc-level
+  // precursor to an allowlist expansion, so an `AttentionStateV1` or `AdmissionDecisionV1` row
+  // would appear here first. The set is closed in both directions against the seven proposal
+  // names, so neither a new record nor a quietly dropped one passes.
+  const ownershipTable = doc.split("### Canonical ownership")[1]?.split("####")[0] ?? ""
+  const named = [...new Set([...ownershipTable.matchAll(/`(\w+V\d+)`/g)].map((match) => match[1]))].sort()
+  assert.deepEqual(named, [...PROPOSED_CANONICAL_TYPES].sort(),
+    "the canonical ownership table names exactly the seven proposal records — this decision adds none")
+})
+
 // T15 — WU-01B. The guard above is a denylist, so a versioned record under an unlisted name would
 // pass it silently. This pairs it with a closed allowlist over the whole versioned-record family:
 // exactly the ratified declarations, at exactly the ratified paths, and nothing else.
