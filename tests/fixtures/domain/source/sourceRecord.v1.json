@@ -1,9 +1,9 @@
 {
-  "note": "WU-01B golden vectors for SourceRecordV1. `valid` is the accepted base record; every `rejects` entry applies `patch` (add/overwrite) and `remove` (delete keys) to a fresh copy of it and must produce exactly `failureCode`. `isoVectors` is the shared instant set on which the locally pinned ISO-8601 UTC guard and the Phase 6 guard must agree. This fixture is validator-shape evidence only. It is NOT a provider identity profile and NOT a provider content-scope profile: `providerObjectKey` is a synthetic opaque token, not a provider-native identifier, and `contentDigest` is a synthetic value digesting nothing. No provider contract may be inferred from any value here; see docs/architecture/SOURCE_RECORD_V1_SEMANTICS.md.",
+  "note": "WU-01B golden vectors for SourceRecordV1. `valid` is the accepted base record; every `rejects` entry applies `patch` (add/overwrite) and `remove` (delete keys) to a fresh copy of it and must produce exactly `failureCode`. `isoVectors` is the shared instant set on which the locally pinned ISO-8601 UTC guard and the Phase 6 guard must agree. This fixture is validator-shape evidence only. It is NOT a provider identity profile and NOT a provider content-scope profile: `providerObjectKey` is a synthetic opaque token, not a provider-native identifier, and `contentDigest` is a synthetic value digesting nothing. No provider contract may be inferred from any value here; see docs/architecture/SOURCE_RECORD_V1_SEMANTICS.md. `provider` is a canonical identity namespace and is resource-scoped where a provider issues keys per resource, so the generic `github` is a rejected value and not a base to fall back to.",
   "valid": {
     "recordVersion": "1",
     "tenantId": "tenant-alpha",
-    "provider": "github",
+    "provider": "github_issue",
     "providerObjectKey": "provider-native-key-fixture",
     "declaredSourceRef": null,
     "sourceUrl": "https://example.invalid/objects/fixture-object",
@@ -33,6 +33,8 @@
     { "failureCode": "invalid_tenant_id", "patch": { "tenantId": 7 } },
     { "failureCode": "invalid_provider", "patch": { "provider": "linear" } },
     { "failureCode": "invalid_provider", "patch": { "provider": "GitHub" } },
+    { "failureCode": "invalid_provider", "patch": { "provider": "github" } },
+    { "failureCode": "invalid_provider", "patch": { "provider": "github_pull-request" } },
     { "failureCode": "invalid_provider", "patch": { "provider": null } },
     { "failureCode": "invalid_provider_object_key", "patch": { "providerObjectKey": "" } },
     { "failureCode": "invalid_provider_object_key", "patch": { "providerObjectKey": "issue\u007f42" } },

@@ -255,6 +255,38 @@ No provider write, no scheduled or autonomous execution, and no live read at ver
 verification re-reads the retained bytes, never the provider. Acquisition refuses an archive whose
 recorded request method is anything but `GET`.
 
+## 5.1 Canonical namespace consequence — no version bump
+
+A later reviewed WorkUnit split Atra's canonical identity namespaces by GitHub resource, so records
+produced under this profile now carry the canonical namespace `github_issue` where they previously
+carried the generic `github`. That is a change to **Atra's** vocabulary, and this section states
+precisely why it is not a change to **this profile**.
+
+```text
+provider namespace       github.com/rest/issues                       unchanged
+provider identity        the issue resource's REST `id`               unchanged
+identity profile         github.issue.rest.database-primary-key v1    NOT bumped
+content-scope profile    github.issue.rest.retained-response-body v1  NOT bumped
+canonical namespace      github  ->  github_issue                     changed, outside this profile
+```
+
+A profile version bump is required when what the profile asserts about the **provider** changes: a
+different provider-native identity member, a different provider namespace, a different in-scope byte
+stream, or a different canonicalization. None of those moved. The key derived from the retained
+capture is the same digits it was before the split, and the digest over the same retained bytes is
+the same digest — the slice's regression asserts both against the original real capture.
+
+What moved is the outer namespace Atra interprets that key in, which this document never named: the
+provider namespace here was already resource-scoped, and the collapse was entirely on Atra's side,
+where two resource-scoped provider namespaces were both bound to one canonical `github`. Bumping this
+profile's version would have asserted that GitHub's issue identity contract changed, which is false,
+and would have made digests produced before and after the split incomparable for no provider reason.
+
+The residuals in §2.1 are unaffected in both directions. R1–R5 are neither closed nor widened by the
+split, and R4 in particular remains **exactly** as unproven as before: it is a statement about
+collision guarantees *within* `github.com/rest/issues`, and separating issues from pull requests in
+Atra's vocabulary says nothing about uniqueness inside GitHub's own issue table.
+
 ## 6. Scope boundary
 
 This profile authorizes production from GitHub **issues** only, under the two profile versions
@@ -266,3 +298,8 @@ The identity half of that authorization carries R1–R5 with it. It is Phase-1 b
 use, not a production identity certification, and it is not a licence for any other GitHub resource
 to be treated the same way on the grounds that issues were. The content-scope profile is unaffected
 by the residuals: they are statements about identity, and §3 rests on the retained bytes.
+
+GitHub pull requests are now covered by a separate reviewed profile,
+`docs/architecture/GITHUB_PULL_REQUEST_ACQUISITION_PROFILE.md`. It is a sibling document, reviewed on
+its own evidence: nothing in it was admitted on the strength of this one, and the Phase-1 acceptance
+recorded in §2.1 remains non-transferable.

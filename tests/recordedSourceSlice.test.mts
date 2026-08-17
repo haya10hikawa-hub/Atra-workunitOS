@@ -104,7 +104,7 @@ test("S1: the retained real GitHub issue export produces a canonical SourceRecor
   assert.deepEqual({ ...produced.production.record }, {
     recordVersion: "1",
     tenantId: archive.tenantPartition,
-    provider: "github",
+    provider: "github_issue",
     providerObjectKey: String(object.id),
     declaredSourceRef: null,
     sourceUrl: null,
