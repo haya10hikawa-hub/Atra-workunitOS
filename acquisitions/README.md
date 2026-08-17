@@ -69,11 +69,19 @@ different acquisition modules and produce records in different canonical identit
 (`github_issue` and `github_pull_request`).
 
 An archive read under the wrong resource's module is refused, never reinterpreted. That refusal is
-enforced on the **retained bytes** and not on the envelope: the two archives carry byte-identical
-request provenance, so nothing in `capturedFrom` could distinguish them. Each module checks that the
-payload carries — or does not carry — pull request structure, and fails closed otherwise. Without
-that check the canonical namespace would be asserted by whichever module the operator happened to
-call, which is the one part of canonical identity the retained bytes cannot state for themselves.
+enforced on the **retained bytes** and never on the envelope. Each module checks that the payload
+carries — or does not carry — pull request structure, and fails closed otherwise. Without that check
+the canonical namespace would be asserted by whichever module the operator happened to call, which is
+the one part of canonical identity the retained bytes cannot state for themselves.
+
+The guard does not depend on the envelope being indistinguishable, and it would be a byte-level check
+either way. It is worth being exact about what the envelope does and does not carry, because an
+earlier revision of this file overstated it: the two archives are **not** byte-identical in
+`capturedFrom`. Their `requestUrl` members differ (`…/issues/207` versus `…/pulls/229`). What is
+identical is every enforced member — `requestMethod`, `acceptHeader` and `providerApiVersion` — and
+`requestUrl` is unenforced provenance that no code path parses for a decision. So nothing acquisition
+*acts on* in `capturedFrom` distinguishes the two archives, and a reader must not treat the differing
+URL as the resource discriminator.
 
 The two retained streams are also formatted differently — the pull request response is pretty-printed
 and the issue response is compact. Neither was touched. That difference is the provider's, it is
