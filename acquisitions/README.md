@@ -66,8 +66,14 @@ a decision.
 The two are **different provider resources**, not two captures of one. Their REST identifiers come
 from different provider tables and their observed values overlap in range, so they are read by
 different acquisition modules and produce records in different canonical identity namespaces
-(`github_issue` and `github_pull_request`). An archive read under the wrong resource's module is
-refused, never reinterpreted.
+(`github_issue` and `github_pull_request`).
+
+An archive read under the wrong resource's module is refused, never reinterpreted. That refusal is
+enforced on the **retained bytes** and not on the envelope: the two archives carry byte-identical
+request provenance, so nothing in `capturedFrom` could distinguish them. Each module checks that the
+payload carries — or does not carry — pull request structure, and fails closed otherwise. Without
+that check the canonical namespace would be asserted by whichever module the operator happened to
+call, which is the one part of canonical identity the retained bytes cannot state for themselves.
 
 The two retained streams are also formatted differently — the pull request response is pretty-printed
 and the issue response is compact. Neither was touched. That difference is the provider's, it is

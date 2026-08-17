@@ -432,8 +432,11 @@ test("PR-S10: a request outside the profile's pinned GET, media type and API ver
       "unauthorized_accept_profile"],
     [archiveWith(archive, { capturedFrom: { ...from, providerApiVersion: "2021-01-01" } }),
       "unauthorized_provider_api_version"],
+    // An absent version is bad provenance rather than a wrong version, and is refused one step
+    // earlier. Both refusals matter: the wrong-but-well-formed case above pins the profile
+    // comparison, and this one pins the provenance shape.
     [archiveWith(archive, { capturedFrom: { ...from, providerApiVersion: "" } }),
-      "unauthorized_provider_api_version"],
+      "invalid_captured_from"],
     // Envelope hygiene.
     [archiveWith(archive, { acquisitionMode: "LIVE_PROVIDER_READ" }), "unauthorized_acquisition_mode"],
     [archiveWith(archive, { acquisitionMode: "FIXTURE" }), "unauthorized_acquisition_mode"],
@@ -441,6 +444,15 @@ test("PR-S10: a request outside the profile's pinned GET, media type and API ver
     [archiveWith(archive, { observedAt: "2026-08-17" }), "invalid_observed_at"],
     [archiveWith(archive, { observedAt: "2026-08-17T06:35:29+09:00" }), "invalid_observed_at"],
     [archiveWith(archive, { captureId: "" }), "invalid_capture_id"],
+    // Request provenance is bounded text throughout, `requestUrl` included. It is never read for a
+    // decision, so without this it could carry unbounded or control-character material into a
+    // reviewed artifact unchecked.
+    [archiveWith(archive, { capturedFrom: { ...from, requestUrl: 42 } }), "invalid_captured_from"],
+    [archiveWith(archive, { capturedFrom: { ...from, requestUrl: "" } }), "invalid_captured_from"],
+    [archiveWith(archive, { capturedFrom: { ...from, requestUrl: `https://x/${"y".repeat(3000)}` } }),
+      "invalid_captured_from"],
+    [archiveWith(archive, { capturedFrom: { ...from, requestUrl: "https://x/\u0007" } }),
+      "invalid_captured_from"],
     [archiveWith(archive, {
       retainedContent: { retention: "INTEGRITY_BOUND_REFERENCE", bytesBase64: "AA==" },
     }), "unsupported_retention"],
@@ -463,13 +475,23 @@ test("PR-S10: a request outside the profile's pinned GET, media type and API ver
 
   // A live provider read is not merely rejected by name — there is no code path to one. The module
   // reaches for no network primitive at all, so a recorded capture cannot become a live read.
+  //
+  // A text scan is a floor and not a proof: it cannot see through indirection. The import list is
+  // therefore pinned as well, which is the stronger half — a module that imports nothing but a
+  // type-only port has no transitive route to a network, clock or filesystem primitive whatever its
+  // body spells.
   const source = await readFile(
     path.join(rootDir, "app/lib/infrastructure/external/github/recordedPullRequestCapture.ts"), "utf8")
   for (const token of ["fetch(", "XMLHttpRequest", "node:http", "node:https", "undici", "axios",
-    "node:fs", "readFile", "Date.now", "new Date", "Math.random"]) {
+    "node:fs", "readFile", "Date.now", "new Date", "Math.random", "getRandomValues",
+    "performance.now", "globalThis", "process.", "require("]) {
     assert.equal(source.includes(token), false,
       `the acquisition module must not reach for ${token}: it is pure, offline and clock-free`)
   }
+  const imports = [...source.matchAll(/^import[\s\S]*?from "([^"]+)"/gm)].map((entry) => entry[1])
+  assert.deepEqual(imports, ["../../../ports/acquisitionEvidence/types.ts"],
+    "the module's only dependency is the type-only evidence port, so it has no transitive reach")
+  assert.ok(/^import type \{/m.test(source), "that single dependency must be type-only")
 })
 
 // ─── NS-1 — the collision this WorkUnit exists to prevent ───────────────────────
@@ -515,12 +537,27 @@ test("NS-1: a GitHub issue and pull request with the same numeric id are two can
   assert.notEqual(identityOf(prRecord), identityOf(issueRecord),
     "a same-numeric-id issue and pull request must never share a canonical identity")
 
-  // And the separation does not depend on anything else being different. Neutralize every remaining
-  // difference — digest, times, capture linkage — and the identities must STILL differ. This is what
-  // makes the namespace load-bearing rather than merely correlated with the outcome.
-  const neutralized = (record: SourceRecordV1) => identityOf(record)
-  assert.notEqual(neutralized(prRecord), neutralized(issueRecord),
-    "identity must separate them without help from digest, URL, number or capture id")
+  // And the separation does not depend on anything else being different. Rewrite BOTH records so
+  // that every non-identity field is byte-equal — digest, all three instants, the opaque ref and the
+  // locator — and the identities must still differ. This is what makes the namespace load-bearing
+  // rather than merely correlated with an outcome that other fields were also producing.
+  const flattenNonIdentity = (record: SourceRecordV1): SourceRecordV1 => Object.freeze({
+    ...record,
+    declaredSourceRef: null,
+    sourceUrl: null,
+    observedAt: "2026-01-01T00:00:00Z",
+    recordedAt: "2026-01-02T00:00:00Z",
+    sourceEventAt: "2026-01-01T00:00:00Z",
+    contentDigest: `sha256:${"0".repeat(64)}`,
+  })
+  const flatPr = flattenNonIdentity(prRecord)
+  const flatIssue = flattenNonIdentity(issueRecord)
+  assert.deepEqual(
+    { ...flatPr, provider: null }, { ...flatIssue, provider: null },
+    "the two records must now differ in nothing except the canonical namespace")
+  assert.notEqual(identityOf(flatPr), identityOf(flatIssue),
+    "identity must separate them with no help from digest, times, URL, number or capture id")
+
   assert.notEqual(prRecord.contentDigest, issueRecord.contentDigest,
     "non-vacuity: the two captures are genuinely different provider objects")
 })
@@ -626,6 +663,82 @@ test("NS-4: an unknown GitHub resource namespace fails closed", async () => {
   }
 })
 
+// ─── NS-5 — the resource is bound to the bytes, not to the caller ───────────────
+
+/**
+ * The namespace half of canonical identity must not be the operator's assertion.
+ *
+ * Everything else in this slice is derived from retained bytes, but WHICH canonical namespace a
+ * record lands in is decided by which acquisition module ran. Without a check on the bytes, feeding
+ * one resource's export to the other resource's module mints a real provider key into the wrong
+ * namespace — and the resulting record looks perfectly well-formed, so no reviewer holding it could
+ * tell. Both directions must fail closed, and both are checked here because closing one direction
+ * only moves the defect.
+ */
+test("NS-5: an export of one GitHub resource is refused by the other resource's module", async () => {
+  const prText = await readFile(path.join(rootDir, PR_ARCHIVE), "utf8")
+  const issueText = await readFile(path.join(rootDir, ISSUE_ARCHIVE), "utf8")
+
+  const crossFed = await acquireRecordedGitHubPullRequestCapture(issueText)
+  assert.equal(crossFed.ok, false, "a real issue export must not be acquirable as a pull request")
+  assert.ok(!crossFed.ok)
+  assert.equal(crossFed.failureCode, "provider_resource_mismatch")
+
+  const reverse = await acquireRecordedGitHubIssueCapture(prText)
+  assert.equal(reverse.ok, false, "a real pull request export must not be acquirable as an issue")
+  assert.ok(!reverse.ok)
+  assert.equal(reverse.failureCode, "provider_resource_mismatch")
+
+  // Non-vacuity: each module still accepts its own resource, so the refusals above discriminate by
+  // resource and are not a module that refuses everything.
+  assert.equal((await acquireRecordedGitHubPullRequestCapture(prText)).ok, true)
+  assert.equal((await acquireRecordedGitHubIssueCapture(issueText)).ok, true)
+
+  // BOTH members are required, not either. A guard satisfied by one of them would accept a payload
+  // carrying half of a pull request's ref structure — and, more to the point, a weakening of the
+  // guard from `and` to `or` must not pass this suite silently.
+  const prObject = providerObject(JSON.parse(prText) as Archive)
+  for (const dropped of ["head", "base"]) {
+    const partial: Record<string, unknown> = { ...prObject }
+    delete partial[dropped]
+    const result = await acquireRecordedGitHubPullRequestCapture(
+      archiveWithObject(JSON.parse(prText) as Archive, partial))
+    assert.equal(result.ok, false, `a payload without \`${dropped}\` is not a pull request representation`)
+    assert.ok(!result.ok)
+    assert.equal(result.failureCode, "provider_resource_mismatch")
+  }
+
+  // And the members must be objects, not merely present: a scalar of the right name is not ref
+  // structure, and accepting one would make the guard a key-name check.
+  for (const scalar of [null, "main", 1, []]) {
+    const result = await acquireRecordedGitHubPullRequestCapture(
+      archiveWithObject(JSON.parse(prText) as Archive, { ...prObject, head: scalar }))
+    assert.equal(result.ok, false, `head as ${JSON.stringify(scalar)} is not ref structure`)
+    assert.ok(!result.ok)
+    assert.equal(result.failureCode, "provider_resource_mismatch")
+  }
+
+  // The guard is on the RETAINED BYTES, not on the envelope. The two archives carry byte-identical
+  // request provenance — same method, media type and API version — so nothing in `capturedFrom`
+  // distinguishes the resources and the envelope could not have done this work.
+  const prArchive = JSON.parse(prText) as Archive
+  const issueArchive = JSON.parse(issueText) as Archive
+  assert.equal(prArchive.capturedFrom.requestMethod, issueArchive.capturedFrom.requestMethod)
+  assert.equal(prArchive.capturedFrom.acceptHeader, issueArchive.capturedFrom.acceptHeader)
+  assert.equal(prArchive.capturedFrom.providerApiVersion, issueArchive.capturedFrom.providerApiVersion)
+
+  // And it is the payload structure that decides, not the archive's filename or request URL: the
+  // real pull request bytes carried under an archive whose recorded URL says `issues` are still
+  // acquired as a pull request, because no code reads that URL for a decision.
+  const relabelled = await acquireRecordedGitHubPullRequestCapture(JSON.stringify({
+    ...prArchive,
+    capturedFrom: { ...prArchive.capturedFrom, requestUrl: issueArchive.capturedFrom.requestUrl },
+  }))
+  assert.equal(relabelled.ok, true, "requestUrl is provenance for a reader and is never a decision")
+  assert.ok(relabelled.ok)
+  assert.equal(relabelled.capture.identity.providerNamespace, "github.com/rest/pulls")
+})
+
 // ─── Non-canonical observation ──────────────────────────────────────────────────
 
 /**
@@ -656,8 +769,12 @@ test("observation: retained captures show why `number` is not identity and `id` 
   const prId = Number(pr.id)
   const issueId = Number(issue.id)
   assert.ok(prId > 1e9 && issueId > 1e9, "both REST ids are large database primary keys")
+  // Two samples, and the wording says only what two samples support: these two values are close
+  // enough that no arithmetic band separates them. It is NOT a claim that the resources' id ranges
+  // always overlap — nothing downstream depends on this, and the namespace split would be required
+  // even if these two had looked disjoint on the day they were read.
   assert.ok(Math.min(prId, issueId) / Math.max(prId, issueId) > 0.5,
-    "the observed id ranges overlap: no arithmetic separation exists between the two resources")
+    "observed only: these two ids are same-magnitude, so no arithmetic band separates the resources")
 
   // node_id carries a resource tag GitHub tells consumers to treat as opaque. It is recorded here as
   // an observation and is never decoded, never compared and never used as identity by any module.

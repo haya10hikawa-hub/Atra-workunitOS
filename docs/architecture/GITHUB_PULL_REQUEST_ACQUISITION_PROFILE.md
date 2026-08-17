@@ -116,6 +116,35 @@ this payload: it is provider-issued, stable-looking and unique. It identifies a 
 pull request, it is absent for an unmerged pull request, and it changes as the branch moves. It is
 not identity for this resource.
 
+### The resource is bound to the bytes — PROVEN, fail-closed
+
+Everything above is *derived* from the retained bytes. The canonical identity namespace a record
+lands in is not: it follows from which acquisition module ran, and that is the operator's choice. Left
+unchecked, that would make half of canonical identity — `provider`, one of the three identity
+components — an operator assertion rather than evidence. Handing an issue export to this module would
+mint the issue's own primary key into the pull request namespace, and the resulting record would look
+perfectly well-formed to any later reader.
+
+So the resource is **bound** to the bytes. Acquisition refuses a retained payload that does not carry
+pull request structure (`provider_resource_mismatch`), and the issue module refuses the mirror case.
+
+```text
+check     the retained payload carries both `head` and `base` as objects
+rationale a pull request proposes merging one ref into another; the pulls representation
+          carries both and the issues representation carries neither
+verified  in both retained captures, in this repository, offline
+```
+
+`head` and `base` are used because they are **definitional** of the resource rather than incidental
+members that happened to be present on the day of capture. The guard is stated as structure the other
+reviewed resource does not have, which is why it needs no claim about which members GitHub guarantees
+on every pull request — a claim this profile has no authority to make.
+
+**Bound, not derived, and the distinction is kept deliberately.** This guard establishes that the
+retained payload is not the other reviewed resource. It does not establish that the payload came from
+GitHub, that it is a pull request at all, or that some third resource could not satisfy it. It closes
+a specific, demonstrated relabelling path; it is not a provider proof and adds nothing to §2.1.
+
 ### Representability — PROVEN, fail-closed
 
 `id` is parsed from JSON as a number. A value outside the exactly-representable integer range would be

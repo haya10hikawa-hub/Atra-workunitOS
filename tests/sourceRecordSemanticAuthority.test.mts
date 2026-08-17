@@ -393,9 +393,10 @@ test("R5b: the GitHub Issue identity exception is scoped, residual-bearing and n
   assert.ok(/GitHub ISSUE content-scope profile\s*=\s*PROVEN\b/.test(profileDoc),
     `${PROVIDER_PROFILE_DOC} must keep the content-scope profile PROVEN`)
 
-  // Exactly one exception exists, and it belongs to one provider resource. Every occurrence of the
-  // state is checked, in both documents, so a second gate cannot adopt it and no non-excepted
-  // subject can appear on a line that carries it.
+  // Each exception belongs to exactly one provider resource. There are two — GitHub issues (§4.1)
+  // and GitHub pull requests (§4.2), each separately ratified — and the check below is per LINE, not
+  // per document: every occurrence of the state, in all three documents, must be free of the
+  // non-excepted subjects, so no unreviewed provider can be swept in beside a reviewed one.
   const pullRequestProfileDoc = await read(PULL_REQUEST_PROFILE_DOC)
   for (const [label, doc] of [
     [SEMANTICS_DOC, raw],

@@ -287,6 +287,29 @@ split, and R4 in particular remains **exactly** as unproven as before: it is a s
 collision guarantees *within* `github.com/rest/issues`, and separating issues from pull requests in
 Atra's vocabulary says nothing about uniqueness inside GitHub's own issue table.
 
+### One behaviour change: the resource is bound to the bytes
+
+The split added a fail-closed guard to this module, and it is recorded here rather than left to the
+diff. Acquisition now refuses a retained payload carrying pull request structure — both `head` and
+`base` as objects — with `provider_resource_mismatch`.
+
+It exists because the canonical namespace follows from which acquisition module ran, so without it a
+pull request export handed to this module would mint the pull request's own primary key into the
+issue namespace, producing a well-formed record no reviewer could identify as wrong. The mirror guard
+lives in the pull request profile.
+
+This is a refusal added to the module, not a change to the profile:
+
+```text
+provider namespace / identity member / in-scope bytes / canonicalization   all unchanged
+failure vocabulary                                                          one code added
+identity or content-scope profile version                                   NOT bumped
+```
+
+The set of payloads that produce a key is narrowed, never widened, and no payload that produced a key
+before produces a different one now. It asserts nothing about GitHub: it says the retained payload is
+not the other reviewed resource, and R1–R5 are untouched by it.
+
 ## 6. Scope boundary
 
 This profile authorizes production from GitHub **issues** only, under the two profile versions

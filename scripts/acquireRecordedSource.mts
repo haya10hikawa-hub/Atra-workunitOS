@@ -16,8 +16,13 @@
  * Each retained archive is read by the acquisition module for its own provider resource,
  * and the operator selects which. Nothing here inspects the archive to decide — not the
  * filename, and above all not `capturedFrom.requestUrl`, which is provenance for a human
- * reader and is never followed or parsed for a decision. Choosing the wrong resource
- * produces a refusal, not a reinterpretation, because each module pins its own profile.
+ * reader and is never followed or parsed for a decision.
+ *
+ * Choosing the wrong resource produces a refusal rather than a reinterpretation, and that
+ * refusal is the acquisition module's, not this command's: each module checks the retained
+ * bytes for its own resource's structure and fails closed. This script therefore cannot
+ * mislabel a capture even by passing the wrong pair, which is why selecting by operator
+ * argument is safe here.
  *
  * The recording instant is this process's clock and is the one value the command itself
  * contributes; every other printed value is derived from the retained provider bytes or

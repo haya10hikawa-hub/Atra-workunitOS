@@ -27,6 +27,13 @@
  * therefore cannot assert an identity or a digest the bytes do not support, and any
  * reviewer holding the same bytes recomputes all three.
  *
+ * The canonical identity namespace is the one part of identity that is not derived, because
+ * it follows from which module ran rather than from a value in the payload. It is instead
+ * BOUND to the bytes: this module refuses a payload that does not carry pull request
+ * structure, so a mis-selected resource fails closed rather than relabelling a real key into
+ * the wrong namespace. Bound, not derived — the distinction is kept because the guard proves
+ * the payload is not the other reviewed resource, not that it came from GitHub at all.
+ *
  * WHAT THIS MODULE PINS THAT THE ISSUE MODULE DOES NOT
  *
  * The reviewed content-scope profile for this resource names the exact request that
@@ -96,6 +103,7 @@ export type RecordedGitHubPullRequestCaptureFailureCode =
   | "invalid_capture_id"
   | "invalid_tenant_partition"
   | "unauthorized_acquisition_mode"
+  | "invalid_captured_from"
   | "unauthorized_request_method"
   | "unauthorized_accept_profile"
   | "unauthorized_provider_api_version"
@@ -103,6 +111,7 @@ export type RecordedGitHubPullRequestCaptureFailureCode =
   | "unsupported_retention"
   | "invalid_retained_bytes"
   | "retained_content_unreadable"
+  | "provider_resource_mismatch"
   | "provider_identity_absent"
   | "provider_identity_unrepresentable"
   | "provider_event_time_unreadable"
@@ -133,6 +142,8 @@ const RETAINED_CONTENT_KEYS = ["retention", "bytesBase64"] as const
 
 const MAX_CAPTURE_ID = 200
 const MAX_TENANT_PARTITION = 200
+/** Request provenance is short, human-readable text. A URL far past this is not provenance. */
+const MAX_CAPTURED_FROM_TEXT = 2048
 /** 8 MiB of base64. A capture larger than this is refused before it is decoded. */
 const MAX_RETAINED_BASE64 = 8 * 1024 * 1024
 
@@ -250,6 +261,14 @@ export async function acquireRecordedGitHubPullRequestCapture(
   if (!isPlainObject(capturedFrom)) return fail("archive_unreadable")
   const capturedFromKeyFailure = keyFailure(capturedFrom, CAPTURED_FROM_KEYS)
   if (capturedFromKeyFailure !== null) return fail(capturedFromKeyFailure)
+  // Every recorded member is bounded text, `requestUrl` included. Three of the four are compared
+  // against the profile below and would fail there anyway; `requestUrl` is never read for a
+  // decision, so without this it could be a number, an object, or an unbounded string carrying
+  // control characters, and still land inside a reviewed artifact. Checked so the claim that this
+  // envelope cannot smuggle unexpected material into the archive is true of all of it.
+  for (const key of CAPTURED_FROM_KEYS) {
+    if (!isBoundedText(capturedFrom[key], MAX_CAPTURED_FROM_TEXT)) return fail("invalid_captured_from")
+  }
   // Read-only acquisition, checked rather than asserted in prose. A capture recorded from
   // anything but a read is refused here, whatever else it carries.
   if (capturedFrom.requestMethod !== GITHUB_PULL_REQUEST_ACQUISITION_PROFILE.requestMethod) {
@@ -287,6 +306,23 @@ export async function acquireRecordedGitHubPullRequestCapture(
     return fail("retained_content_unreadable")
   }
   if (!isPlainObject(providerObject)) return fail("retained_content_unreadable")
+
+  // THE RESOURCE IS BOUND TO THE BYTES, NOT TO THE CALLER.
+  //
+  // Everything below derives from the retained bytes, but the canonical identity namespace
+  // a record ends up in is decided by WHICH acquisition module ran. Without this check that
+  // half of identity would be asserted by the caller: handing an issue export to this
+  // module would mint the issue's own primary key into the pull request namespace, and no
+  // reviewer holding the bytes could tell from the record that it had happened.
+  //
+  // `head` and `base` are the check because they are definitional rather than incidental: a
+  // pull request proposes merging one ref into another, the pulls representation carries
+  // both, and the issues representation carries neither. This is a fail-closed guard, not a
+  // claim about GitHub's schema — it says the retained payload does not look like this
+  // resource, so acquisition refuses rather than relabelling it.
+  if (!isPlainObject(providerObject.head) || !isPlainObject(providerObject.base)) {
+    return fail("provider_resource_mismatch")
+  }
 
   // Identity, derived from the provider's own bytes. `id` is the pull request's database
   // primary key; `node_id` and `number` are deliberately not used.
