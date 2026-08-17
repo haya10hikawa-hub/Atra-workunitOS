@@ -10,6 +10,8 @@ Repository: `haya10hikawa-hub/Atra-workunitOS`
 
 Execution boundary: governance and documentation only. This program record changes no `app/**` file, no migration, no runtime configuration, no provider, and no UI. It authorizes no implementation WorkUnit.
 
+The execution boundary above is a standing property of this document, and every later ratification recorded in it carries the same boundary. The header token, evidence snapshot and status field above belong to the founding `P0_AUTHORITY_SYNC` record; later ratifications carry their own decision tokens and are recorded in [Decision History](#decision-history) with the head they were decided at. Where a section is pinned to `e29f08cc`, it says so, and it is not rewritten as the tree moves.
+
 ## Authority Hierarchy
 
 ```text
@@ -100,17 +102,175 @@ The evidence column above is pinned to snapshot `e29f08cc` and is not rewritten 
 
 ### Movement since the `e29f08cc` evidence snapshot
 
-**P1-1 status is unchanged: `PARTIAL`.** Its evidence has changed. A separately authorized implementation WorkUnit closed the first vertical slice, so the snapshot sentence "No adapter, producer or consumer exists" no longer describes the tree. One real recorded provider source now reaches `SourceRecordV1` through a production path:
+Two separately authorized implementation WorkUnits have since closed the canonical-source vertical slice, so the snapshot sentence "No adapter, producer or consumer exists" no longer describes the tree. **Two** real recorded provider resources now reach `SourceRecordV1` through a production path, one acquisition module each:
 
 ```text
 retained GitHub issue export
-  → app/lib/infrastructure/external/github/recordedIssueCapture.ts   (acquisition + provider profile)
-  → app/lib/ports/acquisitionEvidence/types.ts                       (AcquisitionCapture)
-  → app/lib/application/source/sourceRecordProduction.ts             (producer)
-  → SourceRecordV1
+  → app/lib/infrastructure/external/github/recordedIssueCapture.ts        (acquisition + provider profile)
+  → app/lib/ports/acquisitionEvidence/types.ts                            (AcquisitionCapture)
+  → app/lib/application/source/sourceRecordProduction.ts                  (producer)
+  → SourceRecordV1                                                        (namespace github_issue)
+
+retained GitHub pull request export
+  → app/lib/infrastructure/external/github/recordedPullRequestCapture.ts  (acquisition + provider profile)
+  → app/lib/ports/acquisitionEvidence/types.ts                            (AcquisitionCapture)
+  → app/lib/application/source/sourceRecordProduction.ts                  (producer)
+  → SourceRecordV1                                                        (namespace github_pull_request)
 ```
 
-`PARTIAL` remains the honest status: it is one provider resource under one acquisition mode, with no persistence, no correlation, and no consumer of the record beyond its producer. The two GitHub **issue** provider profiles are recorded in `docs/architecture/GITHUB_ISSUE_ACQUISITION_PROFILE.md`, and they did not land in the same state: the content-scope profile is proven, while the identity profile is **not** proven and reads `PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL` — a PM-accepted, GitHub-Issue-only, Phase-1-only exception over five named unproven requirements (`SOURCE_RECORD_V1_SEMANTICS.md` §4.1). Every other provider profile gate stays `REQUIRED_UNPROVEN`. P1-2 is untouched and no new canonical record was declared, so the just-in-time allowlist expansion recorded below stays at zero.
+**Two GitHub resource classes, four provider profile gates.** The gates are recorded per resource, in `docs/architecture/GITHUB_ISSUE_ACQUISITION_PROFILE.md` and `docs/architecture/GITHUB_PULL_REQUEST_ACQUISITION_PROFILE.md`, and within each resource the two gates did not land in the same state:
+
+```text
+GitHub issue        content-scope = PROVEN     identity = PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL
+GitHub pull request content-scope = PROVEN     identity = PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL
+GitHub, other resources                        both     = REQUIRED_UNPROVEN
+Slack                                          both     = REQUIRED_UNPROVEN
+Google Calendar                                both     = REQUIRED_UNPROVEN
+```
+
+The two identity gates carry **two separately ratified** scoped exceptions — `SOURCE_RECORD_V1_SEMANTICS.md` §4.1 for issues over residuals R1–R5, §4.2 for pull requests over residuals P-R1–P-R5 — each PM-accepted, resource-scoped and Phase-1-bounded. The pull request exception did not inherit the issue exception, and neither is a template a third resource may fill in.
+
+**Canonical identity namespaces are per resource, not per provider.** The record's `provider` field is the closed `SourceIdentityNamespace` vocabulary, and the two reviewed GitHub resources occupy `github_issue` and `github_pull_request`. A single generic `github` namespace is **rejected** and is not a member of the vocabulary at all, so no producer can reach it and no record can fall back to it. GitHub draws an object's REST `id` from a different table per resource and the two observed key ranges overlap, so one namespace would have manufactured a false merge out of Atra's own vocabulary. The full decision is `SOURCE_RECORD_V1_SEMANTICS.md` §4.3.
+
+P1-2 is untouched, no new canonical record was declared, and the just-in-time allowlist expansion recorded below stays at zero.
+
+## P1-1 Exit Criterion
+
+Decision token: `ATRA_PM_P1_1_EXIT_AND_P1_2_ENTRY_RATIFIED`
+
+Until this section existed, P1-1 had a status and no exit test, so no amount of capability could close it and any amount could be demanded of it. This section is the ratified exit test. It is derived from what P1-1 **is** — Canonical Source V1 — and from nothing else.
+
+P1-1 closes when, and only when, this is demonstrated on `main`:
+
+> Real provider evidence can become a truthful, stable, provenance-preserving canonical `SourceRecord`.
+
+That sentence decomposes into exactly five required capabilities and no others:
+
+```text
+P1_1_EXIT_REQUIRED = E1 E2 E3 E4 E5
+
+E1  CANONICAL_RECORD_PATH_TRUTHFUL
+    One canonical SourceRecordV1 path exists in which every identity and integrity
+    value is carried from provider evidence, never minted, derived or defaulted by Atra.
+
+E2  REAL_RECORDED_PROVIDER_EVIDENCE
+    The path is exercised by a real provider object's own retained response bytes,
+    not by a fixture authored to satisfy it.
+
+E3  EXACT_BYTE_CONTENT_INTEGRITY
+    contentDigest is taken over the retained provider bytes, so any in-scope
+    provider-content change changes the digest.
+
+E4  ACQUISITION_PROVENANCE_PRESERVED
+    Acquisition mode, observation instant, provider-stated event time and capture
+    linkage survive into the record or beside it, and none is invented when absent.
+
+E5  CANONICAL_IDENTITY_DISCRIMINATES
+    The canonical identity tuple separates distinct provider key spaces, so no two
+    unrelated provider objects can become one canonical identity by Atra's vocabulary.
+```
+
+Everything else is classified out, explicitly, so it cannot be demanded later as though it had always been in scope:
+
+| Candidate | Classification | Why |
+| --- | --- | --- |
+| additional provider resource classes, as breadth | `NOT_REQUIRED_FOR_P1_1` | Breadth is not proof. E5 requires that identity *discriminates*, not that N resources exist. The second resource is what happened to prove E5; a third proves nothing further about the record |
+| consumer beyond the producer | `NOT_REQUIRED_FOR_P1_1` | A consumer proves someone reads the record; it does not make the record truthful. The first real consumer is correlation, which is P1-2. Requiring it here would make P1-1 unclosable without P1-2, inverting the spine |
+| persistence | `DEFERRED` | Already Deferred Scope. A record's truthfulness is a property of its value, not of its storage. Persistence also reopens both identity exceptions by their own terms, so it must not be dragged in ahead of a decision to reopen them |
+| second provider | `NOT_REQUIRED_FOR_P1_1` | A second provider tests breadth of the acquisition layer, not the canonical record. It **is** required for P1-2 entry, and it is recorded there instead |
+| live provider acquisition | `DEFERRED` | Recorded acquisition already exercises the whole path. `AcquisitionMode` has no live member and gaining one is a reviewable contract change, not a P1-1 obligation |
+| provider identity residual closure | `NOT_REQUIRED_FOR_P1_1` | R1–R5 and P-R1–P-R5 can be closed only by GitHub publishing authority Atra cannot produce. Making them required would gate a phase on a third party's non-action forever. They stay PM-accepted, Phase-1-bounded, and reopen on their own recorded triggers |
+
+## P1-1 Decision at `9eea0d8e`
+
+```text
+P1_1_STATUS = COMPLETE
+```
+
+Evaluated against the exit criterion above and against nothing else. Every required capability is satisfied on `main` at `9eea0d8edecf9332261bb50b3224594e5bb29a8a`:
+
+| Required | Evidence |
+| --- | --- |
+| E1 | `sourceRecordProduction.ts` is pure and copies every evidential value byte-for-byte; `validateSourceRecordV1` refuses an unknown namespace as `invalid_provider`; the producer's authorized profile list is a closed set of complete 5-tuples restated independently of the adapters it authorizes |
+| E2 | Two verbatim retained captures under `acquisitions/`, both of real objects predating the slices that read them: issue `207` (REST id `4968607486`) and pull request `229` (REST id `4258276579`) |
+| E3 | Both content-scope gates `PROVEN`; the digest subject is the retained byte stream with no parse, field selection or reserialization between stream and hash |
+| E4 | `AcquisitionCapture` carries a single closed acquisition mode, an acquisition-owned `observedAt`, a provider-stated-or-`null` `sourceEventAt`, and no slot for `recordedAt`; capture linkage is returned beside the record as `SourceRecordProduction.captureId` |
+| E5 | `github_issue` and `github_pull_request` are distinct closed-vocabulary members; the generic `github` member does not exist; each acquisition module fail-closes on the retained bytes rather than on the caller's choice, so the namespace half of identity cannot be asserted by whoever ran the module |
+
+`COMPLETE` is a statement about P1-1 and about nothing else. It does not make P1-2 ready, does not authorize any implementation WorkUnit, does not close any identity residual, and does not promote the record to a persisted or live-acquired artifact.
+
+## P1-2 Entry Criterion
+
+Decision token: `ATRA_PM_P1_1_EXIT_AND_P1_2_ENTRY_RATIFIED`
+
+P1-2 measures correlation error. An experiment whose instrument is assembled after its results are visible cannot measure error, so the instrument is fixed as an entry condition rather than built inside the phase.
+
+```text
+P1_2_ENTRY_REQUIRED = N1 N2 N3 N4
+P1_2_ENTRY_STATUS = NOT_READY
+
+N1  P1_1_COMPLETE                       SATISFIED at 9eea0d8e
+N2  ADMISSIBLE_FROZEN_DATASET           NOT SATISFIED
+N3  TWO_INDEPENDENT_PROVIDERS           NOT SATISFIED
+N4  DATASET_PROVIDER_PROFILE_READINESS  NOT SATISFIED
+```
+
+- **N1** — P1-1 complete against its ratified exit criterion. Satisfied above.
+- **N2** — an admissible dataset, frozen and declared admissible **before** any grouping logic is written. Frozen means its membership and its gold labels are fixed and recorded; a dataset that grows or is re-labelled once grouping output is visible is not an instrument.
+- **N3** — at least two **independent providers** represented in that dataset. Independent means separate provider systems. GitHub issues and GitHub pull requests are two resource classes of **one** provider and do not satisfy N3; a single-provider corpus makes cross-provider correlation unmeasurable, because provider-local structure is then indistinguishable from correlation signal.
+- **N4** — every provider represented in the dataset has a reviewed profile pair at the standard GitHub's two resources already meet: content-scope `PROVEN`, and identity either proven or carrying its own separately ratified PM-accepted scoped exception. A provider whose sources cannot become `SourceRecordV1` values contributes nothing to correlate.
+
+Dataset acquisition that touches human conversational or calendar content is **human-only work**. Such content is not to be routed through any AI assistant, including the assistant used to author repository changes. This constraint governs how N2 and N3 are satisfied and is not waived by convenience.
+
+Classified out of entry:
+
+| Candidate | Classification | Why |
+| --- | --- | --- |
+| `CorrelationGroupV1` declaration and allowlist expansion | `P1_2_INTERNAL_WORK` | Just-in-time authorization happens **inside** P1-2, in the WorkUnit that introduces the record. Requiring it before entry would invert the just-in-time rule this document already ratified |
+| grouping implementation, evaluation harness, error measurement | `P1_2_INTERNAL_WORK` | This is the phase's content, not its gate |
+| GitHub identity residual revisit | `NOT_REQUIRED` | See the ratified reading below. Bounded Phase-1 correlation does not reopen §4.1 or §4.2 |
+| persistence, live acquisition, LLM proposal | `NOT_REQUIRED` | None is needed to measure correlation error on a frozen dataset, and each is Deferred Scope or unratified |
+| a third GitHub resource class | `NOT_REQUIRED` | N3 requires provider independence, which a third GitHub resource does not supply |
+
+Bringing a second provider under N4 is itself a new scoped-exception decision if its identity cannot be proven — §4.1 and §4.2 name "a second provider seeking the same treatment" as a revisit trigger, and that trigger is about the **new** provider's profile decision, not about reopening GitHub's residuals.
+
+## Ratified P1-2 Semantics
+
+Decision token: `ATRA_PM_P1_1_EXIT_AND_P1_2_ENTRY_RATIFIED`
+
+Four prior P1-2 semantic adjudications existed outside the repository and were therefore unenforceable. All four are **adopted** as repository authority, none is rejected, and none is a licence to start P1-2:
+
+```text
+S1  CORRELATION_GROUP_IS_SAME_WORK_REFERENT
+    A CorrelationGroup is a set of SourceRecords about the same underlying work
+    referent. Not the same topic, not the same participants, not the same time window.
+
+S2  RELATED_CONTEXT_IS_NOT_MEMBERSHIP
+    A source that references, discusses or supersedes the referent without being
+    about it is related context and is NOT a member. Recall-only relevance never
+    becomes membership.
+
+S3  GOLD_LABELS_ARE_EVALUATION_ONLY
+    Gold labels are evaluation material only. No runtime path may read them, and
+    no grouping decision may depend on them, directly or through a derived feature.
+
+S4  DATASET_IS_NATURAL_MULTI_PROVIDER_RUNTIME_VISIBLE
+    The dataset is naturally occurring real work, spans at least two independent
+    providers, and every signal a grouping decision uses is runtime-visible
+    evidence obtainable independently of the gold labels.
+```
+
+S3 and S4 together are what make the P1-2 result interpretable: S3 keeps the answer out of the input, and S4 keeps the input reachable at runtime. A grouping rule that scores well by reading anything unavailable outside the dataset has measured nothing.
+
+## Scoped identity exception — ratified reading
+
+The revisit triggers in `SOURCE_RECORD_V1_SEMANTICS.md` §4.1 and §4.2 read "persisting, correlating or deduplicating on `providerObjectKey` **beyond Phase-1 experimental use**". The qualifier governs all three verbs.
+
+```text
+P1_2_DOES_NOT_REOPEN_PHASE1_IDENTITY_EXCEPTIONS
+```
+
+Correlating on `providerObjectKey` **within** bounded Phase-1 experimental use therefore does not reopen either exception. Reopening requires leaving Phase-1 bounded experimental use, a profile version bump, a further resource or provider seeking the same treatment, or GitHub publishing authority that closes a residual. This is a reading of text already ratified; it discharges no residual, widens no gate, and grants nothing to any provider.
 
 ## Semantic Authority Decision
 
@@ -262,6 +422,21 @@ The human PM ratified the Verification-driven Integration Plan as Primary Produc
 ### Decision C — semantic names vs. implementation authorization
 
 The PM chose option **C**: ratify the three Phase-1 semantic authority names now, expand the machine-enforced canonical-record allowlist only just-in-time inside the WorkUnit that introduces each record. Recorded in full under [Semantic Authority Decision](#semantic-authority-decision).
+
+### `ATRA_PM_P1_1_EXIT_AND_P1_2_ENTRY_RATIFIED`
+
+Decided at `main` `9eea0d8edecf9332261bb50b3224594e5bb29a8a`, after PR #231 merged with post-merge CI passing.
+
+Before this decision P1-1 carried a status with no exit test and P1-2 had no entry test, so neither phase could be closed or entered on evidence, and this document's post-snapshot record had drifted behind the tree. The PM ratified, in one bounded governance WorkUnit:
+
+- the [P1-1 Exit Criterion](#p1-1-exit-criterion) — five required capabilities `E1`–`E5`, with six candidates classified out as `NOT_REQUIRED_FOR_P1_1` or `DEFERRED`;
+- `P1_1_STATUS = COMPLETE`, evaluated against that criterion and nothing else;
+- the [P1-2 Entry Criterion](#p1-2-entry-criterion) — four conditions `N1`–`N4`, with `P1_2_ENTRY_STATUS = NOT_READY`;
+- the four [Ratified P1-2 Semantics](#ratified-p1-2-semantics) `S1`–`S4`, previously held outside the repository and therefore unenforceable;
+- the ratified reading that bounded Phase-1 correlation does not reopen the §4.1 or §4.2 identity exceptions;
+- correction of this document's post-snapshot facts to the post-PR-#231 tree.
+
+Allowlist expansion: **0**. Runtime changes: **0**. `app/**` changes: **0**. It authorizes no implementation WorkUnit, and `P1_1_STATUS = COMPLETE` is not entry into P1-2.
 
 ### This record — `P0_AUTHORITY_SYNC`
 

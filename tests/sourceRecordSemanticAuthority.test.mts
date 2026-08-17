@@ -633,12 +633,19 @@ test("R6: only the reviewed slice produces, adapts, digests or profiles a Source
     "authorizing or implementing a `SourceRecordV1` producer, adapter, consumer or persistence path",
     "authorizing or implementing content canonicalization or digest computation",
   ], `${SEMANTICS_DOC} non-goals`)
+  // Section 7 records what later WorkUnits crossed. It deliberately does not restate a phase status
+  // value: P1-1's status is declared in exactly one place, pinned by phase1AuthoritySync.test.mts, and
+  // a copy here would be a second truth free to drift out of step with it. What is pinned here is the
+  // pointer and the ratification that moved it — plus the facts about the tree, which the ratification
+  // did not change and which must not be quietly upgraded to "delivered".
   assertDeclares(section(raw, "## 7. What later WorkUnits have since crossed"), [
     SOURCE_PRODUCER,
     GITHUB_ACQUISITION,
     GITHUB_PULL_REQUEST_ACQUISITION,
     "No persistence path exists",
-    "**P1-1 remains `PARTIAL`**",
+    "ATRA_PM_P1_1_EXIT_AND_P1_2_ENTRY_RATIFIED",
+    "no persistence and no consumer beyond production",
+    "declared in `docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md` and never here",
   ], `${SEMANTICS_DOC} superseding record`)
 })
 

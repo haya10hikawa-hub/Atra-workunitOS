@@ -32,7 +32,7 @@ check provider nativeness or content provenance: it cannot know a provider's con
 semantics are therefore an obligation on whatever later, separately authorized WorkUnit produces
 a record — not a property the generic validator can enforce.
 
-P1-1 status is unchanged by this clarification: `PARTIAL`.
+P1-1 status is unchanged by this clarification: `PARTIAL` at the head this clarification was ratified at. Phase status is not this document's to state; the current value lives in `docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md`, and §7 records where later WorkUnits moved it.
 
 ## 2. Identity Semantics
 
@@ -192,6 +192,12 @@ Phase-1 experimental use; a second GitHub resource or a second provider seeking 
 an identity profile version bump; or GitHub publishing authority that closes any of R1–R5. Closing
 a residual requires provider authority reviewed in a separately authorized WorkUnit.
 
+The qualifier "beyond Phase-1 experimental use" governs all three verbs in the first trigger:
+persisting, correlating **and** deduplicating. Correlating on `providerObjectKey` within bounded
+Phase-1 experimental use does not reopen this exception. Ratified as
+`P1_2_DOES_NOT_REOPEN_PHASE1_IDENTITY_EXCEPTIONS` in
+`docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md`, after the sentence was misread the other way.
+
 **What is unchanged.** The generic semantics in sections 2 and 3 are untouched by this exception.
 The lifetime-immutability requirement in section 2 remains the rule for every provider, including
 every future GitHub resource; a second exception requires its own ratified decision recorded here.
@@ -253,6 +259,9 @@ reopened before then by: persisting, correlating or deduplicating on `providerOb
 Phase-1 experimental use; a third GitHub resource or a second provider seeking the same treatment; an
 identity profile version bump; or GitHub publishing authority that closes any of P-R1–P-R5. Closing a
 residual requires provider authority reviewed in a separately authorized WorkUnit.
+
+As in §4.1, "beyond Phase-1 experimental use" governs all three verbs, so bounded Phase-1
+correlation does not reopen this exception either — `P1_2_DOES_NOT_REOPEN_PHASE1_IDENTITY_EXCEPTIONS`.
 
 ### 4.3 Canonical identity namespaces are per resource, not per provider
 
@@ -363,4 +372,4 @@ claim about the current tree.
 | raw provider payload retention | Retention exists, inline and immutable, under `acquisitions/` |
 | expanding the canonical record declaration allowlist | Unchanged. No new canonical record was declared. The record's `provider` field changed type — from the application `SourceType` to the canonical `SourceIdentityNamespace` — under §4.3; the field set, order, optionality and identity tuple are unchanged, and no field was added |
 | starting P1-2, or `CorrelationGroupV1` / `WorkUnitCandidateV1` / `WorkUnitCorrectionV1` | Unchanged. None exists |
-| marking P1-1 complete | Unchanged. **P1-1 remains `PARTIAL`** — two provider resources of one provider, one acquisition mode, no persistence and no consumer beyond production |
+| marking P1-1 complete | **Crossed by the Product Authority, not by this document.** Under `ATRA_PM_P1_1_EXIT_AND_P1_2_ENTRY_RATIFIED` the PM ratified a P1-1 exit criterion and evaluated P1-1 against it. The tree is unchanged by that ratification — still two provider resources of one provider, one acquisition mode, no persistence and no consumer beyond production; each of those was classified `NOT_REQUIRED_FOR_P1_1` or `DEFERRED` rather than delivered. P1-1's status is declared in `docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md` and never here |

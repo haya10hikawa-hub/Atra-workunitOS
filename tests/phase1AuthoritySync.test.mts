@@ -17,9 +17,82 @@ import { isCodeFilePath } from "../scripts/lib/typescriptModuleGraph.mjs"
 //    already forbids the declarations; what is pinned here is that the ratification did not move,
 //    and that the allowlist itself was not expanded alongside the ratification.
 
+// ATRA_PM_P1_1_EXIT_AND_P1_2_ENTRY_RATIFIED governance pins.
+//
+// Three further decay paths, all of which had already happened once before being pinned:
+//
+// 3. A phase carries a status with no exit test, so it can neither be closed on evidence nor
+//    defended against arbitrary new demands. Pinned by requiring the criterion to exist and by
+//    fixing its exact required set, so a requirement cannot be added or dropped in silence.
+// 4. A phase status drifts — in either direction — by a prose edit nothing challenges. Pinned by
+//    requiring exactly one declaration line, from a closed vocabulary, in exactly one document.
+// 5. Semantics decided outside the repository stay unenforceable, and the next WorkUnit re-decides
+//    them. Pinned by requiring the four ratified P1-2 semantic tokens to stay declared.
+//
+// These pin tokens and required statements only. Nothing here asserts prose wording or formatting.
+
 const rootDir = fileURLToPath(new URL("../", import.meta.url))
 
 const PRODUCT_AUTHORITY_DOC = "docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md"
+const SEMANTICS_DOC = "docs/architecture/SOURCE_RECORD_V1_SEMANTICS.md"
+
+// The ratified P1-1 exit criterion: exactly these capabilities close P1-1, and no others. The set is
+// pinned, not merely its members' presence — a sixth requirement appearing here is how "more breadth"
+// re-enters after having been classified out, and a fifth disappearing is how the criterion hollows.
+const P1_1_EXIT_REQUIRED = ["E1", "E2", "E3", "E4", "E5"]
+const P1_1_EXIT_CAPABILITY_TOKENS = [
+  "CANONICAL_RECORD_PATH_TRUTHFUL",
+  "REAL_RECORDED_PROVIDER_EVIDENCE",
+  "EXACT_BYTE_CONTENT_INTEGRITY",
+  "ACQUISITION_PROVENANCE_PRESERVED",
+  "CANONICAL_IDENTITY_DISCRIMINATES",
+]
+
+// The ratified P1-2 entry criterion.
+const P1_2_ENTRY_REQUIRED = ["N1", "N2", "N3", "N4"]
+const P1_2_ENTRY_CONDITION_TOKENS = [
+  "P1_1_COMPLETE",
+  "ADMISSIBLE_FROZEN_DATASET",
+  "TWO_INDEPENDENT_PROVIDERS",
+  "DATASET_PROVIDER_PROFILE_READINESS",
+]
+
+// The four prior P1-2 adjudications the PM adopted as repository authority. They were memory-only,
+// which is why re-deciding them was free until now.
+const RATIFIED_P1_2_SEMANTICS = [
+  "CORRELATION_GROUP_IS_SAME_WORK_REFERENT",
+  "RELATED_CONTEXT_IS_NOT_MEMBERSHIP",
+  "GOLD_LABELS_ARE_EVALUATION_ONLY",
+  "DATASET_IS_NATURAL_MULTI_PROVIDER_RUNTIME_VISIBLE",
+]
+
+// Closed status vocabularies. A status outside its vocabulary is a defect, not a new state: inventing
+// one is the cheapest way to look like progress without meeting a criterion.
+const P1_1_STATUS_VOCABULARY = ["PARTIAL", "COMPLETE"]
+const P1_1_STATUS_RATIFIED = "COMPLETE"
+const P1_2_ENTRY_STATUS_VOCABULARY = ["NOT_READY", "READY"]
+const P1_2_ENTRY_STATUS_RATIFIED = "NOT_READY"
+
+// The ratified reading of the §4.1 / §4.2 revisit trigger. Both documents must carry it: the reading
+// was already got wrong once, and a reading recorded in only one of the two is the same trap again.
+const RESIDUAL_READING_TOKEN = "P1_2_DOES_NOT_REOPEN_PHASE1_IDENTITY_EXCEPTIONS"
+
+/**
+ * Reads the single declaration line for a status token — a line that *is* the declaration, not a
+ * sentence mentioning it. Prose may cite a status freely; exactly one line may declare it.
+ */
+function statusDeclarations(doc: string, token: string): string[] {
+  const pattern = new RegExp(`^${token} = (\\S+)$`)
+  return doc.split("\n")
+    .map((line) => pattern.exec(line.trim()))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .map((match) => match[1])
+}
+
+function requiredSet(doc: string, token: string): string[] | null {
+  const match = new RegExp(`^${token} = (.+)$`, "m").exec(doc)
+  return match === null ? null : match[1].trim().split(/\s+/)
+}
 const ARCHITECTURE_AUTHORITY_DOC = "docs/architecture/CANONICAL_WORKUNIT_PIPELINE_REFACTOR_PROGRAM.md"
 const ALLOWLIST_SOURCE = "tests/architectureBoundaries.test.mts"
 
@@ -263,6 +336,87 @@ test("phase-1 authority: no implementation WorkUnit is authorized by this record
     "This governance record does not implement that arrow, does not authorize it, and does not start P1-1.",
     "No parallel validation-only WorkUnit truth may be introduced.",
   ], "implementation non-authorization")
+})
+
+test("phase-1 authority: the P1-1 exit criterion exists and keeps its exact required set", async () => {
+  const doc = await readProductAuthority()
+  assertDocDeclares(doc, [
+    "## P1-1 Exit Criterion",
+    "ATRA_PM_P1_1_EXIT_AND_P1_2_ENTRY_RATIFIED",
+  ], "P1-1 exit criterion")
+
+  // The required set is fixed. Presence of each token is not enough: the set itself is the criterion,
+  // so a sixth entry or a missing fifth must fail here rather than pass as a clarification.
+  assert.deepEqual(requiredSet(doc, "P1_1_EXIT_REQUIRED"), P1_1_EXIT_REQUIRED,
+    "the P1-1 exit criterion's required set is ratified and may not change silently")
+
+  assertDocDeclares(doc, P1_1_EXIT_CAPABILITY_TOKENS, "P1-1 exit capabilities")
+
+  // Each candidate classified out stays classified out. Losing a row is how a deferred requirement
+  // gets demanded back as though it had always been required.
+  assertDocDeclares(doc, ["`NOT_REQUIRED_FOR_P1_1`", "`DEFERRED`"], "P1-1 exit exclusions")
+})
+
+test("phase-1 authority: the P1-1 status is declared once, in one document, from a closed vocabulary", async () => {
+  const doc = await readProductAuthority()
+  const declared = statusDeclarations(doc, "P1_1_STATUS")
+  assert.equal(declared.length, 1,
+    `${PRODUCT_AUTHORITY_DOC} must declare P1_1_STATUS exactly once, got ${declared.length}`)
+  assert.ok(P1_1_STATUS_VOCABULARY.includes(declared[0]),
+    `P1_1_STATUS must come from ${P1_1_STATUS_VOCABULARY.join(" | ")}, got ${declared[0]}`)
+  assert.equal(declared[0], P1_1_STATUS_RATIFIED,
+    "P1-1's status is ratified against its exit criterion; changing it requires changing this pin")
+
+  // Structural: no second architecture document may declare a competing phase status. Same failure
+  // mode as a competing roadmap document, one level down.
+  const architectureDir = path.join(rootDir, "docs/architecture")
+  const claimants: string[] = []
+  for (const entry of await readdir(architectureDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".md")) continue
+    const relative = path.join("docs/architecture", entry.name)
+    if (relative === PRODUCT_AUTHORITY_DOC) continue
+    const source = await readFile(path.join(architectureDir, entry.name), "utf8")
+    if (statusDeclarations(source, "P1_1_STATUS").length > 0) claimants.push(relative)
+  }
+  assert.deepEqual(claimants, [],
+    `only ${PRODUCT_AUTHORITY_DOC} may declare P1_1_STATUS:\n${claimants.join("\n")}`)
+})
+
+test("phase-1 authority: the P1-2 entry criterion exists and its status is declared once", async () => {
+  const doc = await readProductAuthority()
+  assertDocDeclares(doc, ["## P1-2 Entry Criterion"], "P1-2 entry criterion")
+
+  assert.deepEqual(requiredSet(doc, "P1_2_ENTRY_REQUIRED"), P1_2_ENTRY_REQUIRED,
+    "the P1-2 entry criterion's required set is ratified and may not change silently")
+  assertDocDeclares(doc, P1_2_ENTRY_CONDITION_TOKENS, "P1-2 entry conditions")
+
+  const declared = statusDeclarations(doc, "P1_2_ENTRY_STATUS")
+  assert.equal(declared.length, 1,
+    `${PRODUCT_AUTHORITY_DOC} must declare P1_2_ENTRY_STATUS exactly once, got ${declared.length}`)
+  assert.ok(P1_2_ENTRY_STATUS_VOCABULARY.includes(declared[0]),
+    `P1_2_ENTRY_STATUS must come from ${P1_2_ENTRY_STATUS_VOCABULARY.join(" | ")}, got ${declared[0]}`)
+  assert.equal(declared[0], P1_2_ENTRY_STATUS_RATIFIED,
+    "P1-2 entry readiness is ratified; changing it requires changing this pin")
+
+  // Entry must not be reachable by re-labelling internal work as a prerequisite, nor the reverse:
+  // CorrelationGroupV1 stays inside P1-2 and stays unauthorized until authorized there.
+  assertDocDeclares(doc, ["`P1_2_INTERNAL_WORK`"], "P1-2 internal work classification")
+})
+
+test("phase-1 authority: the four ratified P1-2 semantics stay repository-controlled", async () => {
+  assertDocDeclares(await readProductAuthority(), [
+    "## Ratified P1-2 Semantics",
+    ...RATIFIED_P1_2_SEMANTICS,
+  ], "ratified P1-2 semantics")
+})
+
+test("phase-1 authority: the identity-exception reading is recorded in both documents", async () => {
+  // The trigger sentence was misread once. A reading held in one document only leaves the other
+  // readable the wrong way, which is the condition that produced the misreading.
+  assertDocDeclares(await readProductAuthority(), [RESIDUAL_READING_TOKEN],
+    "residual reading in the product authority")
+  assertDocDeclares(await readFile(path.join(rootDir, SEMANTICS_DOC), "utf8"), [RESIDUAL_READING_TOKEN],
+    "residual reading in the semantics clarification")
 })
 
 test("phase-1 authority: issue disposition records classification without claiming completion", async () => {
