@@ -38,6 +38,50 @@ export type SourceType =
   | "manual"
   | "meeting_transcript"
 
+/**
+ * The namespace in which a canonical `SourceRecordV1.providerObjectKey` is interpreted.
+ *
+ * DISTINCT FROM `SourceType`, DELIBERATELY. `SourceType` is the application's
+ * integration/branding vocabulary: which product a signal came from. This is the
+ * canonical *identity* vocabulary: the space a provider's own key is unique within.
+ * They answer different questions, so neither is derived from the other — mapping one
+ * onto the other by string manipulation would be provider relabelling, and a single
+ * union serving both would force one question's answer to be wrong.
+ *
+ * WHY GITHUB IS SPLIT BY RESOURCE
+ *
+ * GitHub issues them separately: the REST `id` of an issue and the REST `id` of a pull
+ * request are drawn from different provider tables, and their observed numeric ranges
+ * overlap. Under one `"github"` namespace, an issue key and a pull-request key that
+ * happen to be numerically equal become the same canonical identity — a false merge
+ * produced by Atra's vocabulary, not by anything GitHub said. So the resource is part
+ * of the namespace, and `"github"` is not a member here at all: there is no spelling of
+ * this type that lets a reviewed GitHub resource fall back to the generic provider.
+ *
+ * WHY THE OTHER MEMBERS ARE NOT RESOURCE-SCOPED
+ *
+ * They are provider-level because nothing has yet reviewed them. No identity or
+ * content-scope profile is ratified for Slack, Google Calendar or any other member, so
+ * no producer can emit a record under one, and splitting them now would invent resource
+ * boundaries for providers whose identity contracts are unexamined. Each must be
+ * resolved into resource-scoped namespaces by the WorkUnit that reviews its profile —
+ * the same way GitHub was — rather than inheriting a shape from GitHub's case.
+ *
+ * This is a closed vocabulary, not a generalized namespace model: there is no separate
+ * `providerNamespace` field on `SourceRecordV1`, and identity stays exactly
+ * `(tenantId, provider, providerObjectKey)`.
+ */
+export type SourceIdentityNamespace =
+  | "slack"
+  | "notion"
+  | "gmail"
+  | "google_drive"
+  | "google_calendar"
+  | "github_issue"
+  | "github_pull_request"
+  | "manual"
+  | "meeting_transcript"
+
 export type SourceRef = {
   source: SourceType
   externalId: string

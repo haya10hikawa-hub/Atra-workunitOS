@@ -404,25 +404,60 @@ test("T13: the local instant guard and the Phase 6 guard agree on every vector",
   assert.ok(fixture.isoVectors.some((vector) => !isIsoUtcTimestamp(vector)), "some vector must be rejected")
 })
 
-// ─── T14 — the provider vocabulary is exactly SourceType ────────────────────
+// ─── T14 — the provider vocabulary is exactly SourceIdentityNamespace ───────
 
-test("T14: the accepted provider set equals the SourceType union member for member", async () => {
+/**
+ * The record's `provider` is a canonical IDENTITY namespace, and it is deliberately not
+ * the application's `SourceType`. The two unions answer different questions — which
+ * product a signal came from, versus which space a provider's key is unique within — so
+ * this test pins the record to the identity union and separately pins the two apart.
+ *
+ * The GitHub members are the case that forced the distinction. GitHub draws an issue's
+ * REST `id` and a pull request's REST `id` from different tables, so a single `github`
+ * namespace would make two numerically equal keys from different resources one canonical
+ * identity. The generic member is therefore checked as REJECTED, not merely absent: the
+ * failure mode this guards is a later edit re-adding it as a convenient base value.
+ */
+test("T14: the accepted provider set equals the SourceIdentityNamespace union member for member", async () => {
   const source = await readFile(path.join(rootDir, "app/lib/domain/types.ts"), "utf8")
-  const union = /export type SourceType =([\s\S]*?)\n\n/.exec(source)
-  assert.ok(union, "app/lib/domain/types.ts must keep declaring SourceType")
+  const union = /export type SourceIdentityNamespace =([\s\S]*?)\n\n/.exec(source)
+  assert.ok(union, "app/lib/domain/types.ts must keep declaring SourceIdentityNamespace")
   const members = [...union[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1])
-  assert.ok(members.length > 0, "SourceType must have members")
+  assert.ok(members.length > 0, "SourceIdentityNamespace must have members")
 
   for (const member of members) {
     assert.equal(validateSourceRecordV1(base({ provider: member })).ok, true,
-      `${member} is a SourceType member and must be accepted`)
+      `${member} is a SourceIdentityNamespace member and must be accepted`)
   }
   for (const outsider of ["linear", "jira", "GitHub", "", "slack "]) {
     assert.equal(reject(base({ provider: outsider })), "invalid_provider")
   }
+
+  // NS-3, at the domain boundary. The generic provider is not a canonical identity
+  // namespace for either reviewed GitHub resource, and the validator cannot know which
+  // resource a key came from — so it refuses rather than folding it into one.
+  assert.equal(members.includes("github"), false,
+    "the generic `github` must not be a canonical identity namespace")
+  assert.equal(reject(base({ provider: "github" })), "invalid_provider",
+    "a record may not fall back to the generic GitHub namespace")
+  for (const resource of ["github_issue", "github_pull_request"]) {
+    assert.ok(members.includes(resource), `${resource} must be a canonical identity namespace`)
+  }
+
+  // The two unions are separate declarations and must stay separate. Sharing one would
+  // force either the application vocabulary to carry resource splits it has no use for,
+  // or the identity vocabulary to carry a generic `github` it must reject.
+  const applicationUnion = /export type SourceType =([\s\S]*?)\n\n/.exec(source)
+  assert.ok(applicationUnion, "app/lib/domain/types.ts must keep declaring SourceType")
+  const applicationMembers = [...applicationUnion[1].matchAll(/"([^"]+)"/g)].map((entry) => entry[1])
+  assert.ok(applicationMembers.includes("github"),
+    "the application vocabulary keeps its provider-level GitHub member")
+  assert.notDeepEqual(applicationMembers.sort(), [...members].sort(),
+    "the identity namespace must not silently become an alias of the application vocabulary")
+
   // A widening is caught too: nothing outside the union may be accepted.
   const validator = await moduleSource("validateSourceRecord.ts")
-  const vocabulary = /ACCEPTED_PROVIDERS: Record<SourceType, true> = \{([\s\S]*?)\}/.exec(validator)
+  const vocabulary = /ACCEPTED_PROVIDERS: Record<SourceIdentityNamespace, true> = \{([\s\S]*?)\}/.exec(validator)
   assert.ok(vocabulary, "the validator must keep declaring its provider vocabulary")
   const accepted = [...vocabulary[1].matchAll(/(\w+): true/g)].map((entry) => entry[1])
   assert.deepEqual(accepted.sort(), [...members].sort(), "the accepted set must equal the union")

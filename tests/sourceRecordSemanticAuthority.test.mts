@@ -220,10 +220,14 @@ const PROFILE_GATES = [
 // contract. Identity was not: the PM accepted it for Phase-1 with five requirements unproven, so it
 // carries the scoped-exception state instead. A later edit that promotes identity to `PROVEN`
 // presents an accepted risk as evidence, and fails here.
-const PROVEN_PROFILE_GATES = ["GitHub issue content-scope profile"]
+const PROVEN_PROFILE_GATES = [
+  "GitHub issue content-scope profile", "GitHub pull request content-scope profile",
+]
 const SCOPED_EXCEPTION_GATE = "GitHub issue identity profile"
+const PULL_REQUEST_EXCEPTION_GATE = "GitHub pull request identity profile"
 const SCOPED_EXCEPTION_STATE = "PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL"
 const PROVIDER_PROFILE_DOC = "docs/architecture/GITHUB_ISSUE_ACQUISITION_PROFILE.md"
+const PULL_REQUEST_PROFILE_DOC = "docs/architecture/GITHUB_PULL_REQUEST_ACQUISITION_PROFILE.md"
 
 const GATE_STATE = "REQUIRED_UNPROVEN"
 
@@ -252,17 +256,17 @@ test("R5: every gate without a reviewed profile stays REQUIRED_UNPROVEN", async 
     assert.ok(/=\s*PROVEN\b/.test(gateLines[0]), `${gate} must read PROVEN: ${gateLines[0]}`)
   }
 
-  // The accepted-with-residual gate. Two separate assertions on purpose: that it reads the scoped
-  // state, and that it does not read `PROVEN`. A single positive check would still pass a line
-  // that had acquired both.
-  const identityGateLines = lines.filter(
-    (line) => line.includes(SCOPED_EXCEPTION_GATE) && line.includes("="))
-  assert.equal(identityGateLines.length, 1,
-    `${SCOPED_EXCEPTION_GATE} must have exactly one gate line`)
-  assert.ok(new RegExp(`=\\s*${SCOPED_EXCEPTION_STATE}\\b`).test(identityGateLines[0]),
-    `${SCOPED_EXCEPTION_GATE} must read ${SCOPED_EXCEPTION_STATE}: ${identityGateLines[0]}`)
-  assert.equal(/=\s*PROVEN\b/.test(identityGateLines[0]), false,
-    `${SCOPED_EXCEPTION_GATE} must not be promoted to PROVEN: ${identityGateLines[0]}`)
+  // The accepted-with-residual gates, one per reviewed GitHub resource. Two separate assertions on
+  // purpose: that each reads the scoped state, and that neither reads `PROVEN`. A single positive
+  // check would still pass a line that had acquired both.
+  for (const gate of [SCOPED_EXCEPTION_GATE, PULL_REQUEST_EXCEPTION_GATE]) {
+    const identityGateLines = lines.filter((line) => line.includes(gate) && line.includes("="))
+    assert.equal(identityGateLines.length, 1, `${gate} must have exactly one gate line`)
+    assert.ok(new RegExp(`=\\s*${SCOPED_EXCEPTION_STATE}\\b`).test(identityGateLines[0]),
+      `${gate} must read ${SCOPED_EXCEPTION_STATE}: ${identityGateLines[0]}`)
+    assert.equal(/=\s*PROVEN\b/.test(identityGateLines[0]), false,
+      `${gate} must not be promoted to PROVEN: ${identityGateLines[0]}`)
+  }
 
   const profileDoc = await read(PROVIDER_PROFILE_DOC)
   for (const required of [
@@ -389,10 +393,16 @@ test("R5b: the GitHub Issue identity exception is scoped, residual-bearing and n
   assert.ok(/GitHub ISSUE content-scope profile\s*=\s*PROVEN\b/.test(profileDoc),
     `${PROVIDER_PROFILE_DOC} must keep the content-scope profile PROVEN`)
 
-  // Exactly one exception exists, and it belongs to one provider resource. Every occurrence of the
-  // state is checked, in both documents, so a second gate cannot adopt it and no non-excepted
-  // subject can appear on a line that carries it.
-  for (const [label, doc] of [[SEMANTICS_DOC, raw], [PROVIDER_PROFILE_DOC, profileDoc]] as const) {
+  // Each exception belongs to exactly one provider resource. There are two — GitHub issues (§4.1)
+  // and GitHub pull requests (§4.2), each separately ratified — and the check below is per LINE, not
+  // per document: every occurrence of the state, in all three documents, must be free of the
+  // non-excepted subjects, so no unreviewed provider can be swept in beside a reviewed one.
+  const pullRequestProfileDoc = await read(PULL_REQUEST_PROFILE_DOC)
+  for (const [label, doc] of [
+    [SEMANTICS_DOC, raw],
+    [PROVIDER_PROFILE_DOC, profileDoc],
+    [PULL_REQUEST_PROFILE_DOC, pullRequestProfileDoc],
+  ] as const) {
     const carrying = doc.split("\n").filter((line) => line.includes(SCOPED_EXCEPTION_STATE))
     assert.ok(carrying.length > 0, `${label} must state ${SCOPED_EXCEPTION_STATE}`)
     for (const line of carrying) {
@@ -401,6 +411,93 @@ test("R5b: the GitHub Issue identity exception is scoped, residual-bearing and n
         `${label}: the exception must not reach ${leaked.join(", ")}: ${line}`)
     }
   }
+})
+
+// ─── R5c — the pull request exception and the namespace decision ────────────
+
+// The five requirements the PM accepted as unproven for the pull request resource, spelled as both
+// documents spell them. Pinned in the semantic authority AND in the profile document for the same
+// reason as R1–R5: a reader who opens only one of the two must not get the reassuring half.
+const PULL_REQUEST_RESIDUALS = [
+  "REST pull request `id` lifetime immutability",
+  "non-reuse of a REST pull request `id` after deletion",
+  "persistence of a REST pull request `id` across repository transfer",
+  "provider-backed collision guarantee for github.com/rest/pulls",
+  "normative REST `id` = GraphQL `databaseId` equivalence",
+]
+
+test("R5c: the GitHub pull request exception is its own decision, not an inheritance", async () => {
+  const raw = await read(SEMANTICS_DOC)
+  const gates = section(raw, "## 4. Provider Profile Gates")
+  const profileDoc = await read(PULL_REQUEST_PROFILE_DOC)
+
+  // The exception must say the four things that make it reviewable: what is not proven, that a human
+  // accepted it knowing so, how far it reaches, and when it stops.
+  assertDeclares(gates, [
+    "GitHub Pull Requests only",
+    "github.pull-request.rest.database-primary-key v1",
+    "Phase-1 bounded experimental use only",
+    "The human PM reviewed P-R1–P-R5 and accepted the residual explicitly",
+    "Acceptance is not evidence",
+    "It did not inherit",
+  ], `${SEMANTICS_DOC} pull request scoped exception`)
+
+  for (const residual of PULL_REQUEST_RESIDUALS) {
+    assert.ok(flatten(gates).includes(flatten(residual)),
+      `${SEMANTICS_DOC} §4.2 must keep the residual visible: ${residual}`)
+    assert.ok(flatten(profileDoc).includes(flatten(residual)),
+      `${PULL_REQUEST_PROFILE_DOC} must keep the residual visible: ${residual}`)
+  }
+
+  // The content-scope half is proven and must not be dragged down with the identity residuals, and
+  // the identity half must not be promoted on the strength of the proven half.
+  assert.ok(/GitHub PULL REQUEST content-scope profile\s*=\s*PROVEN\b/.test(profileDoc),
+    `${PULL_REQUEST_PROFILE_DOC} must keep the content-scope profile PROVEN`)
+  assert.ok(/GitHub PULL REQUEST identity profile\s*=\s*PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL\b/
+    .test(profileDoc),
+    `${PULL_REQUEST_PROFILE_DOC} must keep the identity profile at its scoped-exception state`)
+  const revived = FALSE_IDENTITY_PROOF_CLAIMS.filter((pattern) => pattern.test(profileDoc))
+  assert.deepEqual(revived.map(String), [],
+    `${PULL_REQUEST_PROFILE_DOC} must not restate a superseded identity proof`)
+
+  // The absent sixth residual is the one a later reader is most likely to misread as a promotion.
+  // The document must say why it is gone — an Atra-side defect was removed — and must not present
+  // that as evidence about the provider.
+  assertDeclares(flatten(profileDoc), [
+    "There is no sixth residual, and that is not a promotion",
+    "Removing an Atra-side defect proves nothing about the provider",
+  ], `${PULL_REQUEST_PROFILE_DOC} sixth-residual framing`)
+
+  // The profile must record what provider authority it did NOT obtain. This is the honest basis for
+  // the acceptance, and deleting it would leave the residuals looking like an oversight.
+  assertDeclares(flatten(profileDoc), [
+    "No new provider-contract verification was performed for this resource",
+  ], `${PULL_REQUEST_PROFILE_DOC} authority disclosure`)
+})
+
+test("R5c: canonical identity namespaces are per resource and introduce no namespace field", async () => {
+  const gates = section(await read(SEMANTICS_DOC),
+    "### 4.3 Canonical identity namespaces are per resource, not per provider")
+
+  assertDeclares(gates, [
+    // The decision itself, and the rejected alternative stated as rejected rather than omitted.
+    "distinct canonical identity namespaces",
+    "The single `\"github\"` canonical identity namespace is **rejected**",
+    "a record cannot fall back to it",
+    // Why: the provider fact, and the measurement consequence that made it urgent.
+    "different table per resource",
+    "would become one canonical identity",
+    "arrive at that experiment disguised as a correlation result",
+    // The boundary: what was deliberately NOT built.
+    "No generalized namespace model",
+    "gains no `providerNamespace` field and no fourth identity component",
+    "the record's field set, order and optionality are unchanged",
+    // When it is revisited, so the boundary is not permanent by accident.
+    "a third canonical GitHub resource becoming necessary, or canonical persistence beginning",
+    // Observation never becomes proof.
+    "`OBSERVED_STABILITY` is not `PROVIDER_PROOF`",
+    "no provider-specific observation field may be added",
+  ], `${SEMANTICS_DOC} canonical namespace decision`)
 })
 
 // ─── R6 — the acquisition implementation is exactly the reviewed slice ──────
@@ -429,11 +526,17 @@ const UNSTARTED_IMPLEMENTATION_SYMBOLS = [
   "providerObjectKeyFor",
 ]
 
-// The two modules the reviewed slice authorized, pinned by resolved path. No third module may
-// acquire, produce, digest or profile, whatever it is named.
+// The modules the reviewed slices authorized, pinned by resolved path. No further module may
+// acquire, produce, digest or profile, whatever it is named. The pull request adapter joined the
+// list when the GitHub resource namespace split reviewed a second resource; the list is exact, so
+// a third resource is a failure here until it is reviewed too.
 const GITHUB_ACQUISITION = "app/lib/infrastructure/external/github/recordedIssueCapture.ts"
+const GITHUB_PULL_REQUEST_ACQUISITION =
+  "app/lib/infrastructure/external/github/recordedPullRequestCapture.ts"
 const SOURCE_PRODUCER = "app/lib/application/source/sourceRecordProduction.ts"
-const AUTHORIZED_IMPLEMENTATION_MODULES = [GITHUB_ACQUISITION, SOURCE_PRODUCER]
+const AUTHORIZED_IMPLEMENTATION_MODULES = [
+  GITHUB_ACQUISITION, GITHUB_PULL_REQUEST_ACQUISITION, SOURCE_PRODUCER,
+]
 
 // The declared contract, and the single module allowed to declare it. The pair is pinned by
 // resolved path so "declared" cannot decay into "declared anywhere".
@@ -509,10 +612,14 @@ test("R6: only the reviewed slice produces, adapts, digests or profiles a Source
 
   const raw = await read(SEMANTICS_DOC)
   assertDeclares(section(raw, "## 5. Acquisition Consequence"), [
-    "ACQUISITION_SCOPE_CHANGE_REQUIRED = YES, except for GitHub issues, where it has been made",
+    "ACQUISITION_SCOPE_CHANGE_REQUIRED = YES, except for GitHub issues and GitHub pull requests, where it has been made",
     "neither enough provider-native identity",
     "nor the full provider content",
-    "For every other provider and every other GitHub resource, acquisition scope is unchanged",
+    "For every other provider and every remaining GitHub resource, acquisition scope is unchanged",
+    // Extension by review, not by generalization. The alternative — one parameterized GitHub
+    // adapter — would make a third resource reachable without a reviewed profile.
+    "Each resource has its own acquisition module",
+    "not generalized into a provider plugin surface",
   ], `${SEMANTICS_DOC} acquisition consequence`)
   // Section 6 is the historical boundary of the clarification itself, and its wording is preserved
   // verbatim. It is only honest alongside section 7, which records what later WorkUnits crossed —
@@ -529,6 +636,7 @@ test("R6: only the reviewed slice produces, adapts, digests or profiles a Source
   assertDeclares(section(raw, "## 7. What later WorkUnits have since crossed"), [
     SOURCE_PRODUCER,
     GITHUB_ACQUISITION,
+    GITHUB_PULL_REQUEST_ACQUISITION,
     "No persistence path exists",
     "**P1-1 remains `PARTIAL`**",
   ], `${SEMANTICS_DOC} superseding record`)
@@ -569,10 +677,17 @@ test("R7: the golden fixture self-identifies as validator-shape evidence only", 
 // The clarification is documentation. These are the record's declarations at the ratified head:
 // order, names, types and non-optionality. Any executable or type-shape edit fails here, which is
 // what makes "comment-only" checkable rather than merely asserted.
+//
+// `provider` reads `SourceIdentityNamespace` and not `SourceType`, and the re-cut is deliberate.
+// The GitHub resource namespace split was a separately authorized WorkUnit that changed the
+// discriminator's TYPE — not the field set, not the order, not optionality, and not a field's
+// meaning: `provider` was always "the namespace in which providerObjectKey is interpreted", and the
+// split made the declared type say what that sentence already required for a provider issuing keys
+// per resource. The rest of this list is unchanged, so a fourth field or a re-ordering still fails.
 const RECORD_FIELDS = [
   "recordVersion: SourceRecordVersion",
   "tenantId: TenantId",
-  "provider: SourceType",
+  "provider: SourceIdentityNamespace",
   "providerObjectKey: string",
   "declaredSourceRef: string | null",
   "sourceUrl: string | null",

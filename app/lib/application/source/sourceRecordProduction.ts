@@ -14,12 +14,14 @@
  *
  * WHY THE AUTHORIZATION LIST IS RESTATED HERE
  *
- * The ratified profile tuple below is written out again rather than imported from
- * the acquisition module it authorizes. A producer that took its authorization from
+ * The ratified profile tuples below are written out again rather than imported from
+ * the acquisition modules they authorize. A producer that took its authorization from
  * the adapter it is authorizing would authorize whatever that adapter later said,
- * and a new provider adapter would become production-capable by construction. The
- * two literals are pinned against each other by the slice's contract test, so they
- * cannot drift apart, but neither one grants the other anything.
+ * and a new provider adapter would become production-capable by construction. That
+ * matters more with two adapters than it did with one: adding a third GitHub resource
+ * must still require an edit here, in review, and not merely a new module that states
+ * its own profile. The literals are pinned against each other by the slice's contract
+ * test, so they cannot drift apart, but neither one grants the other anything.
  *
  * WHAT IS DELIBERATELY NOT CARRIED
  *
@@ -38,7 +40,7 @@ import type { AcquisitionEvidence } from "../../ports/acquisitionEvidence/types.
 import type { AcquisitionCaptureId } from "../../ports/acquisitionEvidence/types.ts"
 import { validateSourceRecordV1 } from "../../domain/source/index.ts"
 import type { SourceRecordFailureCode, SourceRecordV1 } from "../../domain/source/index.ts"
-import type { SourceType } from "../../domain/types.ts"
+import type { SourceIdentityNamespace } from "../../domain/types.ts"
 
 /**
  * One capture, one record, and the link between them.
@@ -73,14 +75,26 @@ export type SourceRecordProductionResult =
  *
  * A tuple, not a namespace check: a key admissible under identity profile version 1
  * is not thereby admissible under version 2, and a digest produced under one
- * content-scope version is not comparable with another. All five values must match,
- * so re-versioning either profile stops production until this list is edited in
- * review.
+ * content-scope version is not comparable with another. All five capture-supplied
+ * values must match, so re-versioning either profile stops production until this list
+ * is edited in review.
  *
- * `sourceType` is the record vocabulary the namespace binds to. It is a binding, not
- * a translation: `SourceType` is Atra's own closed vocabulary, the provider namespace
- * is GitHub's, and the authority is the namespace. Deriving one from the other by
- * string manipulation would be provider relabelling.
+ * `identityNamespace` is the canonical record vocabulary the provider namespace binds
+ * to. It is a binding, not a translation: `SourceIdentityNamespace` is Atra's own closed
+ * vocabulary, the provider namespace is GitHub's, and the authority is the namespace.
+ * Deriving one from the other by string manipulation would be provider relabelling —
+ * which is also why each entry states its namespace as a literal rather than computing
+ * `github_${resource}` from the provider path.
+ *
+ * WHY TWO GITHUB ENTRIES AND NOT ONE
+ *
+ * GitHub issues an object's REST `id` from a different table per resource, and the
+ * observed issue and pull-request ranges overlap. A single `github` entry matching both
+ * provider namespaces would map two distinct key spaces onto one canonical namespace,
+ * and two numerically equal keys from different resources would then be one canonical
+ * identity. Each resource therefore carries its own complete tuple, and a capture whose
+ * provider namespace and profiles do not agree — a pull-request namespace under the
+ * issue identity profile, or the reverse — matches no entry and is refused.
  */
 const AUTHORIZED_PROVIDER_PROFILES: readonly {
   readonly providerNamespace: string
@@ -88,7 +102,7 @@ const AUTHORIZED_PROVIDER_PROFILES: readonly {
   readonly identityProfileVersion: string
   readonly contentScopeProfileId: string
   readonly contentScopeProfileVersion: string
-  readonly sourceType: SourceType
+  readonly identityNamespace: SourceIdentityNamespace
 }[] = Object.freeze([
   Object.freeze({
     providerNamespace: "github.com/rest/issues",
@@ -96,7 +110,15 @@ const AUTHORIZED_PROVIDER_PROFILES: readonly {
     identityProfileVersion: "1",
     contentScopeProfileId: "github.issue.rest.retained-response-body",
     contentScopeProfileVersion: "1",
-    sourceType: "github" as SourceType,
+    identityNamespace: "github_issue" as SourceIdentityNamespace,
+  }),
+  Object.freeze({
+    providerNamespace: "github.com/rest/pulls",
+    identityProfileId: "github.pull-request.rest.database-primary-key",
+    identityProfileVersion: "1",
+    contentScopeProfileId: "github.pull-request.rest.retained-response-body",
+    contentScopeProfileVersion: "1",
+    identityNamespace: "github_pull_request" as SourceIdentityNamespace,
   }),
 ])
 
@@ -141,7 +163,7 @@ export function produceSourceRecordFromCapture(
   const result = validateSourceRecordV1({
     recordVersion: "1",
     tenantId: evidence.tenantPartition as string,
-    provider: authorized.sourceType,
+    provider: authorized.identityNamespace,
     providerObjectKey: identity.providerObjectKey,
     declaredSourceRef: null,
     sourceUrl: null,

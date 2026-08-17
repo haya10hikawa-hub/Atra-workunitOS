@@ -10,7 +10,7 @@
  */
 
 import type { TenantId } from "../tenant/types.ts"
-import type { SourceType } from "../types.ts"
+import type { SourceIdentityNamespace } from "../types.ts"
 
 /** Version discriminant. An unknown value fails closed; it is never defaulted. */
 export const SOURCE_RECORD_VERSION = "1" as const
@@ -29,8 +29,16 @@ export type SourceRecordV1 = {
   /** Canonical branded tenant. Partition, never permission. */
   readonly tenantId: TenantId
 
-  /** Namespace in which providerObjectKey is interpreted. Identity field. */
-  readonly provider: SourceType
+  /**
+   * Namespace in which providerObjectKey is interpreted. Identity field.
+   *
+   * A canonical identity namespace, not the application's integration vocabulary: where
+   * one provider issues keys from separate spaces per resource, the resource is part of
+   * the namespace. Two objects whose keys are byte-equal but whose namespaces differ are
+   * two distinct sources, and no namespace is ever widened to a shared provider-level
+   * value to make them one. See `SourceIdentityNamespace`.
+   */
+  readonly provider: SourceIdentityNamespace
 
   /**
    * The provider's own native identity for the observed object. Identity field.

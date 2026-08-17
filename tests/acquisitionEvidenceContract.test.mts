@@ -44,10 +44,20 @@ const SIGNAL_BOUNDARY_SUITE = "tests/normalizedToolSignalBoundary.test.mts"
 const SIGNAL_CONTRACT_FIXTURE = "tests/fixtures/architecture/normalized-signal-contract.v1.json"
 const SEMANTICS_DOC = "docs/architecture/SOURCE_RECORD_V1_SEMANTICS.md"
 
-/** The GitHub acquisition adapter and the canonical producer. Exactly these, in sorted order. */
-const GITHUB_ACQUISITION = "app/lib/infrastructure/external/github/recordedIssueCapture.ts"
+/**
+ * The GitHub acquisition adapters and the canonical producer. Exactly these, in sorted order.
+ *
+ * There are two adapters rather than one because GitHub issues and pull requests are separate
+ * provider resources with separate identity spaces and separate reviewed profiles. The ratchet was
+ * re-cut deliberately by the resource-namespace-split WorkUnit; it did not widen to "any GitHub
+ * module", so a third resource still fails here until it too is reviewed.
+ */
+const GITHUB_ISSUE_ACQUISITION = "app/lib/infrastructure/external/github/recordedIssueCapture.ts"
+const GITHUB_PULL_REQUEST_ACQUISITION =
+  "app/lib/infrastructure/external/github/recordedPullRequestCapture.ts"
+const GITHUB_ACQUISITIONS = [GITHUB_ISSUE_ACQUISITION, GITHUB_PULL_REQUEST_ACQUISITION].sort()
 const SOURCE_PRODUCER = "app/lib/application/source/sourceRecordProduction.ts"
-const AUTHORIZED_CONTRACT_CONSUMERS = [GITHUB_ACQUISITION, SOURCE_PRODUCER].sort()
+const AUTHORIZED_CONTRACT_CONSUMERS = [...GITHUB_ACQUISITIONS, SOURCE_PRODUCER].sort()
 
 /**
  * The contract's complete declared surface, in declaration order.
@@ -486,7 +496,7 @@ test("A6: the evidence port has no SourceRecord relationship and the record has 
  * resolution rather than a text match, is indifferent to how the specifier is spelled. A comment
  * naming the contract is not a dependency and must not fail here.
  */
-test("A7: the only provider module wired to the contract is the profiled GitHub adapter", async () => {
+test("A7: the only provider modules wired to the contract are the profiled GitHub adapters", async () => {
   const providerFiles: string[] = []
   for (const root of PROVIDER_ROOTS) {
     const files = await collectCodeFiles(path.join(rootDir, root))
@@ -503,8 +513,8 @@ test("A7: the only provider module wired to the contract is the profiled GitHub 
   assert.ok(edges.length > providerFiles.length, "the provider module-graph scan must not be vacuous")
 
   const wired = [...new Set(contractDependencies(edges).map((edge) => edge.file))].sort()
-  assert.deepEqual(wired, [GITHUB_ACQUISITION],
-    `provider wiring is exactly the profiled GitHub adapter:\n${contractDependencies(edges).map(describeEdge).join("\n")}`)
+  assert.deepEqual(wired, GITHUB_ACQUISITIONS,
+    `provider wiring is exactly the profiled GitHub adapters:\n${contractDependencies(edges).map(describeEdge).join("\n")}`)
 
   // The unproven providers stay unwired, stated separately so a failure names the provider.
   for (const provider of ["slack", "calendar"]) {

@@ -50,11 +50,32 @@ subject, and no code follows it.
 npm run source:acquire-recorded
 ```
 
-Offline and read-only: it reads one archive, runs the same production modules the test suite runs,
-prints the provenance, and writes nothing.
+Offline and read-only: it reads each archive, runs the same production modules the test suite runs,
+prints the provenance, and writes nothing. Pass a resource name (`issue`, `pull-request`) to inspect
+one, and optionally an archive path after it. The resource is chosen by the operator and is never
+sniffed from the archive — `capturedFrom.requestUrl` is provenance for a reader and is not parsed for
+a decision.
 
 ## Current contents
 
 | Archive | Provider object | Profile |
 | --- | --- | --- |
 | `github/issue-4968607486.capture.json` | GitHub issue, database primary key `4968607486` — `haya10hikawa-hub/Atra-workunitOS` issue 207, a real project-planning issue that predates this slice | `docs/architecture/GITHUB_ISSUE_ACQUISITION_PROFILE.md` |
+| `github/pull-request-4258276579.capture.json` | GitHub pull request, database primary key `4258276579` — `haya10hikawa-hub/Atra-workunitOS` pull request 229, a real merged pull request that predates the slice that reads it | `docs/architecture/GITHUB_PULL_REQUEST_ACQUISITION_PROFILE.md` |
+
+The two are **different provider resources**, not two captures of one. Their REST identifiers come
+from different provider tables and their observed values overlap in range, so they are read by
+different acquisition modules and produce records in different canonical identity namespaces
+(`github_issue` and `github_pull_request`).
+
+An archive read under the wrong resource's module is refused, never reinterpreted. That refusal is
+enforced on the **retained bytes** and not on the envelope: the two archives carry byte-identical
+request provenance, so nothing in `capturedFrom` could distinguish them. Each module checks that the
+payload carries — or does not carry — pull request structure, and fails closed otherwise. Without
+that check the canonical namespace would be asserted by whichever module the operator happened to
+call, which is the one part of canonical identity the retained bytes cannot state for themselves.
+
+The two retained streams are also formatted differently — the pull request response is pretty-printed
+and the issue response is compact. Neither was touched. That difference is the provider's, it is
+inside the digest scope for each, and it is the clearest available illustration of why the digest is
+taken over the retained bytes rather than over a reserialization of them.

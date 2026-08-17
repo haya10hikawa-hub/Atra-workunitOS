@@ -27,6 +27,12 @@
  * An operator therefore cannot assert an identity or a digest that the bytes do not
  * support, and any reviewer holding the same bytes recomputes all three.
  *
+ * The canonical identity namespace is the one part of identity that is not derived,
+ * because it follows from which module ran rather than from a value in the payload. It is
+ * instead BOUND to the bytes: this module refuses a payload carrying pull request
+ * structure, so a mis-selected resource fails closed rather than relabelling a real
+ * provider key into the wrong namespace.
+ *
  * The retained bytes are never edited, never re-serialized and never normalized. The
  * digest's subject is the exact retained byte stream, and base64 is used only as a
  * lossless transport encoding of it.
@@ -83,6 +89,7 @@ export type RecordedGitHubIssueCaptureFailureCode =
   | "unsupported_retention"
   | "invalid_retained_bytes"
   | "retained_content_unreadable"
+  | "provider_resource_mismatch"
   | "provider_identity_absent"
   | "provider_identity_unrepresentable"
   | "provider_event_time_unreadable"
@@ -254,6 +261,22 @@ export async function acquireRecordedGitHubIssueCapture(
     return fail("retained_content_unreadable")
   }
   if (!isPlainObject(providerObject)) return fail("retained_content_unreadable")
+
+  // THE RESOURCE IS BOUND TO THE BYTES, NOT TO THE CALLER.
+  //
+  // The mirror of the guard in the pull request module, and it exists for the same reason:
+  // the canonical identity namespace a record lands in is decided by which acquisition
+  // module ran, so without a check on the bytes that half of identity would be the caller's
+  // assertion. Handing a pull request export to this module would mint the pull request's
+  // own primary key into the issue namespace.
+  //
+  // Stated as a refusal of the other resource's structure rather than as a required issue
+  // member: `head` and `base` are definitional of a pull request and absent from an issue
+  // representation, so refusing them needs no claim about which members GitHub guarantees
+  // on every issue. A fail-closed guard, not a schema assertion.
+  if (isPlainObject(providerObject.head) && isPlainObject(providerObject.base)) {
+    return fail("provider_resource_mismatch")
+  }
 
   // Identity, derived from the provider's own bytes. `id` is the issue's database
   // primary key; `node_id` is deliberately not used.

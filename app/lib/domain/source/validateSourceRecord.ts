@@ -16,7 +16,7 @@
  */
 
 import type { TenantId } from "../tenant/types.ts"
-import type { SourceType } from "../types.ts"
+import type { SourceIdentityNamespace } from "../types.ts"
 import type {
   SourceRecordFailureCode,
   SourceRecordV1,
@@ -31,17 +31,25 @@ const RECORD_KEYS = [
 ] as const
 
 /**
- * The accepted provider vocabulary is the domain `SourceType` union, reused
- * rather than re-minted.
+ * The accepted provider vocabulary is the domain `SourceIdentityNamespace` union,
+ * reused rather than re-minted.
  *
- * Typing it as `Record<SourceType, true>` makes the two drift-proof in both
- * directions at compile time: omitting a member is a missing-property error,
+ * Typing it as `Record<SourceIdentityNamespace, true>` makes the two drift-proof in
+ * both directions at compile time: omitting a member is a missing-property error,
  * and adding a non-member is an excess-property error. No separate assertion
  * is needed, so there is nothing here that can rot unnoticed.
+ *
+ * `github` is absent and its absence is load-bearing: GitHub's reviewed resources are
+ * `github_issue` and `github_pull_request`, and a record that fell back to the generic
+ * provider would put two different provider key spaces in one namespace. It is refused
+ * here as `invalid_provider` rather than folded into either resource — this validator
+ * cannot know which resource a key came from, and guessing is exactly the false merge
+ * the split exists to prevent.
  */
-const ACCEPTED_PROVIDERS: Record<SourceType, true> = {
+const ACCEPTED_PROVIDERS: Record<SourceIdentityNamespace, true> = {
   slack: true, notion: true, gmail: true, google_drive: true,
-  google_calendar: true, github: true, manual: true, meeting_transcript: true,
+  google_calendar: true, github_issue: true, github_pull_request: true,
+  manual: true, meeting_transcript: true,
 }
 
 const MAX_TENANT_ID = 200
@@ -199,7 +207,7 @@ export function validateSourceRecordV1(input: unknown): SourceRecordValidationRe
   const record: SourceRecordV1 = Object.freeze({
     recordVersion: "1" as const,
     tenantId: tenantId as TenantId,
-    provider: provider as SourceType,
+    provider: provider as SourceIdentityNamespace,
     providerObjectKey,
     declaredSourceRef,
     sourceUrl,
