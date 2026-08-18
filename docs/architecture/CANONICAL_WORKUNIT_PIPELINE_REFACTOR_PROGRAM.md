@@ -182,7 +182,19 @@ The distinction is operational, not cosmetic. Reconciliation is machine-checked 
 
 Contraction is governed exactly as expansion is. A debt leaves the ledger only when its live edges are already gone, and the source-controlled `DEBT_IDS` literal in `tests/architectureBoundaries.test.mts` must be changed by a human in the same review. Removing the record is never the mechanism of closure, and a resolved id may not reappear.
 
-The current declared debt is empty: there is no declared entry, and adding one requires a separate PM/architecture decision recorded before the change.
+#### Recorded decision: `ATRA_PM_ARCHITECTURE_DEBT_REGISTRY_EXPANSION_WU_A_RATIFIED`
+
+The Human PM records and ratifies this expansion of the declared architecture-debt registry.
+
+The decision approves **recording** the exact live violations that became observable when the WU-A architecture-enforcement slice installed outbound policies for previously unpoliced layers. It approves nothing else. Each recorded entry must correspond to a real live edge, with exact source path, exact target path and exact edge kind; the target boundary policy must still reject the edge; the registry must not act as permission; and stale entries, undeclared new violations, widened records, edge-kind upgrades and resurrection of resolved debt must all fail.
+
+**Recording an existing violation is not approving it as target architecture.** Every entry stays `known_open` with a removal gate, and its owning WorkUnit is prospective ownership only — never authorization to start that WorkUnit.
+
+`WU-A` is an architecture-remediation label for that enforcement slice. It is **not** a canonical product WorkUnit, and it does not enter the WU-00 … WU-10 table or its sequencing.
+
+The declared debt is **not** empty. The registry holds exactly the records ratified above; `tests/fixtures/architecture/declared-boundary-debt.v1.json` is the machine-readable source of truth for their content, reconciled bidirectionally against the live scan by `tests/architectureBoundaries.test.mts`. That fixture is deliberately not restated here, because two copies of one state is how the two stop agreeing.
+
+WU-A introduced no runtime debt: it changed no file under `app/`. The violations it records were already live at the baseline named by each entry's own `source_sha`; what changed is that a policy now observes them. Any further entry still requires a separate PM/architecture decision recorded before the change, and removal still requires the live edge to disappear first.
 
 Previously declared and now resolved: `domain_tenant_hybrid_boundary` (closed by WU-01A) and `infrastructure_application_signal_contract` (closed by WU-02). Neither id may reappear.
 

@@ -966,7 +966,17 @@ test("governance: declared debt ledger is a review-governed registry, not a mach
     "It is **not** a `MACHINE_CLOSED_RATCHET`.",
     "Ledger expansion requires a separate PM/architecture decision recorded before the change.",
     "it is never evidence that the expansion was authorized",
+    // The recorded decision itself, and the true current state. The reviewed head expanded the
+    // ledger while this document still said the ledger was empty, and nothing failed — a green
+    // suite proved reconciliation and said nothing at all about authority. Both are pinned now.
+    "ATRA_PM_ARCHITECTURE_DEBT_REGISTRY_EXPANSION_WU_A_RATIFIED",
+    "The declared debt is **not** empty.",
+    "Recording an existing violation is not approving it as target architecture.",
   ], "debt registry classification")
+
+  // And the document must not drift back to claiming an empty ledger while entries exist.
+  assert.equal((await readProgramDoc()).includes("The current declared debt is empty"), false,
+    "the authority must not claim an empty ledger while the registry holds entries")
 
   // Structural: the accepted debt ids are a source-controlled constant, not a fixture value, so a
   // fixture edit alone cannot expand the ledger — a reviewer must change this file too. That is
@@ -1090,7 +1100,8 @@ function violatesApplicationTypeTarget(edge: ModuleEdge): boolean {
   return isBareModule(edge.specifier, "react")
     || isBareModule(edge.specifier, "next")
     || hasForbiddenResolvedPath(edge.resolvedTarget, [
-      "/app/api/", "/app/components/", "/app/lib/infrastructure/", "/app/lib/persistence/d1/",
+      "/app/api/", "/app/components/", "/app/lib/infrastructure/",
+      ...PERSISTENCE_IMPLEMENTATION_FRAGMENTS,
     ])
 }
 
@@ -1138,13 +1149,29 @@ function violatesPersistenceTarget(edge: ModuleEdge): boolean {
 // implementors, or the resolver that picks one, is no longer usable as the inversion point WU-06
 // needs, and the mixed directory would then be load-bearing rather than merely untidy.
 const PERSISTENCE_CONTRACT_MODULES = ["app/lib/persistence/repositories.ts", "app/lib/persistence/types.ts"]
-const PERSISTENCE_NON_CONTRACT_FRAGMENTS = [
+// The non-contract half is split by RESPONSIBILITY, because two policies need two different parts
+// of it and a second hand-maintained list is how the two would drift apart.
+//
+// IMPLEMENTATION: a repository body. Naming one of these types is naming a storage decision.
+const PERSISTENCE_IMPLEMENTATION_FRAGMENTS = [
   "/app/lib/persistence/d1/", "/app/lib/persistence/inMemoryRepositories.ts",
   "/app/lib/persistence/relationshipEnforcedRepositories.ts", "/app/lib/persistence/approvalStoreAdapter.ts",
-  "/app/lib/persistence/sharedInMemoryStores.ts", "/app/lib/persistence/repositoryResolver.ts",
-  "/app/lib/persistence/routeRepositories.ts", "/app/lib/persistence/tenantDbResolver.ts",
-  "/app/lib/persistence/persistenceConfig.ts", "/app/lib/persistence/cloudflareBindings.ts",
-  "/app/lib/runtime/",
+  "/app/lib/persistence/sharedInMemoryStores.ts",
+]
+// COMPOSITION: selection, binding and configuration. Not implementations — and repositoryResolver.ts
+// in particular DECLARES the repository contracts the application layer legitimately consumes
+// (TenantRepositoryBundle and the read-repository family are its own exports). A contract module
+// still may not depend on any of these, because an interface that knows its selector is what makes
+// the mixed directory load-bearing; the application layer naming those types is a different thing.
+const PERSISTENCE_COMPOSITION_FRAGMENTS = [
+  "/app/lib/persistence/repositoryResolver.ts", "/app/lib/persistence/routeRepositories.ts",
+  "/app/lib/persistence/tenantDbResolver.ts", "/app/lib/persistence/persistenceConfig.ts",
+  "/app/lib/persistence/cloudflareBindings.ts", "/app/lib/runtime/",
+]
+// One classification, two named halves. Contract purity keeps consuming the whole of it, so the
+// two policies below can never disagree about what a non-contract module is.
+const PERSISTENCE_NON_CONTRACT_FRAGMENTS = [
+  ...PERSISTENCE_IMPLEMENTATION_FRAGMENTS, ...PERSISTENCE_COMPOSITION_FRAGMENTS,
 ]
 
 function violatesPersistenceContractTarget(edge: ModuleEdge): boolean {
@@ -1161,6 +1188,26 @@ function violatesControlPersistenceTarget(edge: ModuleEdge): boolean {
     || hasForbiddenResolvedPath(edge.resolvedTarget, [
       "/app/api/", "/app/components/", "/app/lib/application/",
       "/app/lib/security/", "/app/lib/infrastructure/external/",
+    ])
+}
+
+// Infrastructure is an outer adapter layer, and this policy covers the LAYER, not two of its
+// subtrees. Before it, app/lib/infrastructure/external and .../persistence each had a policy and
+// every sibling subtree had none, so app/lib/infrastructure/<anything-else>/ was unobserved while
+// the layer registry called the layer POLICED. The scan root is now the layer itself, so a new
+// subtree is covered the moment it exists and no registry edit is involved.
+//
+// The rule is the direction an adapter may never take: upward into delivery or into the
+// application layer, and never React or Next. Deliberately no stricter than that. The stricter
+// subtree policies survive unchanged on top of it — external/** additionally may not reach the
+// application layer through the UI rule, and persistence/** additionally may not reach security or
+// provider clients — while infrastructure -> ports, domain and the neutral persistence contracts
+// stay legitimate, because that is what an adapter implementing a contract must do.
+function violatesInfrastructureTarget(edge: ModuleEdge): boolean {
+  return isBareModule(edge.specifier, "react")
+    || isBareModule(edge.specifier, "next")
+    || hasForbiddenResolvedPath(edge.resolvedTarget, [
+      "/app/api/", "/app/components/", "/app/lib/application/",
     ])
 }
 
@@ -1185,6 +1232,36 @@ function violatesLibRootTarget(edge: ModuleEdge): boolean {
 // set is asserted for equality against the live directory, so a NEW app/lib layer cannot appear
 // without a human classifying it here — which is the general form of the escape hatch above.
 // Deferral is a recorded decision, not an omission: none of these layers is silently unscanned.
+// POLICED is a DERIVED claim, not a label. A layer may only be marked POLICED if it appears here,
+// and every entry here is scanned at its layer ROOT below. That is what makes the word true for
+// subtrees that do not exist yet: nothing under a policed layer can be added outside the scan.
+const POLICED_LAYER_POLICIES: Record<string, (edge: ModuleEdge) => boolean> = {
+  application: (edge) => violatesApplicationValueTarget(edge) || violatesApplicationTypeTarget(edge),
+  domain: violatesDomainTarget,
+  ports: violatesPortTarget,
+  security: violatesSecurityTarget,
+  runtime: violatesRuntimeTarget,
+  persistence: (edge) => violatesPersistenceTarget(edge) || violatesPersistenceContractTarget(edge),
+  infrastructure: violatesInfrastructureTarget,
+  integrations: violatesExternalClientTarget,
+}
+
+// A layer policed only in part names the exact subtrees that are scanned, so the registry never
+// reads as whole-layer coverage it does not have. Each named subtree must exist and be scanned.
+const PARTIALLY_POLICED_SUBTREES: Record<string, string[]> = {
+  workunitInbox: ["app/lib/workunitInbox/sources"],
+}
+
+// Closed disposition vocabulary:
+//   POLICED                    — the whole layer root is scanned by POLICED_LAYER_POLICIES
+//   PARTIALLY_POLICED:<owner>  — the subtrees named above are scanned; the rest is the owner's call
+//   DEFERRED:<WU-nn>           — unscanned, and the program document names that WorkUnit as owner
+//   DEFERRED:UNOWNED           — unscanned, and no WorkUnit the authority names owns it yet
+//   NO-CODE                    — holds no module at all, asserted by census
+//
+// DEFERRED:UNOWNED exists because the previous vocabulary had no way to say "nobody owns this
+// yet", so an unowned layer had to borrow the closest-sounding WorkUnit. A borrowed owner is a
+// false statement about authority, and this registry is read as a map of who decides what.
 const APP_LIB_LAYER_DISPOSITION: Record<string, string> = {
   application: "POLICED",
   domain: "POLICED",
@@ -1194,21 +1271,27 @@ const APP_LIB_LAYER_DISPOSITION: Record<string, string> = {
   persistence: "POLICED",
   infrastructure: "POLICED",
   integrations: "POLICED",
-  // Compatibility surfaces whose removal is gated by the WU-10 cleanup exit gate. Policing their
-  // outbound edges now would ratchet a surface whose target state is deletion.
+  // Compatibility surface whose removal is gated by the WU-10 cleanup exit gate, and one of the
+  // four legacy roots that gate names. Policing its outbound edges now would ratchet a surface
+  // whose target state is deletion.
   actionField: "DEFERRED:WU-10",
-  workunitInbox: "DEFERRED:WU-10",
-  // The tenant hybrid. The program records relocating its six remaining symbols as open, unowned
-  // and deferred, so a boundary policy here would prejudge a product decision.
-  tenant: "DEFERRED:WU-10",
-  // LLM result adapters; WU-04 owns the canonical candidate service that subsumes them.
+  // Same gate, but its sources/ subtree already carries the external-client policy, so the layer
+  // is partly scanned and the disposition says so instead of implying the whole layer is open.
+  workunitInbox: "PARTIALLY_POLICED:WU-10",
+  // The tenant hybrid. The program states that relocating its six remaining symbols "remains open,
+  // unowned and deferred", so naming a WorkUnit here would contradict the authority outright.
+  tenant: "DEFERRED:UNOWNED",
+  // LLM result adapters. The WU-04 row names "adapters for current Inbox/Launcher/LLM results",
+  // which is this layer; the owner is read from the table rather than inferred from the name.
   llm: "DEFERRED:WU-04",
-  // Evidence/artifact kernel consumed by the runtime-authorization gate; WU-09 owns that binding.
-  phase6: "DEFERRED:WU-09",
-  // Dormant formation research with no live route consumer; WU-03 owns the formation core.
-  subagents: "DEFERRED:WU-03",
+  // Evidence/artifact kernel consumed by the runtime-authorization gate. WU-09 is a plausible
+  // owner and nothing in the program says so, so it is recorded as unowned rather than inferred.
+  phase6: "DEFERRED:UNOWNED",
+  // Dormant formation research with no live route consumer. WU-03 owns the formation core, but
+  // the program never assigns this layer to it, and an inference is not an owner.
+  subagents: "DEFERRED:UNOWNED",
   // Documentation only. The census below proves it holds no module, so it cannot hide an edge.
-  config: "DEFERRED:NO-CODE",
+  config: "NO-CODE",
 }
 
 async function censusOf(dir: string): Promise<number> {
@@ -1308,7 +1391,41 @@ test("WU-A: app/lib root modules are not an unscanned escape hatch", async () =>
     "a loose app/lib root module must not hold an edge the layer policies forbid")
 })
 
-test("WU-A: every app/lib layer is either policed or explicitly deferred to a named WorkUnit", async () => {
+test("WU-A: the infrastructure layer is policed at its root, so a new subtree cannot be unobserved", async () => {
+  // The reviewed head scanned app/lib/infrastructure/external and .../persistence and nothing
+  // else, while the registry called the layer POLICED. app/lib/infrastructure/messaging/client.ts
+  // could import React, an application use case and a component with the whole suite green.
+  const observed = await scanPolicedLayer("app/lib/infrastructure", violatesInfrastructureTarget, 10)
+  assert.deepEqual(edgeLines(observed), [],
+    "app/lib/infrastructure must have no target-policy violation at any depth")
+
+  // Coverage is proven by construction rather than by naming today's subtrees: every scanned file
+  // under the layer belongs to this one scan, whichever subtree it happens to sit in.
+  const scanned = await collectCodeFiles(path.join(rootDir, "app/lib/infrastructure"))
+  const subtrees = new Set(scanned.map((file) =>
+    path.relative(path.join(rootDir, "app/lib/infrastructure"), file).split(path.sep)[0]))
+  assert.ok(subtrees.size >= 2, "the infrastructure census must span more than one subtree")
+})
+
+test("WU-A: POLICED is a derived claim — every policed layer is scanned at its own root", async () => {
+  // The defect this closes is a label that outran its scan. POLICED may only be written for a
+  // layer present in POLICED_LAYER_POLICIES, and every entry there is scanned here at the LAYER
+  // ROOT, so a future subtree is covered without any registry edit.
+  const labelled = Object.entries(APP_LIB_LAYER_DISPOSITION)
+    .filter(([, disposition]) => disposition === "POLICED").map(([layer]) => layer).sort()
+  assert.deepEqual(labelled, Object.keys(POLICED_LAYER_POLICIES).sort(),
+    "a layer may be labelled POLICED only if a whole-root policy exists for it, and vice versa")
+
+  const declared = (await readDebtLedger()).debts.flatMap(declaredDebtKeys)
+  for (const [layer, policy] of Object.entries(POLICED_LAYER_POLICIES)) {
+    const root = `app/lib/${layer}`
+    assert.ok(await censusOf(root) > 0, `${root} is policed but holds no scanned module`)
+    const { undeclared } = reconcile((await scanModuleGraph(rootDir, [root])).filter(policy), declared)
+    assert.deepEqual(undeclared, [], `undeclared violation in policed layer ${layer}:\n${undeclared.join("\n")}`)
+  }
+})
+
+test("WU-A: every app/lib layer carries an accurate, closed-vocabulary disposition", async () => {
   const entries = await readdir(path.join(rootDir, "app/lib"), { withFileTypes: true })
   const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort()
 
@@ -1317,21 +1434,47 @@ test("WU-A: every app/lib layer is either policed or explicitly deferred to a na
   assert.deepEqual(directories, Object.keys(APP_LIB_LAYER_DISPOSITION).sort(),
     "every app/lib layer must carry a disposition, and every disposition must name a live layer")
 
-  // A deferral must name a real owner from the program's WorkUnit table, or record that the layer
-  // holds no code at all — "DEFERRED" with nothing after it would be an omission wearing a label.
   for (const [layer, disposition] of Object.entries(APP_LIB_LAYER_DISPOSITION)) {
-    if (disposition === "POLICED") continue
-    const [prefix, owner] = disposition.split(":")
-    assert.equal(prefix, "DEFERRED", `${layer}: disposition must be POLICED or DEFERRED:<owner>`)
-    assert.ok(OWNER_WORKUNITS.includes(owner) || owner === "NO-CODE", `${layer}: unknown deferral owner ${owner}`)
-    if (owner === "NO-CODE") {
-      assert.equal(await censusOf(`app/lib/${layer}`), 0,
-        `${layer} is deferred as holding no code, but it now contains modules and needs a real owner`)
+    if (disposition === "POLICED") continue // proven by the derived-claim test above
+    const census = await censusOf(`app/lib/${layer}`)
+
+    if (disposition === "NO-CODE") {
+      assert.equal(census, 0,
+        `${layer} is recorded as holding no code, but it now contains modules and needs a real disposition`)
+      continue
+    }
+
+    const [form, owner] = disposition.split(":")
+    assert.ok(["PARTIALLY_POLICED", "DEFERRED"].includes(form),
+      `${layer}: disposition must be POLICED, PARTIALLY_POLICED:<owner>, DEFERRED:<owner>, DEFERRED:UNOWNED or NO-CODE`)
+    // An owner is either a WorkUnit the program's table names, or the explicit admission that no
+    // WorkUnit owns this yet. UNOWNED is a real classification, not a missing value: it is what
+    // stops the registry borrowing the closest-sounding WorkUnit and stating it as authority.
+    assert.ok(OWNER_WORKUNITS.includes(owner) || owner === "UNOWNED",
+      `${layer}: unknown owner ${owner}; use a WorkUnit from the program table or UNOWNED`)
+    assert.ok(census > 0, `${layer} is ${disposition} but holds no code; the disposition is stale`)
+
+    if (form === "PARTIALLY_POLICED") {
+      // "Part of this layer is scanned" has to name the part, and the part has to exist and
+      // actually be scanned — otherwise it is a softer way of saying nothing at all.
+      const subtrees = PARTIALLY_POLICED_SUBTREES[layer]
+      assert.ok(subtrees?.length, `${layer} is PARTIALLY_POLICED but names no policed subtree`)
+      for (const subtree of subtrees) {
+        assert.ok(await censusOf(subtree) > 0, `${layer}: policed subtree ${subtree} holds no code`)
+        const live = (await scanModuleGraph(rootDir, [subtree])).filter(violatesExternalClientTarget)
+        assert.deepEqual(edgeLines(live), [], `${layer}: policed subtree ${subtree} has a live violation`)
+      }
     } else {
-      assert.ok(await censusOf(`app/lib/${layer}`) > 0,
-        `${layer} is deferred to ${owner} but holds no code; the deferral is stale`)
+      assert.equal(PARTIALLY_POLICED_SUBTREES[layer], undefined,
+        `${layer} is ${disposition} but names policed subtrees; use PARTIALLY_POLICED`)
     }
   }
+
+  // The one owner claim the program contradicts if it is inferred: the authority states the tenant
+  // relocation is unowned, so this layer may never carry a WorkUnit owner while that stands.
+  assert.equal(APP_LIB_LAYER_DISPOSITION.tenant, "DEFERRED:UNOWNED",
+    "the program records the tenant relocation as open, unowned and deferred")
+  assertDocDeclares(await readProgramDoc(), ["remains open, unowned and deferred"], "tenant ownership")
 })
 
 test("WU-A: every new layer policy rejects a positive control and accepts its intended dependency", () => {
@@ -1360,6 +1503,9 @@ test("WU-A: every new layer policy rejects a positive control and accepts its in
     ["control-persistence", violatesControlPersistenceTarget,
       value("app/lib/infrastructure/persistence/control/x.ts", "app/lib/security/session.ts"),
       value("app/lib/infrastructure/persistence/control/x.ts", "app/lib/persistence/types.ts")],
+    ["infrastructure", violatesInfrastructureTarget,
+      value("app/lib/infrastructure/messaging/client.ts", "app/lib/application/auth/sessionResolver.ts"),
+      value("app/lib/infrastructure/messaging/client.ts", "app/lib/ports/toolSignal/types.ts")],
     ["lib-root", violatesLibRootTarget,
       value("app/lib/x.ts", "app/lib/infrastructure/external/github/fakeGitHubClient.ts"),
       value("app/lib/x.ts", "app/lib/domain/types.ts")],
@@ -1411,6 +1557,55 @@ test("WU-A: the application value allowlist is closed, not a denylist", () => {
   assert.equal(violatesApplicationTypeTarget(syntheticEdge("app/lib/application/x.ts", target)), false)
 })
 
+test("WU-A: an erased application type edge may name a persistence contract, never an implementation", () => {
+  // The reviewed head forbade only persistence/d1/, so `import type` from a concrete repository
+  // body — inMemoryRepositories and its three siblings — entered the application layer with the
+  // whole suite green. Erasure is not the question: naming one of those types is naming a storage
+  // decision, which is exactly the ownership the composition root has to be able to move.
+  const typeEdge = (target: string): ModuleEdge => syntheticEdge("app/lib/application/x.ts", target)
+
+  for (const implementation of [
+    "app/lib/persistence/inMemoryRepositories.ts",
+    "app/lib/persistence/relationshipEnforcedRepositories.ts",
+    "app/lib/persistence/approvalStoreAdapter.ts",
+    "app/lib/persistence/sharedInMemoryStores.ts",
+    "app/lib/persistence/d1/workUnitRepository.ts",
+    "app/lib/persistence/d1/types.ts",
+  ]) {
+    assert.equal(violatesApplicationTypeTarget(typeEdge(implementation)), true,
+      `${implementation} is an implementation and must not be named type-only by the application layer`)
+  }
+
+  // The neutral contracts stay reachable, and so does the module that DECLARES the repository
+  // contracts the layer consumes. Forbidding those would push the next implementer away from
+  // injection rather than toward it: the distinction is responsibility, not directory or filename.
+  for (const contract of [
+    "app/lib/persistence/repositories.ts",
+    "app/lib/persistence/types.ts",
+    "app/lib/persistence/repositoryResolver.ts",
+  ]) {
+    assert.equal(violatesApplicationTypeTarget(typeEdge(contract)), false,
+      `${contract} is a contract surface and must stay consumable type-only`)
+  }
+
+  // One classification, two halves: contract purity keeps seeing every non-contract module, so the
+  // two policies cannot drift into disagreeing about what an implementation is.
+  assert.deepEqual(PERSISTENCE_NON_CONTRACT_FRAGMENTS,
+    [...PERSISTENCE_IMPLEMENTATION_FRAGMENTS, ...PERSISTENCE_COMPOSITION_FRAGMENTS])
+  for (const implementation of PERSISTENCE_IMPLEMENTATION_FRAGMENTS) {
+    assert.equal(
+      violatesPersistenceContractTarget({
+        file: "app/lib/persistence/repositories.ts", kind: "import-type",
+        specifier: "./x", resolvedTarget: `${implementation.replace(/^\//, "")}probe.ts`,
+      }),
+      true, `${implementation} must stay forbidden to a repository contract`)
+  }
+
+  // Legitimate downward type dependencies are untouched by the tightening.
+  assert.equal(violatesApplicationTypeTarget(typeEdge("app/lib/domain/types.ts")), false)
+  assert.equal(violatesApplicationTypeTarget(typeEdge("app/lib/ports/toolSignal/types.ts")), false)
+})
+
 test("WU-A: the recorded ledger reconciles against every WU-A policy at once", async () => {
   // Per-layer tests reconcile their own slice; this one reconciles the UNION against the WHOLE
   // declared set. Without it, a record could be moved between layers — or an edge could migrate
@@ -1422,7 +1617,12 @@ test("WU-A: the recorded ledger reconciles against every WU-A policy at once", a
     ...(await scanModuleGraph(rootDir, ["app/lib/runtime"])).filter(violatesRuntimeTarget),
     ...(await scanModuleGraph(rootDir, ["app/lib/persistence"]))
       .filter((edge) => violatesPersistenceTarget(edge) || violatesPersistenceContractTarget(edge)),
-    ...(await scanModuleGraph(rootDir, ["app/lib/infrastructure/persistence"])).filter(violatesControlPersistenceTarget),
+    // Whole-layer first, then the stricter control-DB policy on its own subtree only — that
+    // policy forbids infrastructure/external, so running it layer-wide would misread every
+    // adapter-internal edge. Edges the layer policy already caught are not counted twice.
+    ...(await scanModuleGraph(rootDir, ["app/lib/infrastructure"])).filter(violatesInfrastructureTarget),
+    ...(await scanModuleGraph(rootDir, ["app/lib/infrastructure/persistence"]))
+      .filter((edge) => violatesControlPersistenceTarget(edge) && !violatesInfrastructureTarget(edge)),
     ...(await scanModuleGraph(rootDir, ["app/lib"]))
       .filter((edge) => isLibRootModule(edge.file)).filter(violatesLibRootTarget),
   ]
