@@ -421,9 +421,14 @@ test("T12: the signal contract and its mappers have no persistence or route coup
     .map((edge) => `${edge.file} -> ${edge.specifier}`)
   assert.deepEqual(coupled, [], `signal contract must stay free of persistence, route and UI coupling:\n${coupled.join("\n")}`)
 
-  // The closed debt stays closed: an empty ledger, in both directions.
+  // The closed debt stays closed. Scoped to THIS id rather than to an empty ledger: WU-A recorded
+  // unrelated violations under a PM-ratified registry expansion, and an emptiness check would have
+  // turned this closure claim into a statement about the ledger's size, which it never was. What
+  // must stay true is that the signal-contract inversion is not re-declared — re-declaring it is
+  // the only way the WU-02 closure could be quietly undone.
   const ledger = JSON.parse(await readSource(DEBT_LEDGER)) as { debts: Array<{ id: string }> }
-  assert.deepEqual(ledger.debts, [], "the declared-debt ledger must remain empty")
+  assert.deepEqual(ledger.debts.filter((debt) => debt.id === "infrastructure_application_signal_contract"), [],
+    "the signal-contract debt must stay closed and must never be re-declared")
 })
 
 // The provider vocabulary and the route's accepted sources are two halves of one contract: a
