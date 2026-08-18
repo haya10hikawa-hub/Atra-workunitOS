@@ -113,19 +113,34 @@ Candidate providers: Notion, Google Drive, Confluence.
 
 ### L4 — Decision Evidence
 
-What was actually decided in synchronous communication, where the decision leaves no written trace
-anywhere else.
+What was decided, what was rejected, and who now owns the resulting commitment.
+
+This layer answers: what decision was taken; what alternative was rejected; why it was chosen; who
+owns the commitment that follows; what was left unresolved.
 
 Contributes: decision; rejected alternative; rationale; named assignee; commitment; question left
 unresolved.
 
 Cannot alone establish: that the decision was carried out; that it is still in force; work identity.
 
-Candidate providers: Google Meet, Zoom, Teams transcripts.
+**Decision Evidence is a kind of truth, not a communication channel.** A source contributes to this
+layer because the evidence *records* a decision, never because of how the evidence was captured. A
+meeting transcript, a Slack message (`Decision: ship option B.`), a Gmail reply (`Approved. Proceed
+with vendor X.`), a GitHub comment (`We are choosing schema v2.`) and a recorded architecture decision
+in Notion can each carry decision evidence. Asynchronous and written decisions are representable here;
+a layer that excluded them would make most real decisions unrepresentable.
+
+Candidate sources: any recorded evidence in which a decision is explicit. Meeting transcripts —
+Google Meet, Zoom, Teams — are the only sources whose *primary* role is this layer; the others
+contribute to it while belonging to their own layer. Naming a source here grants it no canonical
+eligibility; the Provider Status Matrix is the only place eligibility is recorded, and it copies
+`SOURCE_RECORD_V1_SEMANTICS.md` §4.
 
 **A transcript is evidence; a decision is a derived claim.** Atra deriving a decision from a
 transcript produces a candidate for human judgment, never a formalized decision. This layer never
-gains automatic formalization authority.
+gains automatic formalization authority. A single transcript may carry discussion, rejected
+alternatives, an explicit decision and unresolved questions at once, and those contributions may land
+in different layers.
 
 ### L5 — Time Constraint
 
@@ -161,8 +176,32 @@ Contributes: proposed action; human approval; execution result; verification tha
 Cannot alone establish: work truth. An action result is evidence that Atra acted, not evidence that
 the underlying work is complete — the two are separate facts and are reconciled, never equated.
 
-Bounded by `ATRA_DOCTRINE.md` §7 and §11: Atra proposes, rules guard, humans decide. Phase-1 is
+Bounded by `docs/ATRA_DOCTRINE.md` §7 (what Atra must not do) and §11 (the product invariant): Atra proposes, rules guard, humans decide. Phase-1 is
 read-only; no provider write path exists or is authorized here.
+
+## Multi-Role Evidence
+
+```text
+SOURCE_MAY_CONTRIBUTE_TO_MULTIPLE_LAYERS
+```
+
+A layer is a semantic responsibility, not an exclusive owner of a provider, a resource or a field. One
+source may contribute evidence to several layers at once. Each contribution keeps the same provenance
+— the same provider object, the same identity, the same content scope — and is interpreted under the
+receiving layer's rules.
+
+A Slack message reading `PR #231 is blocked. We decided to use option B. Please fix it today.`
+contributes to L2 Human Signal (a stated blocker, a request, stated urgency) and to L4 Decision
+Evidence (option B selected, alternative rejected). It remains **one** source.
+
+```text
+MULTI_ROLE_IS_NOT_SOURCE_SPLITTING
+```
+
+Multi-role contribution never requires splitting a provider object into several fabricated
+independent sources. One provider object is one `SourceRecordV1` candidate under §4, whatever number
+of layers reads it, and a layer count is never a provider count: `PHASE1_VALUE_GATE_PROGRAM.md`'s
+`N3` requires two **independent providers**, which one multi-role source does not supply.
 
 ## Cross-Layer Invariants
 
@@ -171,10 +210,14 @@ I1  WORK_TRUTH_IS_NOT_HUMAN_SIGNAL
     A request to do work is not the work's existence, state or ownership.
 
 I2  HUMAN_SIGNAL_IS_NOT_DECISION_EVIDENCE
-    Asynchronous discussion is not a decision, however conclusive its wording.
+    Discussion does not by itself prove that a decision was taken, however conclusive
+    its wording. Evidence that explicitly records a decision does contribute Decision
+    Evidence, whether it was written or spoken.
 
 I3  DURABLE_CONTEXT_IS_NOT_DECISION_EVIDENCE
-    A written specification states intent; it does not record that a decision was taken.
+    A specification does not, merely by existing, record that a decision was taken.
+    A specification that explicitly records an adopted decision does contribute
+    Decision Evidence, and remains Durable Context.
 
 I4  TIME_CONSTRAINT_IS_NOT_WORK_IDENTITY
     A calendar event constrains work; it never identifies it.
@@ -184,11 +227,22 @@ I5  USER_CURRENT_STATE_IS_NOT_EXTERNAL_EVIDENCE
 
 I6  ACTION_RESULT_IS_NOT_WORK_TRUTH
     That Atra acted is not that the work is done.
+
+I7  EVIDENCE_IS_NOT_INFERRED_DECISION
+    A decision is recorded, never inferred. Atra may not conclude that a decision was
+    taken because discussion sounds conclusive; what it derives is a candidate for
+    human judgment.
 ```
 
 These invariants are consistent with, and subordinate to, the ratified P1-2 semantics `S1`–`S4` in
-`PHASE1_VALUE_GATE_PROGRAM.md`. In particular `S2` — related context is not membership — is the
-general form of `I4` and `I5`, and this document adds nothing to it.
+`PHASE1_VALUE_GATE_PROGRAM.md`, which govern wherever the two overlap. `S2` — related context is not
+membership — is the closest related authority, and `I4`'s consequence that a calendar event mentioning
+work is evidence about that work rather than a member of it is `S2` applied to L5.
+
+The invariants are not restatements of `S2` and are not claimed to be. `S2` rules on membership in a
+`CorrelationGroup`; `I4` rules on identity, and `I5` rules on whether a session-local observation may
+become external evidence at all, which `S2` does not speak to. Where an invariant reaches past `S2` it
+is a layer-specific semantic boundary recorded here, and it creates no Product Authority.
 
 ## Overlap Classification
 
@@ -200,28 +254,55 @@ answer different questions.
 | GitHub × Linear/Jira | work state, assignee | `COMPLEMENTARY` | implementation truth vs. organizational planning truth |
 | Slack × Gmail | human communication | `COMPLEMENTARY` | internal high-frequency vs. external formal commitment |
 | Notion × Google Drive | durable context | `COMPLEMENTARY` | structured knowledge vs. raw artifact |
-| Slack × meeting transcript | participants, topic | `ORTHOGONAL` | asynchronous discussion vs. synchronous decision evidence |
+| Slack × meeting transcript | human signal, decision evidence | `COMPLEMENTARY` | both may carry request, blocker and recorded decision; what differs is acquisition context — written and asynchronous vs. spoken and synchronous |
 | Calendar × work-item due date | temporal hint | `COMPLEMENTARY` | work deadline vs. the user's actual schedule collision |
 | GitHub issue × GitHub pull request | provider, repository | `COMPLEMENTARY` | request/state vs. implementation artifact — and two identity key spaces, per `SOURCE_RECORD_V1_SEMANTICS.md` §4.3 |
+
+Classification is per shared layer role, not per provider. Under
+`SOURCE_MAY_CONTRIBUTE_TO_MULTIPLE_LAYERS` a pair may overlap in more than one layer at once — Slack
+and a meeting transcript overlap in both L2 and L4 — and the classification records what the second
+source adds across the roles they share. A pair is never `ORTHOGONAL` merely because its two sources
+are acquired differently; differing acquisition context is not a differing kind of truth.
 
 No pair in this table is `REDUNDANT`. A pair that genuinely is redundant is a reason to drop one, and
 none has been shown to be.
 
 ## Provider Status Matrix
 
-**The `Canonical Eligibility` column is a copy of `SOURCE_RECORD_V1_SEMANTICS.md` §4 and originates
-nothing.** A value here that disagrees with §4 is a defect in this document.
+**The `Canonical Eligibility` column originates nothing.** Every value in it falls into exactly one of
+three cases, and which case applies is readable from the value itself:
 
-`REQUIRED_UNPROVEN_UNRECORDED` is this document's descriptive label for "§4 enumerates no gate for
-this namespace". It is **not weaker** than `REQUIRED_UNPROVEN`: the §4 obligation — a reviewed
-identity profile and a reviewed content-scope profile before any record may be produced — applies to
-it in full. Absence of a written gate is absence of a record, never absence of a requirement.
+```text
+COPIED_FROM_AUTHORITY  `content=…`, `identity=…` and `both=…` values naming a state that
+                       `SOURCE_RECORD_V1_SEMANTICS.md` §4 records for that namespace. These are
+                       copies. A value here that disagrees with §4 is a defect in this document.
+
+AUTHORITY_SILENT       `both=REQUIRED_UNPROVEN_UNRECORDED` — §4 enumerates no gate for this
+                       namespace. This is this document's own label for that absence. It is not a
+                       §4 value and must never be read as one.
+
+NOT_A_SOURCE_LAYER     `NOT_A_CANONICAL_SOURCE` — this document's own classification of a layer
+                       that is not a provider-evidence layer at all. Also not a §4 value.
+```
+
+The two local labels are restrictive, never permissive, and neither may be reached by widening a
+copied value.
+
+`REQUIRED_UNPROVEN_UNRECORDED` is **not weaker** than `REQUIRED_UNPROVEN`: the §4 obligation — a
+reviewed identity profile and a reviewed content-scope profile before any record may be produced —
+applies to it in full. Absence of a written gate is absence of a record, never absence of a
+requirement. This document may not manufacture a §4 entry to remove the absence.
+
+The `Layer` column names each namespace's **primary** layer — the kind of truth it most directly
+answers. Under `SOURCE_MAY_CONTRIBUTE_TO_MULTIPLE_LAYERS` a source may contribute to further layers,
+so the column is not an exclusive assignment. Eligibility does not vary by layer: a namespace has one
+gate state under §4 however many layers read it.
 
 Membership in the `SourceIdentityNamespace` vocabulary at `app/lib/domain/types.ts` is likewise not
 eligibility. The vocabulary is a closed set of namespace names; a name existing there means a record
 could not be misfiled under a widened namespace, not that any record may be produced.
 
-| Namespace | Layer | Product Value | Canonical Eligibility (copied from §4) | Impl. Readiness | Daily-use Value | Unique contribution | Next decision |
+| Namespace | Layer | Product Value | Canonical Eligibility (one of the three cases above) | Impl. Readiness | Daily-use Value | Unique contribution | Next decision |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `github_issue` | L1 | `HIGH` | `content=PROVEN` `identity=PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL` | `YES` — the one built path | `MEDIUM` | requested work, state, ownership | none; producing today |
 | `github_pull_request` | L1 | `HIGH` | `content=PROVEN` `identity=PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL` | `YES` — the one built path | `MEDIUM` | implementation artifact and its review state | none; producing today |
@@ -268,19 +349,41 @@ not become harder because a composition names three layers.
 For each layer: if it were absent for one week, what would materially degrade? A vague answer means
 the layer is not yet justified.
 
-| Layer | One week absent | Differentiation |
+The `One week absent` column states what this product would lose, and is a product judgment recorded
+here. The `Differentiation hypothesis` column is something weaker, and is labelled accordingly.
+
+```text
+DIFFERENTIATION_HYPOTHESIS
+```
+
+Every value in the `Differentiation hypothesis` column is an **unvalidated product hypothesis**. None
+of them is a user-research finding, a market fact, a competitive survey, a provider eligibility state
+or Product Authority. No repository evidence supports or refutes any of them at this head, and no
+decision may cite one as though it were established. They are recorded so that a later validation can
+name what it set out to test, and so that a wrong one is visibly wrong.
+
+| Layer | One week absent | Differentiation hypothesis |
 | --- | --- | --- |
 | L1 Work Truth | Atra cannot state what work exists or what state it is in | table stakes + formation advantage |
 | L2 Human Signal | new requests and blockers never reach Atra at all | table stakes + formation advantage |
 | L3 Durable Context | Atra knows the task and cannot state why it matters or when it is done | table stakes + formation advantage |
-| L4 Decision Evidence | decisions taken in meetings are invisible to every other layer | formation advantage |
+| L4 Decision Evidence | recorded decisions are invisible to every other layer | formation advantage |
 | L5 Time Constraint | Atra ranks by importance with no knowledge of the user's actual day | formation advantage |
 | L6 User Current State | Atra repeatedly proposes work the user already started | formation advantage + distinctive capability |
 | L7 Action / Done | Atra prepares work forever and never closes it | formation advantage + distinctive capability |
 
-Two layers are classified as distinctive rather than table stakes: L6 and L7. Every integration
-product reaches L1–L3. Reconstructing the user's own position, and closing the loop under human
-judgment, is what the rest of this series exists to specify.
+The hypothesis this table exists to state, and which nothing here validates:
+
+```text
+HYPOTHESIS  L1–L3 are comparatively common integration surfaces, and L6 and L7 may offer
+            stronger differentiation. Reconstructing the user's own position, and closing
+            the loop under human judgment, is where this series expects the difference to
+            be. UNVALIDATED — no competitor survey and no user research has been done.
+```
+
+This is deliberately weaker than a claim about what integration products in general do reach. A
+universal statement about products nobody here has examined would need a competitive survey to stand
+on, no such survey exists, and no evidence in this repository supports one.
 
 ## Sequencing Principle
 
