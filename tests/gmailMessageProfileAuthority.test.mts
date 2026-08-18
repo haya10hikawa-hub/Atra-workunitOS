@@ -49,6 +49,42 @@ function assertDeclares(text: string, phrases: string[], label: string): void {
   assert.deepEqual(missing, [], `${label} must stay declared:\n${missing.join("\n")}`)
 }
 
+/**
+ * One section of a document, by heading.
+ *
+ * A rule must stay stated where it governs. Matching against the whole document would let a rule be
+ * deleted from the section that carries it and still pass on an incidental mention elsewhere — which
+ * is exactly how a scope bound decays one clause at a time. `historyId` and `threadId`, for instance,
+ * appear in the identity-candidate table as REJECTED identity as well as in the field classification.
+ */
+function section(raw: string, heading: string): string {
+  const lines = raw.split("\n")
+  const start = lines.findIndex((line) => line.trim() === heading)
+  assert.ok(start >= 0, `a pinned document must keep the section ${heading}`)
+  const level = (/^#+/.exec(heading) as RegExpExecArray)[0].length
+  let end = lines.length
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const next = /^(#{1,6}) /.exec(lines[index])
+    if (next && next[1].length <= level) { end = index; break }
+  }
+  const body = lines.slice(start + 1, end).join("\n")
+  assert.ok(body.trim().length > 0, `${heading} must not be empty`)
+  return body
+}
+
+/** A fenced block inside a section — the machine-readable half of a governing statement. */
+function fencedBlock(raw: string, heading: string, index = 0): string {
+  const blocks = [...section(raw, heading).matchAll(/```text\n([\s\S]*?)```/g)].map((m) => m[1])
+  assert.ok(blocks.length > index,
+    `${heading} must keep declaring block ${index}, found ${blocks.length}`)
+  return blocks[index]
+}
+
+const GMAIL_EXCEPTION_HEADING =
+  "### 4.1 Scoped exception — Gmail Message, identity profile v1, Phase-1 only"
+const SEMANTICS_EXCEPTION_HEADING =
+  "### 4.4 Scoped exception — Gmail Message, identity profile v1, Phase-1 only"
+
 // ─── G1 — the identity half stays an exception, never a proof ───────────────
 
 // The four requirements the PM accepted as unproven, spelled as both documents spell them. They exist
@@ -125,16 +161,40 @@ test("G1: the Gmail identity half is a scoped exception with G-R2–G-R5 unprove
 
 // ─── G2 — the exact approved scope survives in full ─────────────────────────
 
-// The four bounds the exception was granted over. Each is load-bearing on its own: drop the mailbox
-// bound and the unproven half of G-R2 becomes live; drop the draft exclusion and the profile claims a
-// population Google documents as unstable; drop the representation bound and one message acquires two
-// canonical keys; drop the Phase-1 bound and an experimental acceptance becomes a production one.
-const APPROVED_SCOPE = [
-  { label: "one-mailbox bound", phrases: ["exactly ONE Gmail mailbox", "a second Gmail mailbox"] },
-  { label: "draft exclusion", phrases: ["draft-stage", "DRAFT-labelled messages"] },
-  { label: "REST-hex representation", phrases: ["Gmail REST API hex string, byte-for-byte"] },
-  { label: "Phase-1 bound", phrases: ["Phase-1 bounded experimental use only"] },
-  { label: "scalar identity", phrases: ["Message.id alone", "`Message.id` alone"] },
+// The exact approved scope, as an ordered key -> value map. Pinned as a BLOCK and in both directions:
+// a missing key fails, an extra key fails, and a changed value fails. Matching these as free phrases
+// anywhere in the document is not enough — every one of them is also discussed in surrounding prose,
+// so a bound deleted from the block that grants it would still be found somewhere and pass. That is
+// not hypothetical: the loose form of this pin let a draft-exclusion removal through.
+//
+// Each bound is load-bearing on its own. Drop MAILBOX_SCOPE and the unproven half of G-R2 goes live.
+// Drop EXCLUDED and the profile claims a population Google documents as having unstable ids. Drop
+// REPRESENTATION and one message acquires two canonical keys. Drop USE and an experimental acceptance
+// silently becomes a production one. Drop COMPOSITION and the closed composite route reopens.
+const APPROVED_SCOPE_BLOCK: ReadonlyArray<readonly [string, string]> = [
+  ["RESOURCE_CLASS", "Gmail Message"],
+  ["EXCLUDED", "draft-stage / DRAFT-labelled messages"],
+  ["MAILBOX_SCOPE", "exactly ONE Gmail mailbox"],
+  ["IDENTITY", "Message.id alone"],
+  ["REPRESENTATION", "Gmail REST API hex string, byte-for-byte"],
+  ["COMPOSITION", "none"],
+  ["USE", "Phase-1 bounded experimental use only"],
+]
+
+// The same bounds as the semantic authority states them. Both documents must carry them: a reader who
+// opens only one of the two must not get an unbounded exception.
+const SEMANTICS_SCOPE_BOUNDS = [
+  "Gmail Messages only",
+  "gmail.message.rest.message-id v1",
+  "non-draft messages in exactly ONE Gmail mailbox",
+  "Gmail REST API hex representation only",
+  "Phase-1 bounded experimental use only",
+]
+
+// The resource scope §2 declares, which is what the namespace-vs-profile width argument rests on.
+const RESOURCE_SCOPE_BOUNDS = [
+  "messages not carrying the DRAFT label, in exactly ONE Gmail mailbox",
+  "draft-stage messages",
 ]
 
 // The seven triggers that reopen the exception. A trigger that disappears is how an exception outlives
@@ -154,15 +214,34 @@ test("G2: the exact approved Gmail scope and its revisit triggers stay stated", 
   const profile = await read(PROFILE_DOC)
   const semantics = await read(SEMANTICS_DOC)
 
-  for (const { label, phrases } of APPROVED_SCOPE) {
-    for (const doc of [
-      { name: PROFILE_DOC, text: profile }, { name: SEMANTICS_DOC, text: semantics },
-    ]) {
-      const present = phrases.filter((phrase) => flatten(doc.text).includes(flatten(phrase)))
-      assert.ok(present.length > 0,
-        `${doc.name} must keep the ${label}; none of ${phrases.join(" | ")} is stated`)
-    }
+  // Block 0 of §4.1 is the decision token; block 1 is the scope the token was granted over.
+  const granted = fencedBlock(profile, GMAIL_EXCEPTION_HEADING, 1)
+  const entries = granted.split("\n").map((line) => line.trim()).filter((line) => line.length > 0)
+    .map((line) => {
+      const match = /^([A-Z_]+)\s{2,}(.+)$/.exec(line)
+      assert.ok(match, `the approved-scope block must stay a KEY  value map, got: ${line}`)
+      return [(match as RegExpExecArray)[1], (match as RegExpExecArray)[2].trim()] as const
+    })
+  assert.deepEqual(entries.map(([key]) => key), APPROVED_SCOPE_BLOCK.map(([key]) => key),
+    "the approved-scope key set is exactly what the PM granted; a bound may not be added or dropped")
+  for (const [key, value] of APPROVED_SCOPE_BLOCK) {
+    const declared = entries.find(([entryKey]) => entryKey === key)
+    assert.equal((declared as readonly [string, string])[1], value,
+      `${key} is part of the exact approved scope and may not be widened`)
   }
+
+  // The same bounds in the semantic authority, read from the block that grants them there.
+  const semanticsScope = fencedBlock(semantics, SEMANTICS_EXCEPTION_HEADING)
+  assertDeclares(semanticsScope, SEMANTICS_SCOPE_BOUNDS, `${SEMANTICS_DOC} §4.4 scope block`)
+  assert.ok(new RegExp(`state\\s+${SCOPED_EXCEPTION_STATE}`).test(semanticsScope),
+    `${SEMANTICS_DOC} §4.4 must keep the scoped-exception state in the granting block`)
+
+  // And the resource scope §2 declares, which the namespace-vs-profile width argument rests on.
+  assertDeclares(fencedBlock(profile, "## 2. Resource scope"), RESOURCE_SCOPE_BOUNDS,
+    `${PROFILE_DOC} §2 resource scope block`)
+  assertDeclares(profile, [
+    "The draft exclusion is a scope narrowing, not a repair, and it may not be dropped",
+  ], `${PROFILE_DOC} draft-exclusion framing`)
 
   assertDeclares(profile, REVISIT_TRIGGERS, `${PROFILE_DOC} revisit triggers`)
   assertDeclares(semantics, REVISIT_TRIGGERS, `${SEMANTICS_DOC} §4.4 revisit triggers`)
@@ -194,28 +273,6 @@ const OUT_OF_SCOPE_FIELDS = [
   "`labelIds`", "`threadId`", "`historyId`", "`snippet`", "`sizeEstimate`", "`internalDate`",
   "`payload`", "`classificationLabelValues`",
 ]
-
-/**
- * One section of a document, by heading.
- *
- * The field classification must be read from the table that governs it. `historyId` and `threadId`
- * also appear in the identity-candidate table, where they are REJECTED as identity — a match there
- * would let the content classification be deleted and still pass on the wrong row.
- */
-function section(raw: string, heading: string): string {
-  const lines = raw.split("\n")
-  const start = lines.findIndex((line) => line.trim() === heading)
-  assert.ok(start >= 0, `${PROFILE_DOC} must keep the section ${heading}`)
-  const level = (/^#+/.exec(heading) as RegExpExecArray)[0].length
-  let end = lines.length
-  for (let index = start + 1; index < lines.length; index += 1) {
-    const next = /^(#{1,6}) /.exec(lines[index])
-    if (next && next[1].length <= level) { end = index; break }
-  }
-  const body = lines.slice(start + 1, end).join("\n")
-  assert.ok(body.trim().length > 0, `${heading} must not be empty`)
-  return body
-}
 
 test("G3: the Gmail content digest is over decoded RFC 2822 octets and nothing else", async () => {
   const profile = await read(PROFILE_DOC)
