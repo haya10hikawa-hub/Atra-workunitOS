@@ -45,9 +45,14 @@ const RECORD_KEYS = [
  * here as `invalid_provider` rather than folded into either resource — this validator
  * cannot know which resource a key came from, and guessing is exactly the false merge
  * the split exists to prevent.
+ *
+ * `gmail` is absent for the same reason and by the same rule: Gmail's one reviewed resource
+ * is `gmail_message`, so the provider-level placeholder was resolved and removed rather than
+ * left reachable beside it. Producer-unreachability of a resolved placeholder is guaranteed
+ * by non-existence here, not by convention elsewhere.
  */
 const ACCEPTED_PROVIDERS: Record<SourceIdentityNamespace, true> = {
-  slack: true, notion: true, gmail: true, google_drive: true,
+  slack: true, notion: true, gmail_message: true, google_drive: true,
   google_calendar: true, github_issue: true, github_pull_request: true,
   manual: true, meeting_transcript: true,
 }

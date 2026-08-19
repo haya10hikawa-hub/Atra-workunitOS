@@ -30,6 +30,16 @@ const SEMANTICS_DOC = "docs/architecture/SOURCE_RECORD_V1_SEMANTICS.md"
 const PRODUCT_AUTHORITY_DOC = "docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md"
 const DOCTRINE_DOC = "docs/ATRA_DOCTRINE.md"
 
+// Two code authorities the matrix answers to. Neither is a gate: the first is the closed canonical
+// namespace vocabulary, the second is the set of namespaces a producer can actually emit. Both are
+// parsed, never restated, for the same reason §4 is parsed.
+const NAMESPACE_VOCABULARY_MODULE = "app/lib/domain/types.ts"
+const SOURCE_RECORD_PRODUCTION_MODULE = "app/lib/application/source/sourceRecordProduction.ts"
+
+// Spelled counts, so a count derived from the authority can be looked for in prose. This is a
+// spelling table and carries no state token.
+const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight"]
+
 // The four questions a provider status must never collapse into one.
 const AXES = [
   "AXIS_PRODUCT_VALUE",
@@ -73,6 +83,8 @@ const MATRIX_ROW_TO_SECTION4_SUBJECT: ReadonlyMap<string, string> = new Map([
   ["`github_issue`", "GitHub issue"],
   ["`github_pull_request`", "GitHub pull request"],
   ["GitHub, other resources", "GitHub other resources"],
+  ["`gmail_message`", "Gmail message"],
+  ["Gmail, other resources", "Gmail other resources"],
   ["`slack`", "Slack"],
   ["`google_calendar`", "Google Calendar"],
 ])
@@ -177,7 +189,16 @@ function renderEligibility(gate: ProviderGate): string {
 interface MatrixRow {
   readonly namespace: string
   readonly eligibility: string
+  readonly readiness: string
   readonly line: string
+}
+
+// A row names a canonical namespace when it is written as one — a bare code span. The aggregate rows
+// ("GitHub, other resources") and the two non-source layers are deliberately not written that way,
+// because they are not namespaces and must not be checked as if they were.
+function canonicalNamespace(row: MatrixRow): string | null {
+  const match = /^`([A-Za-z0-9_]+)`$/.exec(row.namespace)
+  return match === null ? null : match[1]
 }
 
 function parseProviderMatrix(doc: string): MatrixRow[] {
@@ -191,7 +212,7 @@ function parseProviderMatrix(doc: string): MatrixRow[] {
     .map((line) => {
       const cells = line.split("|").map((cell) => cell.trim())
       // cells[0] is the empty span before the leading pipe.
-      return { namespace: cells[1], eligibility: cells[4], line }
+      return { namespace: cells[1], eligibility: cells[4], readiness: cells[5], line }
     })
   assert.ok(rows.length > 0, "the provider status matrix must have rows")
   return rows
@@ -386,6 +407,128 @@ test("source universe: eligibility is copied from the semantics document, never 
     "Absence of a written gate is absence of a record, never absence of a requirement",
     "may not manufacture a §4 entry",
   ], "the unrecorded-gate label")
+})
+
+// --- the code authorities, parsed ------------------------------------------------------------
+
+function parseNamespaceVocabulary(source: string): Set<string> {
+  const start = source.indexOf("export type SourceIdentityNamespace =")
+  assert.ok(start !== -1,
+    `${NAMESPACE_VOCABULARY_MODULE} must export the SourceIdentityNamespace union`)
+  const rest = source.slice(start)
+  const end = rest.indexOf("\n\n")
+  const block = rest.slice(0, end === -1 ? rest.length : end)
+  const members = [...block.matchAll(/\|\s*"([^"]+)"/g)].map((match) => match[1])
+  assert.ok(members.length > 0, "the canonical namespace union must have members")
+  return new Set(members)
+}
+
+function parseProducibleNamespaces(source: string): Set<string> {
+  const start = source.indexOf("const AUTHORIZED_PROVIDER_PROFILES")
+  assert.ok(start !== -1,
+    `${SOURCE_RECORD_PRODUCTION_MODULE} must declare AUTHORIZED_PROVIDER_PROFILES`)
+  const end = source.indexOf("\n])", start)
+  assert.ok(end !== -1, "AUTHORIZED_PROVIDER_PROFILES must be a closed literal")
+  const namespaces = [...source.slice(start, end).matchAll(/identityNamespace:\s*"([^"]+)"/g)]
+    .map((match) => match[1])
+  assert.ok(namespaces.length > 0, "at least one namespace must have an authorized producer entry")
+  return new Set(namespaces)
+}
+
+// §4 records each scoped identity exception as its own numbered subsection. Counting the subsections
+// counts the ratified decisions, and does it without restating any gate state here.
+function parseScopedExceptionSections(semantics: string): string[] {
+  const sections = [...semantics.matchAll(/^### (4\.\d+) Scoped exception\b/gm)].map((m) => m[1])
+  assert.ok(sections.length > 0,
+    `${SEMANTICS_DOC} §4 must record each scoped exception as its own numbered subsection`)
+  return sections
+}
+
+test("source universe: matrix namespaces stay inside the canonical vocabulary", async () => {
+  const doc = await read(UNIVERSE_DOC)
+  const vocabulary = parseNamespaceVocabulary(await read(NAMESPACE_VOCABULARY_MODULE))
+  const rows = parseProviderMatrix(doc)
+
+  // A provider-level row for a provider whose vocabulary member was resolved into resource-scoped
+  // members is the same defect §4.3 rejected in code, surviving in a table: `github` and `gmail` are
+  // not members, and a matrix row is exactly where an unreachable name looks like a live one again.
+  const named = rows
+    .map((row) => ({ row, name: canonicalNamespace(row) }))
+    .filter((entry): entry is { row: MatrixRow; name: string } => entry.name !== null)
+  assert.ok(named.length > 0, "the matrix must carry code-spanned canonical namespaces")
+  const offVocabulary = named
+    .filter((entry) => !vocabulary.has(entry.name))
+    .map((entry) => entry.row.namespace)
+  assert.deepEqual(offVocabulary, [],
+    `these matrix rows name something the ${NAMESPACE_VOCABULARY_MODULE} vocabulary does not carry, so no producer could ever reach them:\n${offVocabulary.join("\n")}`)
+
+  // And the document has to keep saying that membership is not eligibility, so the check above is
+  // never read the other way round.
+  assertDeclares(doc, [
+    "Membership in the `SourceIdentityNamespace` vocabulary at `app/lib/domain/types.ts` is likewise not",
+    "eligibility",
+  ], "vocabulary membership is not eligibility")
+})
+
+test("source universe: implementation readiness YES requires a producer path that exists", async () => {
+  const doc = await read(UNIVERSE_DOC)
+  const producible = parseProducibleNamespaces(await read(SOURCE_RECORD_PRODUCTION_MODULE))
+  const rows = parseProviderMatrix(doc)
+
+  // The axis that is a permission is the one worth pinning to something built. A reviewed profile
+  // pair says what an acquisition would have to satisfy; it produces no module, and a row that reads
+  // `YES` on the strength of a profile has silently turned evidence into permission.
+  const claimingReady = rows.filter((row) => row.readiness.startsWith("`YES`"))
+  assert.ok(claimingReady.length > 0,
+    "the matrix must still record which paths are built; a matrix with no `YES` makes this vacuous")
+  const unbacked = claimingReady
+    .filter((row) => {
+      const name = canonicalNamespace(row)
+      return name === null || !producible.has(name)
+    })
+    .map((row) => `${row.namespace}: ${row.readiness}`)
+  assert.deepEqual(unbacked, [],
+    `these rows claim implementation readiness with no authorized producer entry in ${SOURCE_RECORD_PRODUCTION_MODULE}:\n${unbacked.join("\n")}`)
+
+  assertDeclares(doc, [
+    "**A reviewed profile pair is not an acquisition capability.**",
+  ], "the readiness boundary")
+})
+
+test("source universe: the scoped identity exceptions stay counted and stay separate", async () => {
+  const doc = await read(UNIVERSE_DOC)
+  const flat = flatten(doc)
+  const sections = parseScopedExceptionSections(await read(SEMANTICS_DOC))
+
+  // The count is the authority's, not this test's. Each exception cost its own ratified decision, and
+  // a stale count is how a later one gets read as an extension of an earlier one.
+  const word = NUMBER_WORDS[sections.length]
+  assert.ok(word !== undefined, `no spelled form for ${sections.length} scoped exceptions`)
+  assertDeclares(doc, [`${word} **separately ratified**`], "the scoped-exception count")
+  const staleCounts = NUMBER_WORDS
+    .filter((candidate) => candidate !== word)
+    .filter((candidate) => flat.includes(`${candidate} **separately ratified**`))
+  assert.deepEqual(staleCounts, [],
+    `§4 records ${sections.length} scoped exceptions, so no other count may be stated:\n${staleCounts.join("\n")}`)
+
+  // Each one is cited by its own subsection. Folding two into a single citation is what makes a
+  // second decision look like the first one applied again.
+  const uncited = sections.filter((section) => !flat.includes(`§${section}`))
+  assert.deepEqual(uncited, [],
+    `each scoped exception must be cited by its own §4 subsection:\n${uncited.join("\n")}`)
+
+  // The matrix has to show exactly that many split eligibility pairs. A scoped exception renders as
+  // `content=…` `identity=…` under the document's own convention, so a row losing its identity half
+  // or gaining one it was not ratified for changes this count.
+  const split = parseProviderMatrix(doc).filter((row) => row.eligibility.includes("`identity="))
+  assert.equal(split.length, sections.length,
+    `§4 records ${sections.length} scoped exceptions, the matrix shows ${split.length} split eligibility pairs`)
+
+  // And the rule that keeps them from merging into one precedent.
+  assertDeclares(doc, [
+    "none of them is a template a fourth resource or provider may fill in",
+    "rejection and acceptance reasons are never merged",
+  ], "the no-shared-precedent rule")
 })
 
 test("source universe: product hypotheses stay labelled as hypotheses", async () => {
