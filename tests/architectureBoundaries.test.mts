@@ -1091,18 +1091,19 @@ function violatesApplicationValueTarget(edge: ModuleEdge): boolean {
 // of the two edge classes is kept distinct instead of collapsed.
 //
 // What stays forbidden even when erased is a type dependency on an implementation-owning surface:
-// a provider client's type, a D1 repository class, a route, a component. app/lib/persistence/d1/
-// is included on purpose. That directory is MIXED — it holds the D1DatabaseLike driver contract
-// next to eight concrete repositories — and no path rule can separate them, so the one live edge
-// into it is recorded as debt rather than excused by a path exception.
+// a provider client's type, a D1 repository class, a route, a component. Inside app/lib/persistence
+// no path rule can answer that — the directory is mixed and no prefix separates the D1DatabaseLike
+// driver contract from the eight concrete repositories beside it — so the responsibility
+// classification below answers it in CLOSED form: a persistence target is admissible only if its
+// declared class says so, which rejects an unclassified module nobody ever wrote down.
 function violatesApplicationTypeTarget(edge: ModuleEdge): boolean {
   if (edgeKindClass(edge.kind) !== "type-only") return false
+  if (persistenceModuleOf(edge.resolvedTarget) !== undefined) {
+    return persistenceResponsibilityOf(edge.resolvedTarget)?.applicationMayNameTypes !== true
+  }
   return isBareModule(edge.specifier, "react")
     || isBareModule(edge.specifier, "next")
-    || hasForbiddenResolvedPath(edge.resolvedTarget, [
-      "/app/api/", "/app/components/", "/app/lib/infrastructure/",
-      ...PERSISTENCE_IMPLEMENTATION_FRAGMENTS,
-    ])
+    || hasForbiddenResolvedPath(edge.resolvedTarget, ["/app/api/", "/app/components/", "/app/lib/infrastructure/"])
 }
 
 // Security is an interface-adapter layer: consuming domain vocabulary, repository contracts and
@@ -1142,41 +1143,98 @@ function violatesPersistenceTarget(edge: ModuleEdge): boolean {
     ])
 }
 
-// app/lib/persistence is one directory holding three different things, and this policy does not
-// pretend otherwise: the repository CONTRACTS, the concrete IMPLEMENTATIONS, and the
-// SELECTOR/composition behaviour that chooses between them. The single direction that must never
-// close is contract → implementation or contract → selector. An interface that knows its
-// implementors, or the resolver that picks one, is no longer usable as the inversion point WU-06
-// needs, and the mixed directory would then be load-bearing rather than merely untidy.
-const PERSISTENCE_CONTRACT_MODULES = ["app/lib/persistence/repositories.ts", "app/lib/persistence/types.ts"]
-// The non-contract half is split by RESPONSIBILITY, because two policies need two different parts
-// of it and a second hand-maintained list is how the two would drift apart.
-//
-// IMPLEMENTATION: a repository body. Naming one of these types is naming a storage decision.
-const PERSISTENCE_IMPLEMENTATION_FRAGMENTS = [
-  "/app/lib/persistence/d1/", "/app/lib/persistence/inMemoryRepositories.ts",
-  "/app/lib/persistence/relationshipEnforcedRepositories.ts", "/app/lib/persistence/approvalStoreAdapter.ts",
-  "/app/lib/persistence/sharedInMemoryStores.ts",
-]
-// COMPOSITION: selection, binding and configuration. Not implementations — and repositoryResolver.ts
-// in particular DECLARES the repository contracts the application layer legitimately consumes
-// (TenantRepositoryBundle and the read-repository family are its own exports). A contract module
-// still may not depend on any of these, because an interface that knows its selector is what makes
-// the mixed directory load-bearing; the application layer naming those types is a different thing.
-const PERSISTENCE_COMPOSITION_FRAGMENTS = [
-  "/app/lib/persistence/repositoryResolver.ts", "/app/lib/persistence/routeRepositories.ts",
-  "/app/lib/persistence/tenantDbResolver.ts", "/app/lib/persistence/persistenceConfig.ts",
-  "/app/lib/persistence/cloudflareBindings.ts", "/app/lib/runtime/",
-]
-// One classification, two named halves. Contract purity keeps consuming the whole of it, so the
-// two policies below can never disagree about what a non-contract module is.
-const PERSISTENCE_NON_CONTRACT_FRAGMENTS = [
-  ...PERSISTENCE_IMPLEMENTATION_FRAGMENTS, ...PERSISTENCE_COMPOSITION_FRAGMENTS,
-]
+// app/lib/persistence is one directory holding several different things, and this policy does not
+// pretend otherwise. What it no longer does is enumerate them by hand: the table below is
+// reconciled against a recursive filesystem CENSUS by exact set equality, so a module nobody
+// classified — a new root file, a new nested subtree, an `.mts` sibling — is UNCLASSIFIED, and both
+// policies that read the table reject an unclassified target by construction. A new concrete
+// repository fails because nobody said what it is, not because somebody listed its filename.
+const PERSISTENCE_ROOT = "app/lib/persistence"
 
+// ONE classification, five responsibilities, two consumers. `applicationMayNameTypes` is read by
+// the application type-only policy and `contractMayDepend` by persistence contract purity; both
+// read THIS table and nothing else, so the two can never drift into disagreeing about what a
+// module is. Paths are relative to PERSISTENCE_ROOT, in the same shape the census produces.
+type PersistenceResponsibility = {
+  modules: string[]
+  applicationMayNameTypes: boolean
+  contractMayDepend: boolean
+}
+const PERSISTENCE_RESPONSIBILITIES: Record<string, PersistenceResponsibility> = {
+  // CONTRACT: the repository interfaces and the storage-neutral row vocabulary. Inward-facing by
+  // intent — this is what makes persistence injectable into refreshInbox and projectInbox today.
+  contract: {
+    modules: ["repositories.ts", "types.ts"],
+    applicationMayNameTypes: true, contractMayDepend: true,
+  },
+  // IMPLEMENTATION: a repository body, a store adapter, or the driver/row plumbing they are written
+  // against. Naming one of these types is naming a storage decision — the ownership the composition
+  // root must be able to move. d1/ is listed file by file, so a tenth D1 module is unclassified.
+  implementation: {
+    modules: [
+      "approvalStoreAdapter.ts", "inMemoryRepositories.ts", "relationshipEnforcedRepositories.ts",
+      "sharedInMemoryStores.ts", "d1/actionPreviewRepository.ts", "d1/approvalRecordRepository.ts",
+      "d1/auditLogRepository.ts", "d1/integrationConnectionRepository.ts", "d1/rowHelpers.ts",
+      "d1/types.ts", "d1/usageRepository.ts", "d1/workUnitFeedbackRepository.ts",
+      "d1/workUnitRepository.ts", "d1/writeGuards.ts",
+    ],
+    applicationMayNameTypes: false, contractMayDepend: false,
+  },
+  // COMPOSITION: selection, binding and configuration — which implementation runs for this request.
+  composition: {
+    modules: [
+      "cloudflareBindings.ts", "persistenceConfig.ts", "routeRepositories.ts", "tenantDbResolver.ts",
+    ],
+    applicationMayNameTypes: false, contractMayDepend: false,
+  },
+  // MIXED, recorded as mixed rather than flattened into either half: repositoryResolver.ts composes
+  // the concrete bundle AND declares the contracts the application legitimately consumes
+  // (TenantRepositoryBundle and the read-repository family are its own exports). The application may
+  // name those erased types; a contract still may not depend on an interface that knows its selector.
+  compositionDeclaringContract: {
+    modules: ["repositoryResolver.ts"],
+    applicationMayNameTypes: true, contractMayDepend: false,
+  },
+  // NEUTRAL: pure row/domain translation and a committed constant. Neither declares a contract nor
+  // decides a store, so a contract may use one — repositories.ts calls getCanonicalTenantSchemaVersion().
+  // The application may not name them: what it is entitled to name is a contract, not a helper.
+  neutral: {
+    modules: ["mappers.ts", "tenantSchemaVersion.ts"],
+    applicationMayNameTypes: false, contractMayDepend: true,
+  },
+}
+const PERSISTENCE_CONTRACT_MODULES = PERSISTENCE_RESPONSIBILITIES.contract.modules
+  .map((relative) => `${PERSISTENCE_ROOT}/${relative}`)
+
+// Membership is a PATH-PREFIX question, not a substring one: app/lib/infrastructure/persistence is
+// a different layer with its own policy, and app/lib/persistenceX would be a different directory.
+function persistenceModuleOf(file: string): string | undefined {
+  const normalized = file.replace(/^\/+/, "")
+  return normalized.startsWith(`${PERSISTENCE_ROOT}/`) ? normalized.slice(PERSISTENCE_ROOT.length + 1) : undefined
+}
+
+// Undefined for an unclassified module, and every caller treats undefined as forbidden.
+function persistenceResponsibilityOf(target: string): PersistenceResponsibility | undefined {
+  const relative = persistenceModuleOf(target)
+  if (relative === undefined) return undefined
+  return Object.values(PERSISTENCE_RESPONSIBILITIES).find((entry) => entry.modules.includes(relative))
+}
+
+// A repository contract may depend on another contract and on a neutral helper. Everything else
+// inside the directory is closed to it — implementation, composition, the mixed resolver, and any
+// module that is merely unclassified — as is the runtime configuration layer outside it.
+//
+// The rule binds every module a contract is ALLOWED to reach, not only the contracts themselves,
+// because otherwise NEUTRAL is a laundering route: a helper that value-imports a D1 repository
+// hands every contract that uses it a transitive path to an implementation, and each hop looks
+// legal on its own. `contractMayDepend` names exactly that transitively-trusted closure, so the
+// neutral label is load-bearing rather than a description.
 function violatesPersistenceContractTarget(edge: ModuleEdge): boolean {
-  if (!PERSISTENCE_CONTRACT_MODULES.includes(edge.file)) return false
-  return hasForbiddenResolvedPath(edge.resolvedTarget, PERSISTENCE_NON_CONTRACT_FRAGMENTS)
+  if (persistenceResponsibilityOf(edge.file)?.contractMayDepend !== true) return false
+  if (persistenceModuleOf(edge.resolvedTarget) !== undefined) {
+    return persistenceResponsibilityOf(edge.resolvedTarget)?.contractMayDepend !== true
+  }
+  return hasForbiddenResolvedPath(edge.resolvedTarget, ["/app/lib/runtime/"])
 }
 
 // The control-DB repositories are infrastructure. They may name the persistence row and driver
@@ -1362,8 +1420,8 @@ test("WU-A: persistence reaches no application, provider client or delivery modu
 })
 
 test("WU-A: persistence contracts do not depend on implementations or on the selector", async () => {
-  // Non-vacuity is per-module here, not per-directory: the policy is keyed on two exact contract
-  // modules, so their existence is the only thing that makes the scan meaningful.
+  // Non-vacuity is per-module here, not per-directory: the policy is keyed on the exact modules a
+  // contract may reach, so their existence is the only thing that makes the scan meaningful.
   for (const contract of PERSISTENCE_CONTRACT_MODULES) {
     const stats = await stat(path.join(rootDir, contract)).catch(() => null)
     assert.ok(stats?.isFile(), `${contract} must exist, or the contract policy scans nothing`)
@@ -1371,6 +1429,31 @@ test("WU-A: persistence contracts do not depend on implementations or on the sel
   const observed = (await scanModuleGraph(rootDir, ["app/lib/persistence"])).filter(violatesPersistenceContractTarget)
   assert.deepEqual(edgeLines(observed), [],
     "a repository contract must not know its implementations or the resolver that selects one")
+})
+
+test("WU-A: every persistence module declares exactly one responsibility", async () => {
+  // The census. Membership is taken from DISK, recursively, through the same code-file predicate
+  // the module scanner uses — so a new root module, a new nested subtree and an .mts/.cts/.mjs/.cjs
+  // sibling all appear here with no registry edit; what an edit is required for is saying what the
+  // module IS. Without it the classification was enumerative and unbacked, and
+  // app/lib/persistence/postgresRepositories.ts could exist in no category with the suite green.
+  const censusRoot = path.join(rootDir, PERSISTENCE_ROOT)
+  const discovered = (await collectCodeFiles(censusRoot))
+    .map((file) => path.relative(censusRoot, file).split(path.sep).join("/")).sort()
+  assert.ok(discovered.length >= 20,
+    `the persistence census found ${discovered.length} modules; the classification would be vacuous`)
+
+  // Exactly one class each: a module claimed twice is caught by name, not merely by a length
+  // mismatch, so the failure says which module and not just that the totals disagree.
+  const classified = Object.values(PERSISTENCE_RESPONSIBILITIES).flatMap((entry) => entry.modules)
+  const duplicates = [...new Set(classified.filter((item, index) => classified.indexOf(item) !== index))]
+  assert.deepEqual(duplicates.sort(), [],
+    `a persistence module claims more than one responsibility:\n${duplicates.join("\n")}`)
+
+  // Exact set equality, both directions at once: an unclassified file on disk and a classified path
+  // that no longer exists are each a failure, and neither can be absorbed by the other.
+  assert.deepEqual([...classified].sort(), discovered,
+    "every persistence module on disk must be classified, and every classified path must exist")
 })
 
 test("WU-A: control-DB repositories do not reach application, security or delivery", async () => {
@@ -1588,17 +1671,34 @@ test("WU-A: an erased application type edge may name a persistence contract, nev
       `${contract} is a contract surface and must stay consumable type-only`)
   }
 
-  // One classification, two halves: contract purity keeps seeing every non-contract module, so the
-  // two policies cannot drift into disagreeing about what an implementation is.
-  assert.deepEqual(PERSISTENCE_NON_CONTRACT_FRAGMENTS,
-    [...PERSISTENCE_IMPLEMENTATION_FRAGMENTS, ...PERSISTENCE_COMPOSITION_FRAGMENTS])
-  for (const implementation of PERSISTENCE_IMPLEMENTATION_FRAGMENTS) {
+  // ONE classification, two consumers. Both verdicts are read off the same table for EVERY
+  // classified module, so the application policy and contract purity cannot drift into disagreeing
+  // about what a module is — the drift a second hand-maintained list would have allowed.
+  for (const [name, responsibility] of Object.entries(PERSISTENCE_RESPONSIBILITIES)) {
+    for (const relative of responsibility.modules) {
+      const target = `${PERSISTENCE_ROOT}/${relative}`
+      assert.equal(violatesApplicationTypeTarget(typeEdge(target)), !responsibility.applicationMayNameTypes,
+        `${target}: the application type verdict must follow its declared responsibility (${name})`)
+      assert.equal(
+        violatesPersistenceContractTarget(syntheticEdge("app/lib/persistence/repositories.ts", target)),
+        !responsibility.contractMayDepend,
+        `${target}: the contract-purity verdict must follow its declared responsibility (${name})`)
+    }
+  }
+
+  // The defect this closes. A persistence module nobody classified — at the root, in a new nested
+  // subtree, or under any code extension — is rejected by BOTH policies with no denylist edit and
+  // no registry edit of any kind. Previously each of these was invisible to both until someone
+  // remembered the filename, so a new concrete repository entered the application layer green.
+  for (const unclassified of [
+    "app/lib/persistence/postgresRepositories.ts", "app/lib/persistence/postgres/repository.ts",
+    "app/lib/persistence/postgres/index.ts", "app/lib/persistence/helper.mts",
+  ]) {
+    assert.equal(violatesApplicationTypeTarget(typeEdge(unclassified)), true,
+      `${unclassified} is unclassified and must not be nameable type-only by the application layer`)
     assert.equal(
-      violatesPersistenceContractTarget({
-        file: "app/lib/persistence/repositories.ts", kind: "import-type",
-        specifier: "./x", resolvedTarget: `${implementation.replace(/^\//, "")}probe.ts`,
-      }),
-      true, `${implementation} must stay forbidden to a repository contract`)
+      violatesPersistenceContractTarget(syntheticEdge("app/lib/persistence/repositories.ts", unclassified)),
+      true, `${unclassified} is unclassified and must stay forbidden to a repository contract`)
   }
 
   // Legitimate downward type dependencies are untouched by the tightening.
