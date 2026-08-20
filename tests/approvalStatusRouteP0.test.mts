@@ -7,6 +7,7 @@ import type { ApprovalRecordRow } from "../app/lib/persistence/types.ts"
 import type { TenantId } from "../app/lib/tenant/types.ts"
 import type { AppEnv } from "../app/types/cloudflare-env.ts"
 import { FakeD1Database } from "./helpers/fakeD1.ts"
+import { seedDevControlWorkspace } from "./helpers/devControlWorkspace.ts"
 
 const tenantId = "dev-tenant" as TenantId
 const testSafeFutureExpiresAt = "2999-01-01T00:00:00.000Z"
@@ -54,6 +55,8 @@ async function withPersistence(testFn: () => Promise<void>) {
     process.env.ALLOW_DEV_WORKSPACE_BOOTSTRAP = "true"
     process.env.PERSISTENCE_MODE = "d1"
     setTestRuntimeEnvForRequest({ CONTROL_DB: db, TENANT_DB_DEFAULT: db } as AppEnv)
+    // WU-06: explicit workspace seed — the GET under test no longer bootstraps.
+    await seedDevControlWorkspace(db, "owner")
     await testFn()
   } finally {
     for (const [key, value] of Object.entries(backup)) {

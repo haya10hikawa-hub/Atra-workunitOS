@@ -13,10 +13,25 @@
  * this contract legitimately names the domain's branded identifiers and role
  * vocabulary. What matters is the direction, and it is inward either way.
  *
- * The contract is deliberately narrow and request-scoped: it declares the nine
- * operations the session path performs and nothing else, and it carries no
- * database context parameter, because binding the context is the composition
- * root's job rather than the caller's.
+ * The contract is deliberately narrow and request-scoped: it carries no database
+ * context parameter, because binding the context is the composition root's job
+ * rather than the caller's.
+ *
+ * CAPABILITY SPLIT (WU-06 safe-method closure)
+ *   A single nine-operation port meant that whoever held the control directory
+ *   held CREATE authority, so a safe `GET` acquired durable write capability
+ *   merely by resolving a session. The contract is therefore two contracts:
+ *
+ *     ControlDirectoryReadPort   — the four lookups the session path performs.
+ *                                  Names no create operation at all, so a holder
+ *                                  cannot construct one.
+ *     DevWorkspaceBootstrapPort  — the dev-only workspace bootstrap capability:
+ *                                  the four creates plus the reads bootstrap
+ *                                  needs to stay idempotent, including
+ *                                  `findMembership`, which ONLY bootstrap uses.
+ *
+ *   Removal, not convention, is what makes the safe path safe: the read port has
+ *   no write member to forget not to call.
  */
 
 import type { TenantMembershipStatus, TenantRole } from "../../domain/auth/types.ts"
@@ -61,14 +76,31 @@ export type ControlAuthIdentityRecord = {
   updatedAt: string
 }
 
-export interface ControlDirectoryPort {
+/**
+ * The identity -> user -> membership -> tenant lookups the session path performs.
+ * Exactly four operations: `findMembership` is deliberately absent, because the
+ * session path reads memberships through `listMembershipsByUser` and only the
+ * dev bootstrap ever looks one up by pair.
+ */
+export interface ControlDirectoryReadPort {
   findAuthIdentity(provider: string, providerSubject: string): Promise<ControlAuthIdentityRecord | null>
-  createAuthIdentity(record: ControlAuthIdentityRecord): Promise<void>
   findUserById(userId: UserId): Promise<ControlUserRecord | null>
-  createUser(record: ControlUserRecord): Promise<void>
   listMembershipsByUser(userId: UserId): Promise<ControlMembershipRecord[]>
-  findMembership(userId: UserId, tenantId: TenantId): Promise<ControlMembershipRecord | null>
-  createMembership(record: ControlMembershipRecord): Promise<void>
   findTenantById(tenantId: TenantId): Promise<ControlTenantRecord | null>
+}
+
+/**
+ * The dev-only workspace bootstrap capability. It extends the read port because
+ * bootstrap is idempotent — it looks each row up before creating it — and adds
+ * the pairwise membership lookup only it performs.
+ *
+ * This type is the ONLY place in the session contract where a durable create is
+ * nameable. A dependency object that omits it cannot reach one.
+ */
+export interface DevWorkspaceBootstrapPort extends ControlDirectoryReadPort {
+  findMembership(userId: UserId, tenantId: TenantId): Promise<ControlMembershipRecord | null>
+  createAuthIdentity(record: ControlAuthIdentityRecord): Promise<void>
+  createUser(record: ControlUserRecord): Promise<void>
+  createMembership(record: ControlMembershipRecord): Promise<void>
   createTenant(record: ControlTenantRecord): Promise<void>
 }

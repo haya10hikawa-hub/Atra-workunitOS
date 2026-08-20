@@ -26,6 +26,7 @@ import { resolveRouteRepositories } from "../app/lib/persistence/routeRepositori
 import { setTestRuntimeEnvForRequest, resetTestRuntimeEnvForRequest } from "../app/lib/runtime/requestRuntimeEnvInjection.ts"
 import type { AppEnv } from "../app/types/cloudflare-env.ts"
 import { FakeD1Database } from "./helpers/fakeD1.ts"
+import { seedDevControlWorkspace } from "./helpers/devControlWorkspace.ts"
 
 // Branded tenant type derived from the resolver signature: this file adds no
 // compatibility-tenant import edge.
@@ -47,6 +48,11 @@ async function withRouteRuntime(run: (db: FakeD1Database) => Promise<void>): Pro
       ALLOW_DEV_WORKSPACE_BOOTSTRAP: "true", PERSISTENCE_MODE: "d1", DEV_SESSION_ROLE: "owner",
     })
     setTestRuntimeEnvForRequest({ CONTROL_DB: db, TENANT_DB_DEFAULT: db } as AppEnv)
+    // WU-06: the dev workspace is established EXPLICITLY. It used to appear as a
+    // side effect of the first GET, which is the transitive write this suite's
+    // own premise forbids — these probes counted zero tenant writes while the
+    // same request wrote four control rows.
+    await seedDevControlWorkspace(db, "owner")
     await run(db)
   } finally {
     resetTestRuntimeEnvForRequest()

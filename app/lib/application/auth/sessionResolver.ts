@@ -1,7 +1,7 @@
 import type { SessionContext, SessionResolutionFailureReason } from "../../domain/auth/types.ts"
 import type { TenantId, UserId } from "../../tenant/types.ts"
 import { normalizeRoleInput, RoleNormalizationError, type TenantRoleInput } from "../../domain/auth/roles.ts"
-import type { ControlDirectoryPort } from "./controlDirectory.ts"
+import type { ControlDirectoryReadPort, DevWorkspaceBootstrapPort } from "./controlDirectory.ts"
 import type { VerifiedAuthIdentity, AuthAdapter } from "./authAdapter.ts"
 
 export type { SessionResolutionFailureReason }
@@ -31,18 +31,26 @@ export type DevSessionPolicy = {
  * `controlDirectory` is null when the control DB is not configured for this
  * request. That is not an error the use case reports on its own — it is only
  * reachable after the control-less dev gate has already declined.
+ *
+ * `devBootstrap` is the durable dev-workspace write capability, and it is
+ * OPTIONAL because the composition root omits it entirely for safe HTTP methods.
+ * Absence is not a flag the use case is asked to honour: with the field absent
+ * there is no object here through which a create could be reached, whatever the
+ * dev policy says. `controlDirectory` is typed as the READ port for the same
+ * reason — resolving a session confers lookup authority and nothing else.
  */
 export type SessionDependencies = {
   readonly authAdapter: AuthAdapter
-  readonly controlDirectory: ControlDirectoryPort | null
+  readonly controlDirectory: ControlDirectoryReadPort | null
   readonly devPolicy: DevSessionPolicy
+  readonly devBootstrap?: DevWorkspaceBootstrapPort
 }
 
 export async function resolveSession(
   request: Request,
   dependencies: SessionDependencies,
 ): Promise<SessionResolutionResult> {
-  const { authAdapter, controlDirectory, devPolicy } = dependencies
+  const { authAdapter, controlDirectory, devPolicy, devBootstrap } = dependencies
   try {
     const authResult = await authAdapter.verify(request)
     if (!authResult.ok) return { ok: false, reason: "unauthorized" }
@@ -56,8 +64,12 @@ export async function resolveSession(
     }
 
     if (!controlDirectory) return { ok: false, reason: "unauthorized" }
-    if (shouldBootstrapDevWorkspace(identity, devPolicy)) {
-      await bootstrapDevWorkspace(controlDirectory, identity, devPolicy)
+    // The dev gates are unchanged and still all required. What changed is that
+    // they are no longer sufficient: without the capability there is nothing to
+    // bootstrap THROUGH, so a safe request falls straight to the lookups below
+    // and produces whatever result an uninitialized directory already produced.
+    if (devBootstrap && shouldBootstrapDevWorkspace(identity, devPolicy)) {
+      await bootstrapDevWorkspace(devBootstrap, identity, devPolicy)
     }
 
     const identityRow = await controlDirectory.findAuthIdentity(identity.provider, identity.providerSubject)
@@ -108,7 +120,7 @@ function shouldBootstrapDevWorkspace(identity: VerifiedAuthIdentity, devPolicy: 
 }
 
 async function bootstrapDevWorkspace(
-  control: ControlDirectoryPort,
+  control: DevWorkspaceBootstrapPort,
   identity: VerifiedAuthIdentity,
   devPolicy: DevSessionPolicy,
 ): Promise<void> {

@@ -17,6 +17,7 @@ import { setTestRuntimeEnvForRequest, resetTestRuntimeEnvForRequest } from "../a
 import { FakeD1Database } from "./helpers/fakeD1.ts"
 import type { AppEnv } from "../app/types/cloudflare-env.ts"
 import type { TenantId } from "../app/lib/tenant/types.ts"
+import { seedDevControlWorkspace } from "./helpers/devControlWorkspace.ts"
 
 const contract = JSON.parse(await readFile(new URL("./fixtures/architecture/current-pipeline-behavior.v1.json", import.meta.url), "utf8"))
 const tenantId = "tenant-ratchet" as TenantId
@@ -47,6 +48,10 @@ async function withDevRouteRuntime<T>(mockLlm: boolean, run: (db: FakeD1Database
     })
     delete process.env.DEEPSEEK_API_KEY
     setTestRuntimeEnvForRequest({ CONTROL_DB: db, TENANT_DB_DEFAULT: db } as AppEnv)
+    // WU-06: this harness deliberately keeps ALLOW_DEV_CONTROLLESS_SESSION
+    // "false", so it exercises the real control-DB session chain. Seeding is how
+    // that chain now begins — a safe request no longer creates it.
+    await seedDevControlWorkspace(db, "owner")
     return await run(db)
   } finally {
     resetTestRuntimeEnvForRequest()
