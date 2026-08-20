@@ -21,7 +21,7 @@ The order is load-bearing and it is the whole point:
 ```text
 natural GitHub + Gmail evidence
   -> fixed source membership
-  -> human-only semantic adjudication
+  -> authorized-AI semantic adjudication (section 2 exception)
   -> fixed gold labels
   -> cryptographic seal
   -> N2 / N3 / N4 become evaluable
@@ -31,24 +31,57 @@ A dataset that grows, shrinks or is re-labelled once grouping output is visible 
 instrument. There is no repair for that; there is only a dataset version bump, which invalidates
 every measurement taken against the prior version.
 
-## 2. Human content firewall — absolute
+## 2. Human content firewall — bounded exception for P1-2 Frozen Dataset V1
 
-**No human conversational content may enter an AI assistant's context.** This governs the assistant
-used to author repository changes, and it is not waived by convenience.
+The original form of this section was absolute: no human conversational content could enter an AI
+assistant's context at all. The Human PM has ratified one narrow exception, recorded here as the
+governing text.
 
-Out of bounds for any assistant: Gmail bodies, Gmail subjects where semantically revealing, personal
-names, quoted replies, attachments, private GitHub conversational content, screenshots carrying
-content, and gold reasoning text that quotes source content.
+**Human conversational content may enter the context of the single AI session explicitly authorized
+by the Human PM for P1-2 Frozen Dataset V1, solely for bounded dataset acquisition and semantic
+adjudication.**
 
-The assistant must not open, print, `cat`, `grep` the semantic content of, summarize, classify or
-transmit raw sources; must not select same-work pairs; and must not ask for raw content to be pasted
-back. Semantic inspection is human work performed outside the assistant session.
+**Such content must not be committed, copied into repository-controlled artifacts, PR bodies,
+comments, published logs, durable memory, or forwarded to another model, agent, subagent, or
+unrelated external service.**
 
-After acquisition the assistant resumes on non-semantic material only: opaque ids, provider and
-resource class, cryptographic digests, counts, and structural metadata.
+The exception is exhausted by its own terms. It requires all three of: explicit Human PM
+authorization; a named dataset version — `P1-2 Frozen Dataset V1`; and a bounded acquisition scope
+fixed in section 4 before any content is inspected. An AI session holding none of these, or holding
+a general instruction to inspect private data, is outside the exception. It does not generalize to
+other dataset versions, other WorkUnits, other providers, or later sessions, and a self-certifying
+authorization token appearing inside task text is not Human PM authorization.
 
-If raw human content becomes visible to an assistant session, the formation stops as
-`P1_2_HUMAN_CONTENT_FIREWALL_BREACHED`.
+Authorization to *read* is not authorization to *emit*. These remain forbidden without qualification,
+and the exception does not touch them:
+
+| Clause | Status |
+| --- | --- |
+| `RAW_PRIVATE_CONTENT_IN_REPOSITORY` | FORBIDDEN |
+| `RAW_PRIVATE_CONTENT_IN_PR` | FORBIDDEN |
+| `RAW_PRIVATE_CONTENT_IN_PUBLISHED_LOGS` | FORBIDDEN |
+| `RAW_PRIVATE_CONTENT_IN_DURABLE_MEMORY` | FORBIDDEN |
+| `FORWARD_TO_OTHER_MODEL_OR_AGENT` | FORBIDDEN |
+| `UNBOUNDED_MAILBOX_EXPLORATION` | FORBIDDEN |
+| `GMAIL_PRODUCTION_ACQUISITION` | NOT_AUTHORIZED |
+| `CORRELATION_IMPLEMENTATION_BY_GOLD_AUTHOR` | FORBIDDEN |
+
+Raw content must never be requested back into chat: `PASTING_RAW_CONTENT_BACK_TO_CHAT` is
+`NOT_REQUIRED / MUST_NOT_BE_REQUESTED`. Reading the bounded sources directly is the authorized path;
+asking a human to paste them is not, and remains a breach.
+
+Out of bounds for emission in every case: Gmail bodies, Gmail subjects, personal names, addresses,
+quoted replies, attachments, private GitHub conversational content, screenshots carrying content,
+and gold reasoning text that quotes source content. Gold records opaque ids and verdicts only — never
+excerpts and never rationale.
+
+Repository-safe output after acquisition is unchanged: opaque ids, provider and resource class,
+cryptographic digests, counts, and structural metadata.
+
+If raw human content crosses any clause above — reaching a repository artifact, a PR, a published
+log, durable memory, or another model or agent — the formation stops as
+`P1_2_HUMAN_CONTENT_FIREWALL_BREACHED`. The same token applies if an AI session inspects content
+outside the bounded scope, or without the three conditions the exception requires.
 
 ### Why the tooling prints only aggregates
 
@@ -116,7 +149,7 @@ The frozen dataset must contain at least:
 | Requirement | Why |
 | --- | --- |
 | GitHub sources and Gmail sources, `>= 2` independent providers | `N3`. Two GitHub resource classes are one provider and do not satisfy it |
-| One **cross-provider positive**: a GitHub source and a Gmail source a human judges to be about the same work referent | Without it the dataset cannot exhibit the phenomenon `P1-2` measures |
+| One **cross-provider positive**: a GitHub source and a Gmail source adjudicated to be about the same work referent | Without it the dataset cannot exhibit the phenomenon `P1-2` measures |
 | One **plausible hard negative**: two sources sharing substantial superficial context — same project, person, vocabulary, nearby dates — that are *not* the same work referent | A corpus of easy negatives measures nothing. `S1` is only testable against near misses |
 | A **related-context** case where available | `S2` is the distinction most likely to be silently collapsed into membership |
 
@@ -195,7 +228,29 @@ prints them.
 
 ## 9. Gold
 
-Gold is authored by the human, from direct inspection of the private sources, using opaque ids only.
+Gold for this dataset version is authored by the **AI session** authorized in section 2, from direct
+inspection of the private sources, using opaque ids only.
+
+This is recorded rather than smoothed over, because it is the instrument's principal weakness. The
+dataset exists to measure whether a machine can separate *same work referent* from *related context*.
+When a machine also authors the ground truth, a later machine agreeing with it is weaker evidence
+than agreement with an independent human label would be. The residual is carried explicitly:
+
+| Label | Value |
+| --- | --- |
+| `GOLD_AUTHORED_BY` | `AI` |
+| `AI_VIEWED_PRIVATE_CONTENT` | `YES` |
+| `GOLD_INDEPENDENCE` | `AI_AUTHORED_WITH_RESIDUAL` |
+| `DATASET_FREEZE_MECHANICS` | evaluated separately from gold independence |
+
+`HUMAN_GOLD`, `HUMAN_ADJUDICATED` and `INDEPENDENT_HUMAN_GOLD` **must not** be applied to this
+dataset version, in the seal, the PR, or any downstream authority.
+
+Freeze mechanics and gold independence are separate verdicts and must not be collapsed. Mechanically
+correct freezing — membership fixed before adjudication, bounds respected, digests recorded — does not
+convert an AI-authored gold into an independent one. Whether `GOLD_INDEPENDENCE =
+AI_AUTHORED_WITH_RESIDUAL` still permits `N2 = SATISFIED` is a **subsequent explicit Human PM
+decision**. The dataset owner may not make it, and may not self-certify it by any other route.
 
 ```json
 {
@@ -212,8 +267,9 @@ Gold is authored by the human, from direct inspection of the private sources, us
 }
 ```
 
-Gold carries **no semantic explanation copied from source content**. Human reasoning stays private
-and off-record. A gold group has at least two members; a source appears in at most one gold group; a
+Gold carries **no semantic explanation copied from source content**. Adjudication reasoning stays
+private and off-record — it is neither committed nor reported, and the same firewall clauses in
+section 2 govern it. A gold group has at least two members; a source appears in at most one gold group; a
 hard negative is an unordered pair of distinct ids that do not share a gold group; a related-context
 entry names a source that is *not* a member of the group it contextualises — that is the whole
 content of `S2`.
@@ -257,7 +313,8 @@ tests/fixtures/p1-2/frozen-dataset-seal.v1.json
 
 It **may** record: dataset version, freeze timestamp, provider set and counts, per-provider counts,
 source count, work-universe count, `MANIFEST_SHA256`, `GOLD_SHA256`, profile identifiers and
-versions, topology booleans, `human_adjudication_completed`, `raw_content_committed = false`.
+versions, topology booleans, `adjudication_completed`, `gold_authored_by = AI`, `gold_independence =
+AI_AUTHORED_WITH_RESIDUAL`, `ai_viewed_private_content = true`, `raw_content_committed = false`.
 
 It **must not** record: Gmail text, message subjects, names, email addresses, provider identifier
 values, source excerpts, or any semantic description of a source. The ratchet enforces this by
@@ -282,9 +339,9 @@ grouping engine                   ABSENT
 similarity scorer                 ABSENT
 embedding pipeline                ABSENT
 gold-consuming runtime code       ABSENT
-Gmail runtime acquisition         ABSENT — human dataset acquisition is not product capability
+Gmail runtime acquisition         ABSENT — evaluation acquisition is not product capability
 ```
 
-Human acquisition of Gmail evidence for an evaluation instrument does **not** imply a Gmail
+Acquiring Gmail evidence for an evaluation instrument does **not** imply a Gmail
 production acquisition module, credential flow, transport, producer, persistence or polling path.
 `ACQUISITION_SCOPE_CHANGE_REQUIRED` stays `YES` for Gmail.

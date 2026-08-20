@@ -554,9 +554,15 @@ async function main() {
     manifest_sha256: manifestSha,
     gold_sha256: goldSha,
     reviewed_profiles: profilesInUse,
-    human_adjudication_completed: true,
+    adjudication_completed: true,
+    // Authorship is stated, not implied. This dataset's gold was authored by the AI session
+    // authorized under the section 2 exception, so the seal says so in the one artifact anyone
+    // downstream actually reads. The vocabulary asserting human authorship is forbidden here and
+    // the ratchet greps this file for it, so do not name those tokens even in a comment.
+    gold_authored_by: "AI",
+    gold_independence: "AI_AUTHORED_WITH_RESIDUAL",
+    ai_viewed_private_content: true,
     raw_content_committed: false,
-    ai_viewed_human_content: false,
   }
 
   await writeFile(FREEZE_PATH, JSON.stringify({ ...seal, private_root: PRIVATE_ROOT }, null, 2) + "\n")

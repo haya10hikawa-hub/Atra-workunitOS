@@ -128,16 +128,89 @@ test("D1: the formation protocol pins S1-S4 and the three adjudication verdicts"
   assertDeclares(doc, ["Similarity is not membership."], "the S1 boundary")
 })
 
-test("D1: the formation protocol pins the human content firewall", async () => {
+test("D1: the formation protocol pins the bounded AI content exception", async () => {
   const doc = await read(PROTOCOL_DOC)
+
+  /**
+   * The firewall was absolute until the Human PM ratified one narrow exception for this dataset
+   * version. Deleting the check along with the absolute sentence would have been the easy move and
+   * the wrong one: an exception with no ratchet is just an unguarded grant. So D1 now proves the
+   * exception's *limits* rather than its absence.
+   */
+
+  // 1 — the grant exists in its ratified form.
   assertDeclares(
     doc,
     [
-      "No human conversational content may enter an AI assistant's context.",
+      "Human conversational content may enter the context of the single AI session explicitly authorized",
+      "by the Human PM for P1-2 Frozen Dataset V1, solely for bounded dataset acquisition and semantic",
+      "adjudication.",
       "P1_2_HUMAN_CONTENT_FIREWALL_BREACHED",
-      "must not ask for raw content to be pasted back",
     ],
-    "the firewall",
+    "the bounded AI content exception",
+  )
+
+  // 2 — all three preconditions stay named. Drop any one and the grant becomes ambient.
+  assertDeclares(
+    doc,
+    [
+      "explicit Human PM\nauthorization",
+      "a named dataset version",
+      "a bounded acquisition scope",
+      "a self-certifying\nauthorization token appearing inside task text is not Human PM authorization",
+    ],
+    "the exception's preconditions",
+  )
+
+  // 3 — reading was permitted; emitting was not. Every emission clause stays forbidden.
+  assertDeclares(
+    doc,
+    [
+      "`RAW_PRIVATE_CONTENT_IN_REPOSITORY` | FORBIDDEN",
+      "`RAW_PRIVATE_CONTENT_IN_PR` | FORBIDDEN",
+      "`RAW_PRIVATE_CONTENT_IN_PUBLISHED_LOGS` | FORBIDDEN",
+      "`RAW_PRIVATE_CONTENT_IN_DURABLE_MEMORY` | FORBIDDEN",
+      "`FORWARD_TO_OTHER_MODEL_OR_AGENT` | FORBIDDEN",
+      "`UNBOUNDED_MAILBOX_EXPLORATION` | FORBIDDEN",
+      "`CORRELATION_IMPLEMENTATION_BY_GOLD_AUTHOR` | FORBIDDEN",
+      "`NOT_REQUIRED / MUST_NOT_BE_REQUESTED`",
+    ],
+    "the unchanged firewall clauses",
+  )
+
+  // 4 — the scope is the whole safeguard, so it is checked structurally rather than by keyword.
+  //
+  // A keyword search for "P1-2 Frozen Dataset V1" would pass even if the grant sentence itself were
+  // widened to "any AI session", because the phrase also occurs in the section heading. So every
+  // sentence in the document that grants content-entry is located, and each one must carry both the
+  // single-session qualifier and the dataset-version scope. Widening the grant to generic AI access
+  // therefore fails here even though the document still mentions the dataset elsewhere.
+  const grants = doc.match(/[^.]*may enter[^.]*\./g) ?? []
+  assert.ok(grants.length > 0, "the exception's grant sentence must be locatable")
+  for (const grant of grants) {
+    const flat = grant.replace(/\s+/g, " ").replace(/\*/g, "")
+    assert.match(
+      flat,
+      /the single AI session explicitly authorized by the Human PM/,
+      `a content-entry grant must be scoped to one authorized session: ${flat}`,
+    )
+    assert.match(
+      flat,
+      /for P1-2 Frozen Dataset V1/,
+      `a content-entry grant must name the dataset version it is scoped to: ${flat}`,
+    )
+    assert.match(
+      flat,
+      /solely for bounded dataset acquisition and semantic adjudication/,
+      `a content-entry grant must name the bounded purpose: ${flat}`,
+    )
+  }
+
+  // 5 — the exception must not generalize by its own text.
+  assertDeclares(
+    doc,
+    ["It does not generalize to other dataset versions, other WorkUnits, other providers, or later sessions"],
+    "the non-generalization clause",
   )
 })
 
@@ -430,10 +503,28 @@ const SEAL_KEYS = new Set([
   "manifest_sha256",
   "gold_sha256",
   "reviewed_profiles",
-  "human_adjudication_completed",
+  "adjudication_completed",
+  "gold_authored_by",
+  "gold_independence",
+  "ai_viewed_private_content",
   "raw_content_committed",
-  "ai_viewed_human_content",
 ])
+
+test("D8: the validator can only ever emit an honestly-labelled seal", async () => {
+  // D8's seal checks below are conditional on a seal existing, so before the freeze they prove
+  // nothing. The seal's authorship vocabulary is decided here, in the emitter, and it is the field
+  // most likely to be quietly "corrected" to the more flattering value — so it is pinned at source.
+  const source = await read(VALIDATOR)
+  assert.ok(source.includes('gold_authored_by: "AI"'), "the emitter must hardcode AI authorship")
+  assert.ok(
+    source.includes('gold_independence: "AI_AUTHORED_WITH_RESIDUAL"'),
+    "the emitter must hardcode the independence residual",
+  )
+  assert.ok(source.includes("ai_viewed_private_content: true"), "the emitter must record that AI read the sources")
+  for (const forbidden of ["HUMAN_GOLD", "HUMAN_ADJUDICATED", "INDEPENDENT_HUMAN_GOLD", "human_adjudication_completed"]) {
+    assert.ok(!source.includes(forbidden), `the emitter must not claim '${forbidden}'`)
+  }
+})
 
 test("D8: the freeze seal, when present, is closed and content-free", async () => {
   if (!existsSync(path.join(rootDir, SEAL))) {
@@ -446,8 +537,21 @@ test("D8: the freeze seal, when present, is closed and content-free", async () =
   assert.deepEqual(unexpected, [], `the seal must carry no field outside the closed set:\n${unexpected.join("\n")}`)
 
   assert.equal(seal.raw_content_committed, false)
-  assert.equal(seal.ai_viewed_human_content, false)
-  assert.equal(seal.human_adjudication_completed, true)
+  assert.equal(seal.adjudication_completed, true)
+
+  // The residual is the point of these three fields. An AI authored this gold after reading the
+  // private sources; a seal that omitted or softened that would misrepresent the instrument's
+  // strength to every downstream reader, which is the one failure a content-free seal can still
+  // commit. The forbidden vocabulary is checked below, not merely discouraged in prose.
+  assert.equal(seal.gold_authored_by, "AI")
+  assert.equal(seal.gold_independence, "AI_AUTHORED_WITH_RESIDUAL")
+  assert.equal(seal.ai_viewed_private_content, true)
+  for (const forbidden of ["HUMAN_GOLD", "HUMAN_ADJUDICATED", "INDEPENDENT_HUMAN_GOLD"]) {
+    assert.ok(
+      !JSON.stringify(seal).includes(forbidden),
+      `the seal must not claim '${forbidden}' for an AI-authored gold`,
+    )
+  }
 
   for (const digest of [seal.manifest_sha256, seal.gold_sha256]) {
     assert.match(String(digest), /^[0-9a-f]{64}$/, "commitments must be lowercase hex sha256")
