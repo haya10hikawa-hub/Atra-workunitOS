@@ -58,6 +58,20 @@ export type SourceType =
  * of the namespace, and `"github"` is not a member here at all: there is no spelling of
  * this type that lets a reviewed GitHub resource fall back to the generic provider.
  *
+ * WHY GMAIL IS SPLIT BY RESOURCE
+ *
+ * Same rule, applied the second time and to a different provider. Gmail messages reached
+ * a reviewed profile pair, so the provider-level `"gmail"` placeholder was resolved into
+ * `"gmail_message"` and — exactly as `"github"` was — ceased to be a member here at all.
+ * `"gmail_thread"`, `"gmail_draft"` and `"gmail_attachment"` are absent because no profile
+ * reviews those resources; one review resolves one resource, never a provider.
+ *
+ * A member names a KEY SPACE, not the population a profile covers. `"gmail_message"` is the
+ * space Gmail's `Message.id` values are drawn from, and draft-stage messages draw ids from
+ * that same space — so the member is not split at the draft boundary even though the reviewed
+ * profile excludes drafts. A record emitted for a draft-stage message would be emitted under
+ * no reviewed profile, not under a permissive one.
+ *
  * WHY THE OTHER MEMBERS ARE NOT RESOURCE-SCOPED
  *
  * They are provider-level because nothing has yet reviewed them. No identity or
@@ -65,7 +79,12 @@ export type SourceType =
  * no producer can emit a record under one, and splitting them now would invent resource
  * boundaries for providers whose identity contracts are unexamined. Each must be
  * resolved into resource-scoped namespaces by the WorkUnit that reviews its profile —
- * the same way GitHub was — rather than inheriting a shape from GitHub's case.
+ * the same way GitHub and Gmail were — rather than inheriting a shape from either case.
+ *
+ * NOT `SourceType`. That union keeps its own `"gmail"` and `"github"` members and is
+ * untouched by either resolution: it answers which product a signal came from, and this one
+ * answers which space a key is unique within. Mapping one onto the other by string
+ * manipulation would be provider relabelling.
  *
  * This is a closed vocabulary, not a generalized namespace model: there is no separate
  * `providerNamespace` field on `SourceRecordV1`, and identity stays exactly
@@ -74,7 +93,7 @@ export type SourceType =
 export type SourceIdentityNamespace =
   | "slack"
   | "notion"
-  | "gmail"
+  | "gmail_message"
   | "google_drive"
   | "google_calendar"
   | "github_issue"

@@ -199,15 +199,18 @@ test("R4: hashing an Atra-side representation is explicitly not a contentDigest"
 
 // ─── R5 — every provider profile stays unproven ─────────────────────────────
 
-// Two of the six gates were closed for one provider RESOURCE — GitHub issues — by a separately
-// authorized profile WorkUnit. Two of them, and only two. The labels below are the exact remaining
-// unproven ones, spelled as the document spells them, so a gate that widens from "GitHub issues"
-// to "GitHub" fails here rather than passing on a substring.
+// Gates have been closed for three provider RESOURCES — GitHub issues, GitHub pull requests and
+// Gmail messages — by separately authorized profile WorkUnits. Those resources, and only those. The
+// labels below are the exact remaining unproven ones, spelled as the document spells them, so a gate
+// that widens from "GitHub issues" to "GitHub", or from "Gmail messages" to "Gmail", fails here
+// rather than passing on a substring.
 const PROFILE_GATES = [
   "GitHub identity profile, other resources",
+  "Gmail identity profile, other resources",
   "Slack identity profile",
   "Google Calendar identity profile",
   "GitHub content-scope profile, other resources",
+  "Gmail content-scope profile, other resources",
   "Slack content-scope profile",
   "Google Calendar content-scope profile",
 ]
@@ -222,9 +225,11 @@ const PROFILE_GATES = [
 // presents an accepted risk as evidence, and fails here.
 const PROVEN_PROFILE_GATES = [
   "GitHub issue content-scope profile", "GitHub pull request content-scope profile",
+  "Gmail message content-scope profile",
 ]
 const SCOPED_EXCEPTION_GATE = "GitHub issue identity profile"
 const PULL_REQUEST_EXCEPTION_GATE = "GitHub pull request identity profile"
+const GMAIL_EXCEPTION_GATE = "Gmail message identity profile"
 const SCOPED_EXCEPTION_STATE = "PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL"
 const PROVIDER_PROFILE_DOC = "docs/architecture/GITHUB_ISSUE_ACQUISITION_PROFILE.md"
 const PULL_REQUEST_PROFILE_DOC = "docs/architecture/GITHUB_PULL_REQUEST_ACQUISITION_PROFILE.md"
@@ -259,7 +264,7 @@ test("R5: every gate without a reviewed profile stays REQUIRED_UNPROVEN", async 
   // The accepted-with-residual gates, one per reviewed GitHub resource. Two separate assertions on
   // purpose: that each reads the scoped state, and that neither reads `PROVEN`. A single positive
   // check would still pass a line that had acquired both.
-  for (const gate of [SCOPED_EXCEPTION_GATE, PULL_REQUEST_EXCEPTION_GATE]) {
+  for (const gate of [SCOPED_EXCEPTION_GATE, PULL_REQUEST_EXCEPTION_GATE, GMAIL_EXCEPTION_GATE]) {
     const identityGateLines = lines.filter((line) => line.includes(gate) && line.includes("="))
     assert.equal(identityGateLines.length, 1, `${gate} must have exactly one gate line`)
     assert.ok(new RegExp(`=\\s*${SCOPED_EXCEPTION_STATE}\\b`).test(identityGateLines[0]),
@@ -492,6 +497,12 @@ test("R5c: canonical identity namespaces are per resource and introduce no names
     "No generalized namespace model",
     "gains no `providerNamespace` field and no fourth identity component",
     "the record's field set, order and optionality are unchanged",
+    // The rule applied a second time, to a second provider, and what it did NOT authorize.
+    "the provider-level `gmail` member was resolved",
+    "`gmail` ceased to be a member of the canonical vocabulary at all",
+    "`gmail_thread`, `gmail_draft` and `gmail_attachment`",
+    "were **not** added: no profile reviews those resources",
+    "A namespace names a **key space**",
     // When it is revisited, so the boundary is not permanent by accident.
     "a third canonical GitHub resource becoming necessary, or canonical persistence beginning",
     // Observation never becomes proof.

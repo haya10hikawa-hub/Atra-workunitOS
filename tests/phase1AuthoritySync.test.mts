@@ -73,6 +73,16 @@ const P1_1_STATUS_RATIFIED = "COMPLETE"
 const P1_2_ENTRY_STATUS_VOCABULARY = ["NOT_READY", "READY"]
 const P1_2_ENTRY_STATUS_RATIFIED = "NOT_READY"
 
+// The per-condition states, pinned individually. `P1_2_ENTRY_STATUS` alone is not enough: an edit
+// that marked N2, N3 or N4 satisfied while leaving the aggregate at `NOT_READY` would leave the
+// criterion internally false and the next reader one line from concluding entry is reachable.
+// N4 is the one under live pressure — two providers now hold reviewed profile pairs — and it stays
+// unsatisfied because it is quantified over the providers represented in a dataset that is not
+// frozen. A ready profile pair is a prerequisite, not the condition.
+const P1_2_ENTRY_CONDITION_STATES: ReadonlyArray<readonly [string, string]> = [
+  ["N1", "SATISFIED"], ["N2", "NOT SATISFIED"], ["N3", "NOT SATISFIED"], ["N4", "NOT SATISFIED"],
+]
+
 // The ratified reading of the §4.1 / §4.2 revisit trigger. Both documents must carry it: the reading
 // was already got wrong once, and a reading recorded in only one of the two is the same trap again.
 const RESIDUAL_READING_TOKEN = "P1_2_DOES_NOT_REOPEN_PHASE1_IDENTITY_EXCEPTIONS"
@@ -397,6 +407,19 @@ test("phase-1 authority: the P1-2 entry criterion exists and its status is decla
     `P1_2_ENTRY_STATUS must come from ${P1_2_ENTRY_STATUS_VOCABULARY.join(" | ")}, got ${declared[0]}`)
   assert.equal(declared[0], P1_2_ENTRY_STATUS_RATIFIED,
     "P1-2 entry readiness is ratified; changing it requires changing this pin")
+
+  // Each condition's own state, read from the one line that declares it.
+  for (const [condition, state] of P1_2_ENTRY_CONDITION_STATES) {
+    const declarations = doc.split("\n")
+      .map((line) => line.trim())
+      .filter((line) => new RegExp(`^${condition}\\s{2,}\\S`).test(line))
+    assert.equal(declarations.length, 1,
+      `${PRODUCT_AUTHORITY_DOC} must declare ${condition} exactly once, got ${declarations.length}`)
+    const declared = /\bNOT SATISFIED\b/.test(declarations[0]) ? "NOT SATISFIED"
+      : /\bSATISFIED\b/.test(declarations[0]) ? "SATISFIED" : declarations[0]
+    assert.equal(declared, state,
+      `${condition} is ratified as ${state}; changing it requires changing this pin: ${declarations[0]}`)
+  }
 
   // Entry must not be reachable by re-labelling internal work as a prerequisite, nor the reverse:
   // CorrelationGroupV1 stays inside P1-2 and stays unauthorized until authorized there.
