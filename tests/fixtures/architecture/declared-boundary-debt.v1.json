@@ -9,41 +9,13 @@
   },
   "debts": [
     {
-      "id": "application_session_outward_value_composition",
-      "status": "known_open",
-      "introduced_by": "pre_wu00_snapshot",
-      "source_sha": "066a43c3df07f3da10a2fc93ff7d90157c732114",
-      "exact_sources": ["app/lib/application/auth/sessionResolver.ts"],
-      "exact_targets": [
-        "app/lib/infrastructure/persistence/control/controlRepositoryResolver.ts",
-        "app/lib/runtime/requestRuntimeConfig.ts",
-        "app/lib/security/policy.ts"
-      ],
-      "edge_kind": "value",
-      "risk": "The session use case selects its own concrete dependencies at runtime: it constructs the control repository bundle, resolves the request-scoped runtime configuration when none is threaded in, and reaches back into the security layer for the role vocabulary. The last of these is one half of the only layer cycle in the repository, because app/lib/security/session.ts imports this module. Every edge is on the authenticated path of every route, so this is the highest-traffic dependency inversion present.",
-      "owner_workunit": "WU-06",
-      "removal_gate": "A single composition root injects the resolved ControlRepositoryBundle rather than a raw D1 binding, injects the auth and security runtime sections on every path rather than only the threaded one, and the role vocabulary this module consumes is owned by app/lib/domain rather than app/lib/security. Closing only part of this entry makes the remaining declared keys stale, which is intended: a partial closure must be split into separate records by a human review, never absorbed.",
-      "production_change_allowed_in_wu00": false
-    },
-    {
-      "id": "application_session_d1_driver_type_contract",
-      "status": "known_open",
-      "introduced_by": "pre_wu00_snapshot",
-      "source_sha": "066a43c3df07f3da10a2fc93ff7d90157c732114",
-      "exact_sources": ["app/lib/application/auth/sessionResolver.ts"],
-      "exact_targets": ["app/lib/persistence/d1/types.ts"],
-      "edge_kind": "type-only",
-      "risk": "The session use case names the D1 driver shape in its own public options type, so the application layer's signature is stated in terms of a persistence directory that holds both the D1DatabaseLike driver contract and eight concrete repository implementations. The edge is erased at runtime and carries no runtime coupling, which is why it is recorded separately from the value entry; it still fixes the injection seam one layer below the abstraction the use case actually needs.",
-      "owner_workunit": "WU-06",
-      "removal_gate": "The composition root injects an assembled repository bundle, so this module no longer names a database driver type at all. Alternatively the driver contract acquires a home that is not the mixed persistence/d1 implementation directory. An upgrade of this edge from type-only to value is a different debt and must fail rather than reconcile against this record.",
-      "production_change_allowed_in_wu00": false
-    },
-    {
       "id": "application_inbox_provider_implementation_selection",
       "status": "known_open",
       "introduced_by": "wu02s_route_to_application_relocation",
       "source_sha": "3a2bf3cbbffd304d7db4a0eb5a7d5058ae2d3402",
-      "exact_sources": ["app/lib/application/workunitInbox/inboxService.ts"],
+      "exact_sources": [
+        "app/lib/application/workunitInbox/inboxService.ts"
+      ],
       "exact_targets": [
         "app/lib/infrastructure/external/calendar/fakeCalendarSource.ts",
         "app/lib/infrastructure/external/calendar/toNormalizedToolSignal.ts",
@@ -56,19 +28,6 @@
       "risk": "The inbox use case selects concrete provider implementations itself, through a switch over six value imports. Activating a real provider is therefore an edit to an application-layer file, and the layer transitively reads process.env, because resolveGitHubClient() is called with no arguments and reads GITHUB_SOURCE_MODE, GITHUB_ACCESS_TOKEN and NODE_ENV directly. The coupling is not new work: the identical six imports were live at the refactor base in app/api/workunit/inbox/route.ts, and WU-02S relocated them into the application layer when it split the read and refresh paths. The source path is therefore younger than the defect, and the source_sha records where the edge is observed rather than claiming it originated there.",
       "owner_workunit": "WU-02",
       "removal_gate": "The use case consumes an injected signal-source port instead of importing provider modules, and the concrete provider set is selected outside the application layer. The program still records provider integration as open under WU-02: the executed WU-02 slice was the dependency-direction closure of the normalized signal contract only, and explicitly did not authorize or implement canonical source adapters or provider integration.",
-      "production_change_allowed_in_wu00": false
-    },
-    {
-      "id": "security_application_session_resolution_cycle",
-      "status": "known_open",
-      "introduced_by": "pre_wu00_snapshot",
-      "source_sha": "066a43c3df07f3da10a2fc93ff7d90157c732114",
-      "exact_sources": ["app/lib/security/session.ts"],
-      "exact_targets": ["app/lib/application/auth/sessionResolver.ts"],
-      "edge_kind": "value",
-      "risk": "This is the security half of the only layer cycle in the repository. The security session boundary delegates session resolution to the application layer, and that module reaches back into app/lib/security/policy.ts for role normalization. Both directions are runtime value edges on every authenticated request, and no file-level circular import exists, so no module-level tool reports it; only a layer-level policy on both sides can.",
-      "owner_workunit": "WU-06",
-      "removal_gate": "Either the composition root owns session assembly so the security boundary no longer imports an application module, or the role vocabulary moves to app/lib/domain so the return edge disappears and the remaining direction is no longer a cycle. Removing only this record while either direction is live is not closure: the paired application entry must close in the same review or the reconciliation surfaces the survivor as undeclared.",
       "production_change_allowed_in_wu00": false
     }
   ]

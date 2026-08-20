@@ -23,25 +23,40 @@ const DEBT_BASELINE_SHAS = [REFACTOR_BASE_SHA, WU_A_BASELINE_SHA]
 const DEBT_ORIGINS = ["pre_wu00_snapshot", "wu02s_route_to_application_relocation"]
 // The declared set. Expanded by WU-A under the recorded PM decision
 // ATRA_PM_ARCHITECTURE_DEBT_REGISTRY_EXPANSION_WU_A_RATIFIED, which permits recording violations
-// that already exist and forbids approving them. Four records cover eleven exact edges; each is a
-// live violation of a policy WU-A installed, never an exception granted to one.
+// that already exist and forbids approving them. WU-06 closed three of the four records — the
+// session use case no longer composes itself — leaving ONE record over six exact edges, all of
+// them the inbox provider selection WU-02 owns. Each is a live violation of a policy WU-A
+// installed, never an exception granted to one.
 const DEBT_IDS: string[] = [
-  "application_session_outward_value_composition",
-  "application_session_d1_driver_type_contract",
   "application_inbox_provider_implementation_selection",
-  "security_application_session_resolution_cycle",
 ]
-// Both previously recorded inversions are resolved, and in both cases the entry was removed only
+// Every previously recorded inversion is resolved, and in each case the entry was removed only
 // after the live edges disappeared — the record was never the mechanism of closure.
 //
 // `domain_tenant_hybrid_boundary` (WU-01A): both domain modules now consume the canonical
 // declarations in app/lib/domain/tenant/types.ts directly.
 // `infrastructure_application_signal_contract` (WU-02): the normalized signal family moved to the
 // neutral port app/lib/ports/toolSignal/types.ts, so the three provider mappers depend downward.
+// `application_session_outward_value_composition` (WU-06): all three targets closed in ONE review,
+// which is what the record's own removal gate required — the control repositories arrive through
+// the ControlDirectory contract the use case declares, the runtime configuration is resolved by the
+// composition root and projected onto DevSessionPolicy, and the role vocabulary now belongs to
+// app/lib/domain/auth/roles.ts. A partial closure would have been split, not absorbed.
+// `application_session_d1_driver_type_contract` (WU-06): the use case names no database driver type
+// at all; the D1 binding stops at the composition root.
+// `security_application_session_resolution_cycle` (WU-06): the security boundary no longer resolves
+// sessions. Routes call the composition root directly, and both directions of the cycle are gone —
+// neither half was closed on paper while the other stayed live.
 //
-// Reintroduction is not absorbed either way: `violatesDomainTarget` still forbids /app/lib/tenant/,
-// `violatesExternalClientTarget` still forbids /app/lib/application/, and neither id may reappear.
-const RESOLVED_DEBT_IDS = ["domain_tenant_hybrid_boundary", "infrastructure_application_signal_contract"]
+// Reintroduction is not absorbed for any of them: `violatesDomainTarget` still forbids
+// /app/lib/tenant/, `violatesExternalClientTarget` and `violatesSecurityTarget` still forbid
+// /app/lib/application/, the application allowlist still forbids runtime, security and
+// infrastructure targets, and no resolved id may reappear.
+const RESOLVED_DEBT_IDS = [
+  "domain_tenant_hybrid_boundary", "infrastructure_application_signal_contract",
+  "application_session_outward_value_composition", "application_session_d1_driver_type_contract",
+  "security_application_session_resolution_cycle",
+]
 const SIGNAL_PORT = "app/lib/ports/toolSignal/types.ts"
 const EVIDENCE_PORT = "app/lib/ports/acquisitionEvidence/types.ts"
 const DEBT_FIELDS = [
@@ -983,14 +998,12 @@ test("governance: declared debt ledger is a review-governed registry, not a mach
   // exactly the review gate; it is a human decision point, not a machine-closed guarantee.
   const ledger = await readDebtLedger()
   assert.deepEqual(ledger.debts.map((debt) => debt.id).sort(), [...DEBT_IDS].sort())
-  // The declared set is exactly what WU-A recorded under the PM decision that authorized the
-  // expansion. Pinning the literal set — rather than a count, or a mere non-emptiness check — is
-  // what makes a fifth entry a visible human edit here rather than a fixture-only addition.
+  // The declared set: what WU-A recorded under the PM decision that authorized the expansion, less
+  // the three records WU-06 closed under their own removal gates. Pinning the literal set — rather
+  // than a count, or a mere non-emptiness check — is what makes BOTH a new entry and a removal a
+  // visible human edit here rather than a fixture-only change.
   assert.deepEqual([...DEBT_IDS].sort(), [
     "application_inbox_provider_implementation_selection",
-    "application_session_d1_driver_type_contract",
-    "application_session_outward_value_composition",
-    "security_application_session_resolution_cycle",
   ], "expanding or contracting the declared set requires a PM/architecture decision recorded before the change")
 
   // Contraction is governed the same way expansion is. A satisfied removal_gate is the only route
@@ -1269,6 +1282,24 @@ function violatesInfrastructureTarget(edge: ModuleEdge): boolean {
     ])
 }
 
+// The request composition root (WU-06). Assembly IS its purpose, so this is the one layer allowed
+// to name the runtime configuration, an auth adapter implementation, a repository selector and an
+// application use case in the same module — that concentration is the point, not a leak. Two
+// directions stay wrong and are closed here: it may never reach delivery, because a composed
+// dependency that imports a route is a cycle through the framework, and it may never carry React
+// or Next, because nothing it assembles is a view.
+//
+// A denylist would be an escape hatch on its own, so it is not what makes this safe. What makes it
+// safe is DIRECTION, asserted separately below: no inward layer may import app/lib/composition, so
+// a forbidden edge cannot be laundered by routing it through here. The application, domain and
+// ports policies are closed allowlists that already exclude this layer; the direction test covers
+// the denylisted layers, which would otherwise not name it.
+function violatesCompositionTarget(edge: ModuleEdge): boolean {
+  return isBareModule(edge.specifier, "react")
+    || isBareModule(edge.specifier, "next")
+    || hasForbiddenResolvedPath(edge.resolvedTarget, ["/app/api/", "/app/components/"])
+}
+
 // The escape hatch. Without this, any module policed above could be moved to app/lib/<name>.ts
 // and keep every forbidden edge, because the loose root modules were scanned by nothing. Matching
 // is on the ROOT files only; nested directories are covered by the layer registry below.
@@ -1295,6 +1326,7 @@ function violatesLibRootTarget(edge: ModuleEdge): boolean {
 // subtrees that do not exist yet: nothing under a policed layer can be added outside the scan.
 const POLICED_LAYER_POLICIES: Record<string, (edge: ModuleEdge) => boolean> = {
   application: (edge) => violatesApplicationValueTarget(edge) || violatesApplicationTypeTarget(edge),
+  composition: violatesCompositionTarget,
   domain: violatesDomainTarget,
   ports: violatesPortTarget,
   security: violatesSecurityTarget,
@@ -1322,6 +1354,9 @@ const PARTIALLY_POLICED_SUBTREES: Record<string, string[]> = {
 // false statement about authority, and this registry is read as a map of who decides what.
 const APP_LIB_LAYER_DISPOSITION: Record<string, string> = {
   application: "POLICED",
+  // WU-06. Introduced as POLICED at its own root on the day it was created, so nothing can be
+  // added under it outside the scan — the registry never records it as an unowned new layer.
+  composition: "POLICED",
   domain: "POLICED",
   ports: "POLICED",
   security: "POLICED",
@@ -1375,38 +1410,41 @@ async function scanPolicedLayer(
 test("WU-A: application value edges reach only application, domain and ports", async () => {
   const observed = await scanPolicedLayer("app/lib/application", violatesApplicationValueTarget, 80)
   const ledger = await readDebtLedger()
-  const declared = [
-    ...declaredDebtKeys(debtById(ledger, "application_session_outward_value_composition")),
-    ...declaredDebtKeys(debtById(ledger, "application_inbox_provider_implementation_selection")),
-  ]
+  const declared = declaredDebtKeys(debtById(ledger, "application_inbox_provider_implementation_selection"))
   const { undeclared, stale } = reconcile(observed, declared)
   assert.deepEqual(undeclared, [], `undeclared application value violation:\n${undeclared.join("\n")}`)
   assert.deepEqual(stale, [], `stale declared application value debt:\n${stale.join("\n")}`)
-  // The recorded set is exactly nine edges in two modules. Pinning the count as well as the set
-  // means a record that grows a target without a matching live edge cannot pass by symmetry.
-  assert.equal(observed.length, 9, `application value violations drifted:\n${edgeLines(observed).join("\n")}`)
+  // Was nine edges in two modules; WU-06 closed the session module's three, so the recorded set is
+  // exactly six edges in ONE module. Pinning the count as well as the set means a record that grows
+  // a target without a matching live edge cannot pass by symmetry.
+  assert.equal(observed.length, 6, `application value violations drifted:\n${edgeLines(observed).join("\n")}`)
+  assert.deepEqual([...new Set(observed.map((edge) => edge.file))],
+    ["app/lib/application/workunitInbox/inboxService.ts"],
+    "the only application module still selecting an implementation is the WU-02 inbox use case")
 })
 
 test("WU-A: application type-only edges never name an implementation-owning surface", async () => {
+  // WU-06 closed the single record here: the session use case named the D1 driver shape in its own
+  // public options type, and now names a ControlDirectory contract it declares itself. The scan is
+  // reconciled against an EMPTY declared set, so this is the strongest form the assertion has —
+  // any type-only reach into an implementation-owning surface is undeclared and fails.
   const observed = await scanPolicedLayer("app/lib/application", violatesApplicationTypeTarget, 80)
-  const declared = declaredDebtKeys(debtById(await readDebtLedger(), "application_session_d1_driver_type_contract"))
-  const { undeclared, stale } = reconcile(observed, declared)
+  const { undeclared, stale } = reconcile(observed, [])
   assert.deepEqual(undeclared, [], `undeclared application type-only violation:\n${undeclared.join("\n")}`)
   assert.deepEqual(stale, [], `stale declared application type-only debt:\n${stale.join("\n")}`)
-  assert.equal(observed.length, 1, `application type-only violations drifted:\n${edgeLines(observed).join("\n")}`)
+  assert.equal(observed.length, 0, `application type-only violations drifted:\n${edgeLines(observed).join("\n")}`)
 })
 
 test("WU-A: security does not reach application, provider clients, D1 repositories or delivery", async () => {
+  // The repository's only layer cycle is gone. It was security/session.ts -> the session use case
+  // -> security/policy.ts, and WU-06 cut BOTH directions in one review: routes call the composition
+  // root for session assembly, and the role vocabulary the use case consumes moved to the domain.
+  // Reconciled against an EMPTY declared set, so a new reach upward is undeclared and fails.
   const observed = await scanPolicedLayer("app/lib/security", violatesSecurityTarget, 20)
-  const declared = declaredDebtKeys(debtById(await readDebtLedger(), "security_application_session_resolution_cycle"))
-  const { undeclared, stale } = reconcile(observed, declared)
+  const { undeclared, stale } = reconcile(observed, [])
   assert.deepEqual(undeclared, [], `undeclared security violation:\n${undeclared.join("\n")}`)
   assert.deepEqual(stale, [], `stale declared security debt:\n${stale.join("\n")}`)
-  // One edge, and it is the security half of the layer cycle. The application half is recorded
-  // separately, so neither direction can be closed on paper while the other stays live.
-  assert.deepEqual(edgeLines(observed), [
-    "app/lib/security/session.ts -> import ../application/auth/sessionResolver.ts",
-  ])
+  assert.deepEqual(edgeLines(observed), [])
 })
 
 test("WU-A: runtime configuration reaches no policy, security, adapter or delivery module", async () => {
@@ -1592,6 +1630,11 @@ test("WU-A: every new layer policy rejects a positive control and accepts its in
     ["lib-root", violatesLibRootTarget,
       value("app/lib/x.ts", "app/lib/infrastructure/external/github/fakeGitHubClient.ts"),
       value("app/lib/x.ts", "app/lib/domain/types.ts")],
+    // The composition root may hold the very edge every other layer is forbidden — that is what it
+    // is for — but not a reach back into delivery.
+    ["composition", violatesCompositionTarget,
+      value("app/lib/composition/x.ts", "app/api/workunit/inbox/route.ts"),
+      value("app/lib/composition/x.ts", "app/lib/application/auth/sessionResolver.ts")],
   ]
   for (const [name, policy, forbidden, permitted] of controls) {
     assert.equal(policy(forbidden), true, `${name}: must reject ${forbidden.resolvedTarget}`)
@@ -1706,6 +1749,135 @@ test("WU-A: an erased application type edge may name a persistence contract, nev
   assert.equal(violatesApplicationTypeTarget(typeEdge("app/lib/ports/toolSignal/types.ts")), false)
 })
 
+// ─── WU-06: one request composition root ────────────────────────────────────────
+//
+// The layer policies above say where an edge may point. These say who is allowed to CHOOSE an
+// implementation, which is the question WU-06 exists to answer. A composition root that merely
+// exists proves nothing: what proves it is that the old selectors are gone from every other layer
+// and that nothing inward can reach the new one.
+
+const COMPOSITION_ROOT = "app/lib/composition/"
+const AUTH_ADAPTER_IMPLEMENTATIONS = [
+  "app/lib/application/auth/devAuthAdapter.ts",
+  "app/lib/application/auth/jwtAuthAdapter.ts",
+  "app/lib/application/auth/noopProductionAuthAdapter.ts",
+]
+
+function importersOf(edges: ModuleEdge[], predicate: (target: string) => boolean): string[] {
+  return [...new Set(edges
+    .filter((edge) => predicate(edge.resolvedTarget.replace(/^\/+/, "")))
+    .map((edge) => edge.file))].sort()
+}
+
+test("WU-06: the composition root is reachable only from delivery, never from an inward layer", async () => {
+  // This is what stops the new layer from being an escape hatch. Its own outbound policy is a
+  // denylist, which on its own would let any module launder a forbidden edge by importing it from
+  // here. Direction closes that: if no inward layer may import app/lib/composition, there is
+  // nothing to launder THROUGH. Scanned over the whole of app/, so a future module anywhere under
+  // it is covered without a registry edit.
+  const edges = await scanModuleGraph(rootDir, ["app"])
+  const importers = importersOf(edges, (target) => target.startsWith(COMPOSITION_ROOT))
+  assert.ok(importers.length > 0, "the composition root must have live importers, or this scan is vacuous")
+
+  const inward = importers.filter((file) => !file.startsWith("app/api/") && !file.startsWith(COMPOSITION_ROOT))
+  assert.deepEqual(inward, [],
+    `only API routes may import the composition root; found:\n${inward.join("\n")}`)
+  // And the delivery side is real: every authenticated route reaches it.
+  assert.equal(importers.filter((file) => file.startsWith("app/api/")).length, 10,
+    "all ten API routes must consume the composition root")
+})
+
+test("WU-06: an auth adapter implementation is selected only by the composition root", async () => {
+  // Before WU-06 the application layer picked its own adapter through a selector that lived beside
+  // the use case. Moving the selector is the whole point, so the assertion is on the VALUE edge:
+  // whoever constructs one of these classes is choosing an implementation.
+  const edges = await scanModuleGraph(rootDir, ["app"])
+  const constructors = importersOf(
+    edges.filter((edge) => edgeKindClass(edge.kind) === "value"),
+    (target) => AUTH_ADAPTER_IMPLEMENTATIONS.includes(target))
+  assert.deepEqual(constructors, ["app/lib/composition/authAdapterSelection.ts"],
+    "an auth adapter implementation may be constructed only by the composition root")
+})
+
+test("WU-06: no route rebuilds the old session dependency path", async () => {
+  // The failure this closes is a SECOND composition path: a route that keeps calling the use case
+  // directly, or resolves the control repositories itself, while the composition root sits beside
+  // it looking authoritative. Delivery may name the root and nothing else on this path.
+  const forbiddenFromDelivery = [
+    "app/lib/application/auth/sessionResolver.ts",
+    "app/lib/infrastructure/persistence/control/controlRepositoryResolver.ts",
+    ...AUTH_ADAPTER_IMPLEMENTATIONS,
+  ]
+  const edges = await scanModuleGraph(rootDir, ["app/api"])
+  assert.ok(edges.length > 0, "app/api must contain scanned code files")
+  const offenders = edges
+    .filter((edge) => forbiddenFromDelivery.includes(edge.resolvedTarget.replace(/^\/+/, "")))
+    .map((edge) => `${edge.file} -> ${edge.specifier}`).sort()
+  assert.deepEqual(offenders, [],
+    `a route must assemble its session through the composition root:\n${offenders.join("\n")}`)
+})
+
+test("WU-06: the session use case declares its own capabilities and selects none of them", async () => {
+  const source = await readFile(path.join(rootDir, "app/lib/application/auth/sessionResolver.ts"), "utf8")
+
+  // Not a path rule but a signature rule: `resolveSession` takes a REQUIRED dependency object. A
+  // defaulted one (`dependencies: SessionDependencies = {...}`) would let the use case supply its
+  // own capabilities again while every import policy above stayed green.
+  assert.match(source, /export async function resolveSession\(\s*request: Request,\s*dependencies: SessionDependencies,\s*\)/,
+    "resolveSession must take a required dependency object, never a defaulted one")
+
+  // The vocabulary of the four things it must no longer name at all. Checked as text, because the
+  // point is that these words cannot appear even in a comment-free identifier position.
+  for (const forbidden of ["D1DatabaseLike", "resolveControlRepositories", "ControlRepositoryBundle",
+    "resolveAuthAdapter", "resolveValidatedRequestRuntimeConfig", "SecurityRuntimeConfig"]) {
+    assert.equal(source.includes(forbidden), false,
+      `the session use case must not name ${forbidden}: that is a composition-root decision`)
+  }
+})
+
+test("WU-06: the D1 driver type cannot be laundered through a contract-declaring module", async () => {
+  // W16. The application type policy admits a persistence target by its declared RESPONSIBILITY,
+  // and repositoryResolver.ts is classified compositionDeclaringContract — the application MAY name
+  // its erased types, because that is where TenantRepositoryBundle is declared. That admission is
+  // correct and stays. What it must not become is a re-export seam: one added
+  // `export type { D1DatabaseLike }` there would hand every application module the driver type back
+  // through a module the policy already trusts, and no path rule would see it.
+  //
+  // So the driver contract is pinned to its own declaration site. This does NOT separate the mixed
+  // resolver — WU-06 defers that, because the composition root never names it — it only closes the
+  // one laundering route that would undo the type-contract closure above.
+  const driverHome = "app/lib/persistence/d1/types.ts"
+  const files = await collectCodeFiles(path.join(rootDir, "app/lib/persistence"))
+  assert.ok(files.length > 0, "app/lib/persistence must contain scanned code files")
+  const reexporters: string[] = []
+  for (const file of files) {
+    const relative = path.relative(rootDir, file).split(path.sep).join("/")
+    if (relative === driverHome) continue
+    const source = await readFile(file, "utf8")
+    if (/export\s+(?:type\s+)?\{[^}]*\bD1DatabaseLike\b[^}]*\}/.test(source)) reexporters.push(relative)
+  }
+  assert.deepEqual(reexporters, [],
+    `the D1 driver contract must be named only at ${driverHome}, never re-exported:\n${reexporters.join("\n")}`)
+})
+
+test("WU-06: the composition root widens no safe-method repository capability", async () => {
+  // WU-02S established that a safe handler receives a READ-only tenant bundle. The composition
+  // root is exactly the place a future edit could quietly hand a GET the writable bundle instead,
+  // so it is pinned as naming no tenant repository surface at all: session assembly is the control
+  // directory and nothing else. Tenant repository selection stays where WU-02S left it.
+  const compositionFiles = await collectCodeFiles(path.join(rootDir, "app/lib/composition"))
+  assert.ok(compositionFiles.length > 0, "app/lib/composition must contain scanned code files")
+  for (const file of compositionFiles) {
+    const relative = path.relative(rootDir, file).split(path.sep).join("/")
+    const source = await readFile(file, "utf8")
+    for (const forbidden of ["TenantRepositoryBundle", "TenantReadRepositoryBundle",
+      "resolveRouteRepositories", "resolveRouteReadRepositories"]) {
+      assert.equal(source.includes(forbidden), false,
+        `${relative} must not name ${forbidden}: the safe-method capability boundary is not this slice's to move`)
+    }
+  }
+})
+
 test("WU-A: the recorded ledger reconciles against every WU-A policy at once", async () => {
   // Per-layer tests reconcile their own slice; this one reconciles the UNION against the WHOLE
   // declared set. Without it, a record could be moved between layers — or an edge could migrate
@@ -1732,7 +1904,8 @@ test("WU-A: the recorded ledger reconciles against every WU-A policy at once", a
   const { undeclared, stale } = reconcile(observed, declared)
   assert.deepEqual(undeclared, [], `undeclared WU-A boundary violation:\n${undeclared.join("\n")}`)
   assert.deepEqual(stale, [], `stale declared WU-A debt:\n${stale.join("\n")}`)
-  assert.equal(observed.length, 11, "the WU-A declared set covers exactly eleven live edges")
+  // Eleven at the WU-A baseline; six after WU-06 closed the five session/composition edges.
+  assert.equal(observed.length, 6, "the WU-A declared set covers exactly six live edges")
 
   // Every declared record must belong to a WU-A policy. A record whose source layer no longer has
   // a policy would reconcile trivially against an empty observed slice and become permission.

@@ -152,11 +152,19 @@ test("the live Approval / ActionPreview routes are byte-identical to the P6-FIX-
   // `securityRefactorCriteriaRatchet.test.mts` says "these bytes still enforce
   // this order" — that test is what makes re-pinning here safe. A further
   // accidental or unauthorized edit still fails.
+  //
+  // WU-06 advances the two route digests once more, and ONLY by their import
+  // block: `requireSession` now comes from the request composition root
+  // (`app/lib/composition/requestSession.ts`) instead of the security session
+  // boundary, and `getSessionErrorStatus` stays where it is. No handler body,
+  // ordering, predicate or hashing step is touched — the AST handler hashes in
+  // `security-surface.v1.json` are unchanged, which is the independent evidence
+  // that only the import line moved. `approvalStore.ts` is again NOT touched.
   const PINNED_BASELINE_DIGESTS: Readonly<Record<string, string>> = {
     "app/api/workunit/[id]/approval/route.ts":
-      "e390072e6c1faa6fc6ce2e6e778bdaaa8eda309d786d297a1412ef6f1fa0fff6",
+      "07cf7ff011b7115dd252cb79462d1a6ffe1004c6411dee64fde320b814cf319c",
     "app/api/workunit/[id]/action-preview/route.ts":
-      "f626cb8cfdfa3be3edd9a8550c63673d9a8f9aca3c635bca2b719783a31216b1",
+      "dc9b541b900e8afd8467dd6c7dc7fa2bdb387959f92bbe5d4f5fb42cd56aaaee",
     "app/lib/security/approvalStore.ts":
       "fe95e65db109e10f60236a9ebe2870c29b7dcdd8ed837e3b9397aa9937d0c04c",
   }

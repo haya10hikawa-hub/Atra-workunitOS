@@ -71,21 +71,36 @@ test("no application source (outside the seam and its resolver) imports the inje
 
 // ─── Cloudflare production auth/runtime path reads no ambient process.env ──
 
-test("auth adapters and resolver never read process.env", () => {
+test("auth adapters and their selection never read process.env", () => {
   for (const f of [
     "app/lib/application/auth/jwtAuthAdapter.ts",
     "app/lib/application/auth/devAuthAdapter.ts",
-    "app/lib/application/auth/resolveAuthAdapter.ts",
     "app/lib/application/auth/noopProductionAuthAdapter.ts",
+    // WU-06 moved adapter SELECTION to the request composition root. The rule
+    // follows the code: the module that picks an implementation is exactly the
+    // module most tempted to read the environment to decide.
+    "app/lib/composition/authAdapterSelection.ts",
   ]) {
     assert.doesNotMatch(read(f), /process\.env/, `${f} must not read process.env`)
   }
 })
 
-test("session resolver derives config, never reading process.env directly", () => {
+test("the session use case reads no config at all — it is handed one", () => {
+  // Before WU-06 this asserted the use case RESOLVED the validated config when
+  // none was threaded in. It no longer resolves anything: the composition root
+  // owns that, and the use case receives already-resolved capabilities. The
+  // assertion is therefore stronger, not merely relocated — the use case may
+  // name neither `process.env` nor the runtime configuration module.
   const src = read("app/lib/application/auth/sessionResolver.ts")
   assert.doesNotMatch(src, /process\.env/)
-  assert.match(src, /resolveValidatedRequestRuntimeConfig|options\.auth/)
+  assert.doesNotMatch(src, /requestRuntimeConfig|resolveValidatedRequestRuntimeConfig/)
+  assert.match(src, /dependencies: SessionDependencies/)
+})
+
+test("the request composition root resolves config once and reads no process.env", () => {
+  const src = read("app/lib/composition/requestSession.ts")
+  assert.doesNotMatch(src, /process\.env/)
+  assert.match(src, /resolveValidatedRequestRuntimeConfig/)
 })
 
 test("route repository + control resolver read no ambient raw runtime env", () => {

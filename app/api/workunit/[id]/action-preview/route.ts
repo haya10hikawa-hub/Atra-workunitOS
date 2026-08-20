@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server.js"
-import { getSessionErrorStatus, requireSession } from "../../../../lib/security/session.ts"
+import { getSessionErrorStatus } from "../../../../lib/security/session.ts"
+import { requireSession } from "../../../../lib/composition/requestSession.ts"
 import { safeError } from "../../../../lib/security/safeErrors.ts"
 import { writeAuditLog, type AuditEventKind } from "../../../../lib/security/auditLog.ts"
 import { hashActionTarget, hashActionPayload } from "../../../../lib/security/hash.ts"

@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { normalizeRoleInput, RoleNormalizationError } from "../app/lib/security/policy.ts"
+import { normalizeRoleInput, RoleNormalizationError } from "../app/lib/domain/auth/roles.ts"
 
 test("valid role owner returns owner", () => { assert.equal(normalizeRoleInput("owner"), "owner") })
 test("valid role manager returns manager", () => { assert.equal(normalizeRoleInput("manager"), "manager") })

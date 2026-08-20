@@ -1,6 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { requireSession, createDevSessionWithRole } from "../app/lib/security/session.ts"
+import { createDevSessionWithRole } from "../app/lib/security/session.ts"
+import { requireSession } from "../app/lib/composition/requestSession.ts"
 import { hasPermission } from "../app/lib/security/rbac.ts"
 import type { WorkUnitPermission } from "../app/lib/security/policy.ts"
 import type { ToolBackendOperation } from "../app/types/toolBackend.ts"

@@ -22,7 +22,7 @@ import { loadSchemaContract, verifyDatabase } from "../scripts/lib/d1SchemaContr
 import { LOCAL_FIXTURE, seedLocalControlFixture } from "../scripts/lib/d1BootstrapFixture.mjs"
 import { runWithInjectedRuntimeEnv } from "../app/lib/runtime/requestRuntimeEnvInjection.ts"
 import { resolveValidatedRequestRuntimeConfig } from "../app/lib/runtime/requestRuntimeConfig.ts"
-import { requireSession } from "../app/lib/security/session.ts"
+import { requireSession } from "../app/lib/composition/requestSession.ts"
 import { resolveRouteRepositories } from "../app/lib/persistence/routeRepositories.ts"
 import type { AppEnv } from "../app/types/cloudflare-env.ts"
 import type { TenantId } from "../app/lib/tenant/types.ts"

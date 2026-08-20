@@ -4,32 +4,19 @@
  * Roles represent a user's organizational position within a tenant.
  * Permissions represent discrete actions that can be checked via policy functions.
  *
- * This module defines the *vocabulary* of roles and permissions.
- * Enforcement lives in `rbac.ts` and `policy.ts`.
+ * This module defines the *permission* vocabulary and the role ordering used by
+ * enforcement in `rbac.ts`. The role vocabulary itself — which role names exist,
+ * which legacy names map onto them, and what an invalid role is — is domain
+ * semantics and is owned by `app/lib/domain/auth/roles.ts`. The two aliases
+ * below name that domain vocabulary in this layer's own words; they add no
+ * declaration and no behaviour.
  */
 
-import type { LegacyTenantRole, TenantRole } from "../domain/auth/types.ts"
+import type { TenantRole } from "../domain/auth/types.ts"
+import type { TenantRoleInput } from "../domain/auth/roles.ts"
 
 export type WorkUnitRole = TenantRole
-export type WorkUnitRoleInput = TenantRole | LegacyTenantRole
-
-const VALID_ROLES: ReadonlySet<string> = new Set(["owner", "manager", "editor", "viewer"])
-
-export function normalizeRoleInput(role: WorkUnitRoleInput | undefined): WorkUnitRole {
-  if (role === "admin") return "manager"
-  if (role === "pm" || role === "member") return "editor"
-  if (role !== undefined && VALID_ROLES.has(role)) return role as WorkUnitRole
-  throw new RoleNormalizationError(role)
-}
-
-export class RoleNormalizationError extends Error {
-  public readonly input: unknown
-  constructor(input: unknown) {
-    super(`Cannot normalize role from input: ${String(input)}`)
-    this.name = "RoleNormalizationError"
-    this.input = input
-  }
-}
+export type WorkUnitRoleInput = TenantRoleInput
 
 export type WorkUnitPermission =
   | "workunit.read"
