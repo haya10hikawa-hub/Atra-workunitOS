@@ -220,6 +220,49 @@ N4  DATASET_PROVIDER_PROFILE_READINESS  NOT SATISFIED
 - **N3** — at least two **independent providers** represented in that dataset. Independent means separate provider systems. GitHub issues and GitHub pull requests are two resource classes of **one** provider and do not satisfy N3; a single-provider corpus makes cross-provider correlation unmeasurable, because provider-local structure is then indistinguishable from correlation signal.
 - **N4** — every provider represented in the dataset has a reviewed profile pair at the standard GitHub's two resources already meet: content-scope `PROVEN`, and identity either proven or carrying its own separately ratified PM-accepted scoped exception. A provider whose sources cannot become `SourceRecordV1` values contributes nothing to correlate.
 
+### `N4` — what is established, and the exact remaining binding
+
+Decision token: `ATRA_PM_P1_2_GMAIL_PHASE1_SCOPED_IDENTITY_EXCEPTION_ACCEPTED`
+
+```text
+N4 = NOT_SATISFIED
+N4_DATASET_PROVIDER_PROFILE_PREREQUISITE_SATISFIABLE_FOR_GITHUB_GMAIL_ROUTE
+```
+
+Two independent providers now hold a reviewed profile pair at the `N4` standard:
+
+```text
+GitHub  issue + pull request   content-scope PROVEN;  identity scoped exception, SOURCE_RECORD_V1_SEMANTICS.md §4.1 / §4.2
+Gmail   message                content-scope PROVEN;  identity scoped exception, SOURCE_RECORD_V1_SEMANTICS.md §4.4
+```
+
+**`N4` stays `NOT_SATISFIED`, and the reason is structural rather than a shortfall in either profile.**
+`N4` is quantified over "every provider represented in **the dataset**". No dataset is frozen — `N2` is
+unsatisfied — so there is no provider set to quantify over and the condition cannot be evaluated as met.
+A pair of ready profiles is a *prerequisite* the route now clears; it is not the condition itself.
+
+The remaining binding is therefore exact: **`N4` becomes satisfied when, and only when, `N2` freezes a
+dataset whose represented providers are drawn entirely from those holding a reviewed pair.** For the
+selected GitHub + Gmail route that set is already covered, so no further profile work stands between
+this route and `N4`. A dataset that admits a third provider — Slack, Google Calendar or any other —
+re-opens `N4` for that provider, because every gate outside the six reviewed profiles stays
+`REQUIRED_UNPROVEN`.
+
+Nothing here satisfies `N2` or `N3`, and neither is advanced by a profile: `N3` requires two independent
+providers **represented in the dataset**, not two providers holding profiles. `P1_2_ENTRY_STATUS` stays
+`NOT_READY`.
+
+The Gmail acceptance is a **third** scoped exception, not either GitHub exception extended. This document
+already records that bringing a second provider under `N4` is itself a new scoped-exception decision if
+its identity cannot be proven; that decision has now been taken for Gmail, on Gmail's own evidence, and
+it reopened neither GitHub residual set. Gmail's own residuals `G-R2`–`G-R5` stay unproven and may not be
+promoted, and its one-mailbox, non-draft, REST-hex bounds travel with the exception.
+
+**Gmail acquisition does not exist.** A reviewed profile states what an acquisition would have to
+satisfy. It is not a capability and not permission to build one: no Gmail module, capture, transport,
+credential flow or `SourceRecordV1` exists, and `ACQUISITION_SCOPE_CHANGE_REQUIRED` stays `YES` for
+Gmail.
+
 Dataset acquisition that touches human conversational or calendar content is **human-only work**. Such content is not to be routed through any AI assistant, including the assistant used to author repository changes. This constraint governs how N2 and N3 are satisfied and is not waived by convenience.
 
 Classified out of entry:
@@ -437,6 +480,29 @@ Before this decision P1-1 carried a status with no exit test and P1-2 had no ent
 - correction of this document's post-snapshot facts to the post-PR-#231 tree.
 
 Allowlist expansion: **0**. Runtime changes: **0**. `app/**` changes: **0**. It authorizes no implementation WorkUnit, and `P1_1_STATUS = COMPLETE` is not entry into P1-2.
+
+### `ATRA_PM_P1_2_GMAIL_PHASE1_SCOPED_IDENTITY_EXCEPTION_ACCEPTED`
+
+Decided against the Gmail Message identity determination, and made repository-controlled in a bounded
+governance WorkUnit at base `main` `3a2bf3cbbffd304d7db4a0eb5a7d5058ae2d3402`.
+
+Before this decision Gmail's identity and content determinations existed outside the repository, so a
+second-provider route rested on evidence no reader of `main` could audit and no test could hold. The PM
+accepted a Phase-1 scoped identity exception for the Gmail Message resource, and this WorkUnit recorded
+it, independently re-verified the content half against Google's published contract, and pinned both:
+
+- `docs/architecture/GMAIL_MESSAGE_ACQUISITION_PROFILE.md` — the reviewed profile pair, its residual
+  registers, the exact approved scope and the revisit triggers;
+- `SOURCE_RECORD_V1_SEMANTICS.md` §4.4 — the third scoped identity exception, reviewed on its own
+  evidence and inheriting neither GitHub one, with `G-R2`–`G-R5` unproven;
+- `SOURCE_RECORD_V1_SEMANTICS.md` §4.3 — the `gmail` placeholder resolved into `gmail_message`, the
+  generic member removed from the canonical vocabulary as `github` was;
+- the [`N4` binding](#n4--what-is-established-and-the-exact-remaining-binding) above.
+
+Allowlist expansion: **0**. Runtime capability added: **0** — one closed-vocabulary member was resolved,
+and no producer, acquisition, transport or credential path exists for Gmail. `N2`, `N3` and `N4` are all
+unchanged at `NOT SATISFIED`, and `P1_2_ENTRY_STATUS` stays `NOT_READY`. It authorizes no implementation
+WorkUnit and does not begin P1-2.
 
 ### This record — `P0_AUTHORITY_SYNC`
 

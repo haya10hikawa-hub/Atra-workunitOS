@@ -308,7 +308,8 @@ could not be misfiled under a widened namespace, not that any record may be prod
 | `github_pull_request` | L1 | `HIGH` | `content=PROVEN` `identity=PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL` | `YES` — the one built path | `MEDIUM` | implementation artifact and its review state | none; producing today |
 | GitHub, other resources | L1 | `MEDIUM` | `both=REQUIRED_UNPROVEN` | `NO` — no reviewed profile | `LOW` | comment/review/commit granularity | a reviewed profile WorkUnit, if a phase needs it |
 | `slack` | L2 | `HIGH` | `both=REQUIRED_UNPROVEN` | `NO` — no reviewed profile | `CRITICAL` | request, blocker, urgency, commitment | a reviewed profile WorkUnit |
-| `gmail` | L2 | `HIGH` | `both=REQUIRED_UNPROVEN_UNRECORDED` | `NO` — no reviewed profile | `HIGH` | external formal commitment and deadline | a reviewed profile WorkUnit |
+| `gmail_message` | L2 | `HIGH` | `content=PROVEN` `identity=PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL` | `NO` — no acquisition path exists | `HIGH` | external formal commitment and deadline | none authorized; Gmail acquisition does not exist and needs a Product Authority decision |
+| Gmail, other resources | L2 | `UNASSESSED` | `both=REQUIRED_UNPROVEN` | `NO` — no reviewed profile | `UNASSESSED` | thread, draft, label and attachment granularity | a reviewed profile WorkUnit, if a phase needs it |
 | `notion` | L3 | `HIGH` | `both=REQUIRED_UNPROVEN_UNRECORDED` | `NO` — no reviewed profile | `HIGH` | goal, spec, done condition, rationale | a reviewed profile WorkUnit |
 | `google_drive` | L3 | `MEDIUM` | `both=REQUIRED_UNPROVEN_UNRECORDED` | `NO` — no reviewed profile | `MEDIUM` | durable artifact evidence | a reviewed profile WorkUnit |
 | `meeting_transcript` | L4 | `MEDIUM` | `both=REQUIRED_UNPROVEN_UNRECORDED` | `NO` — no reviewed profile | `HIGH` | decision, rejected alternative, commitment | a reviewed profile WorkUnit |
@@ -321,9 +322,24 @@ could not be misfiled under a widened namespace, not that any record may be prod
 the user's own session and L7 produces outcomes. Neither is a candidate for `SourceRecordV1`, and
 neither gains one by later work in this series.
 
-The two `PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL` values are two **separately ratified**
-resource-scoped exceptions, `SOURCE_RECORD_V1_SEMANTICS.md` §4.1 and §4.2. Neither is a template a
-third resource or provider may fill in, and their rejection and acceptance reasons are never merged.
+`UNASSESSED` in a product column is this document's own label for **no recorded product judgment**,
+and it is restrictive in the same way the two local eligibility labels are. An aggregate row standing
+for every unreviewed resource of a provider at once has no one population a judgment could honestly be
+about, and filling the cell anyway would manufacture product priority out of table shape. It is never
+read as `LOW`, and a row leaves it only by a judgment recorded for a named resource.
+
+The three `PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL` values are three **separately ratified**
+resource-scoped exceptions — `SOURCE_RECORD_V1_SEMANTICS.md` §4.1 for `github_issue`, §4.2 for
+`github_pull_request` and §4.4 for `gmail_message`. Each was ratified on its own resource's evidence,
+and none of them is a template a fourth resource or provider may fill in. They are three exceptions,
+not one precedent wearing three labels and not one exception extended to further resources: their
+rejection and acceptance reasons are never merged, and §4.4 inherited neither §4.1 nor §4.2.
+
+**A reviewed profile pair is not an acquisition capability.** `gmail_message` copies the same
+eligibility pair as the two GitHub resources and its `Impl. Readiness` stays `NO`, because no Gmail
+acquisition module, capture, transport or credential flow exists and none is authorized here. The
+`YES` on the two GitHub rows records a path that is actually built; eligibility never produces one,
+and a reviewed profile states what an acquisition would have to satisfy rather than permitting it.
 
 ## Product Compositions
 

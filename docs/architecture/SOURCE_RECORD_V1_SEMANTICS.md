@@ -114,20 +114,26 @@ obligation, never a permission:
 ```text
 GitHub issue identity profile              = PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL
 GitHub pull request identity profile       = PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL
+Gmail message identity profile             = PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL
 GitHub identity profile, other resources   = REQUIRED_UNPROVEN
+Gmail identity profile, other resources    = REQUIRED_UNPROVEN
 Slack identity profile                     = REQUIRED_UNPROVEN
 Google Calendar identity profile           = REQUIRED_UNPROVEN
 
 GitHub issue content-scope profile             = PROVEN
 GitHub pull request content-scope profile      = PROVEN
+Gmail message content-scope profile            = PROVEN
 GitHub content-scope profile, other resources  = REQUIRED_UNPROVEN
+Gmail content-scope profile, other resources   = REQUIRED_UNPROVEN
 Slack content-scope profile                    = REQUIRED_UNPROVEN
 Google Calendar content-scope profile          = REQUIRED_UNPROVEN
 ```
 
-`other resources` means every GitHub resource except issues and pull requests — comments, reviews,
-commits, repositories and the rest. Two reviewed resources do not make a third one reviewed, and the
-gate above is the record of that.
+`other resources` means, for GitHub, every resource except issues and pull requests — comments,
+reviews, commits, repositories and the rest; and for Gmail, every resource except messages — threads,
+drafts, labels, attachments, history and settings. Two reviewed resources do not make a third one
+reviewed, and one reviewed resource does not make its provider reviewed. The gates above are the
+record of that.
 
 `REQUIRED_UNPROVEN` means: the generic semantics in sections 2 and 3 are ratified, and that
 provider has not been shown to satisfy them. This document asserts no provider identity field and
@@ -136,13 +142,20 @@ provider-contract verification against the provider's own published contract, re
 ratified in a separately authorized profile WorkUnit. Until such a WorkUnit lands, a gate moving
 out of `REQUIRED_UNPROVEN` is a defect.
 
+The two Gmail message gates are recorded in `docs/architecture/GMAIL_MESSAGE_ACQUISITION_PROFILE.md`,
+and their scope is **non-draft Gmail messages in a single mailbox only**, under the exact profile
+versions named there. Gmail is the first provider other than GitHub to reach a reviewed profile pair,
+and it reached it on its own evidence: §4.4 is a third scoped exception, not either GitHub exception
+extended to a new provider.
+
 The two issue gates are recorded in `docs/architecture/GITHUB_ISSUE_ACQUISITION_PROFILE.md`, and their
 scope is **GitHub issues only**, under the exact profile versions named there. The two pull request
 gates are recorded in `docs/architecture/GITHUB_PULL_REQUEST_ACQUISITION_PROFILE.md`, and their scope
-is **GitHub pull requests only**. Neither document says anything about the other's resource: they are
-siblings, and the second was reviewed on its own evidence rather than admitted on the first's
-precedent. Together they say nothing about GitHub comments, reviews, commits or repositories, nothing
-about Slack or Google Calendar, and nothing about any other profile version. A gate widening beyond
+is **GitHub pull requests only**. No one of these documents says anything about another's
+resource: they are siblings, and each later one was reviewed on its own evidence rather than admitted
+on an earlier one's precedent. Together they say nothing about GitHub comments, reviews, commits or
+repositories, nothing about Gmail threads, drafts, labels or attachments, nothing about Slack or
+Google Calendar, and nothing about any other profile version. A gate widening beyond
 its recorded scope without a further reviewed profile is the same defect as a gate moving out of
 `REQUIRED_UNPROVEN`.
 
@@ -151,13 +164,13 @@ load-bearing. The content-scope gates are `PROVEN`. The identity gates are **not
 `PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL`, which is the scoped exception recorded in §4.1 for
 issues and in §4.2 for pull requests.
 
-There are now two exceptions of that kind, and each required its own ratified decision. A third
-requires a third; none of them is a template the next resource may fill in.
+There are now three exceptions of that kind, and each required its own ratified decision. A fourth
+requires a fourth; none of them is a template the next resource or provider may fill in.
 
 ### 4.1 Scoped exception — GitHub Issue, identity profile v1, Phase-1 only
 
 This was the first exception of its kind in this document, and each further one requires a further
-ratified decision. §4.2 records the second.
+ratified decision. §4.2 records the second and §4.4 the third.
 
 ```text
 scope       GitHub Issues only, profile github.issue.rest.database-primary-key v1,
@@ -288,10 +301,30 @@ namespace must be right *before* correlation is attempted, or the experiment can
 **What was not introduced.** No generalized namespace model. `SourceRecordV1` gains no
 `providerNamespace` field and no fourth identity component; the record's field set, order and
 optionality are unchanged, and identity remains exactly the three values above. The namespace
-vocabulary is a closed union, and the only members that are resource-scoped are the two that a
-reviewed profile actually covers. Members for providers with no ratified profile stay provider-level
-and are unreachable by any producer — they are resolved by the WorkUnit that reviews that provider,
-not by analogy with GitHub.
+vocabulary is a closed union, and the only members that are resource-scoped are those a reviewed
+profile actually covers. Members for providers with no ratified profile stay provider-level and are
+unreachable by any producer — they are resolved by the WorkUnit that reviews that provider, not by
+analogy with GitHub.
+
+**The Gmail placeholder has since been resolved that way, and it is the first non-GitHub one.** Gmail
+messages reached a reviewed profile pair (§4.4), so the provider-level `gmail` member was resolved
+into the resource-scoped `gmail_message` and, exactly as `"github"` was, **`gmail` ceased to be a
+member of the canonical vocabulary at all**. Producer-unreachability is therefore guaranteed by
+non-existence rather than by convention, and `ACCEPTED_PROVIDERS` follows the union at compile time
+because it is typed `Record<SourceIdentityNamespace, true>`.
+
+One member was added, for one resource class. `gmail_thread`, `gmail_draft` and `gmail_attachment`
+were **not** added: no profile reviews those resources. The resolution was performed because a review
+happened, not because GitHub's shape was available to copy — which is the same rule stated the other
+way round. `SourceType`, the application's separate integration vocabulary, keeps its own `gmail`
+member and is untouched; the two unions answer different questions and neither is derived from the
+other.
+
+A namespace names a **key space**; a profile names a **population inside it**, and the two need not be
+the same width. `gmail_message` is the space Gmail's `Message.id` values are drawn from, and
+draft-stage messages draw ids from that same space — which is why the namespace is not split at the
+draft boundary even though §4.4 excludes drafts. A producer emitting a draft-stage message under
+`gmail_message` would be emitting under **no reviewed profile at all**, not under a permissive one.
 
 **Revisit trigger.** The generalized namespace model is reconsidered at the earlier of: a third
 canonical GitHub resource becoming necessary, or canonical persistence beginning. Until one of those
@@ -303,6 +336,89 @@ other provider member — may be measured at Phase 1 as a **non-canonical observ
 profile documents record such observations. `OBSERVED_STABILITY` is not `PROVIDER_PROOF`. No number of
 consistent observations closes a residual, and no provider-specific observation field may be added to
 `SourceRecordV1` to hold one.
+
+### 4.4 Scoped exception — Gmail Message, identity profile v1, Phase-1 only
+
+The third exception of its kind, the first for a provider other than GitHub, ratified separately from
+§4.1 and §4.2 and resting on its own review.
+
+```text
+scope       Gmail Messages only, profile gmail.message.rest.message-id v1,
+            non-draft messages in exactly ONE Gmail mailbox,
+            Gmail REST API hex representation only,
+            Phase-1 bounded experimental use only
+state       PHASE1_SCOPED_ACCEPTED_WITH_UNPROVEN_RESIDUAL
+```
+
+**What is not proven.** Section 2 requires every identity component to be provider-issued and
+provider-immutable for the object's lifetime, and a per-provider profile to establish that from
+provider authority. For the Gmail message identifier the picture is uneven, and the unevenness is the
+point: four requirements stay unproven and two are closed, and all six are stated in full in
+`docs/architecture/GMAIL_MESSAGE_ACQUISITION_PROFILE.md`:
+
+```text
+G-R1  Message.id lifetime immutability                    PROVEN     (contract term)
+G-R2  Message.id uniqueness scope beyond one mailbox      UNPROVEN   ← load-bearing
+G-R3  non-reuse of a Message.id after deletion            UNPROVEN
+G-R4  provider-backed collision guarantee for the id space UNPROVEN
+G-R5  provider issuance of Message.id                     UNPROVEN
+G-R6  IMAP / web / API cross-surface value equivalence    PROVEN     (contract term)
+```
+
+`G-R1` and `G-R6` are graded `PROVEN` because Google asserts them in its own published contract —
+"The immutable ID of the message", and an explicit statement that the IMAP, web and API surfaces carry
+the same value in different bases. Neither is a behavioural proof. `G-R2`–`G-R5` are unproven because
+Google is **silent**, not because Google says otherwise; nothing here is `DISPROVEN`. **`G-R2`–`G-R5`
+may not be promoted**, and closing one requires Google publishing authority reviewed in a separately
+authorized WorkUnit.
+
+**The bound is the substance of this exception.** `G-R2` is load-bearing and cannot be repaired by
+composition, because the Gmail API exposes no admissible mailbox component at all: `userId = "me"` is
+acquisition-credential identity, the primary email address is a mutable display-and-routing value that
+section 2 forbids outright, the `Profile` schema contains no immutable account or mailbox identifier,
+and an Atra tenant id is Atra-minted. So the route rests on `Message.id` alone or not at all. Google
+*has* asserted uniqueness within one mailbox, so a corpus restricted to **one Gmail mailbox** sits
+entirely inside the guarantee Google actually made and never relies on the unproven half of `G-R2`.
+The moment a second mailbox enters the corpus, that bound is breached.
+
+**Two further scope bounds travel with it and are not annotations.** Draft-stage messages are
+excluded, because Google documents that a draft's underlying message ids "change every time the
+message is replaced" — so the class is not homogeneous in identity stability and this exception fails
+closed on the sub-class. And the key binds to the **Gmail REST API hex string, byte-for-byte**: the
+surfaces agree on the value and differ in base, and section 2 forbids every form of normalization, so
+mixing surfaces or re-basing would produce two canonical keys for one message.
+
+**Who accepted it.** The human PM reviewed `G-R1`–`G-R6` and accepted the residual explicitly, as a
+product decision to proceed at Phase 1 while knowing what is not known, under decision token
+`ATRA_PM_P1_2_GMAIL_PHASE1_SCOPED_IDENTITY_EXCEPTION_ACCEPTED`. Acceptance is not evidence: it
+discharges none of `G-R2`–`G-R5`, and none of them may be rewritten as proven on its strength.
+
+**It did not inherit §4.1 or §4.2.** Those grant nothing to any other provider and are no precedent.
+This exception was reviewed on Gmail's own terms and differs from both in kind: GitHub's residual set
+is dominated by unstated immutability, Gmail's by unstated uniqueness scope. They are not one risk
+wearing one label, and the one-mailbox bound that disposes of Gmail's would do nothing for GitHub's.
+
+**What it is not.** It is not a uniqueness proof, a non-reuse proof, a production identity
+certification, an authorization for any other Gmail resource, for a second mailbox, for another
+representation, or for live provider reads, and it is no precedent any further provider or profile may
+claim.
+
+**Expiration and revisit.** The exception expires when Phase-1 bounded experimental use ends, and is
+reopened before then by: a second Gmail mailbox; another Gmail resource class; another identity
+representation; an identity profile version bump; a new Google identity authority publication;
+evidence contradicting `G-R1` or `G-R6` or a relied-upon assumption; persisting, correlating or
+deduplicating on `providerObjectKey` beyond Phase-1 bounded experimental use; or production use beyond
+Phase 1.
+
+As in §4.1 and §4.2, "beyond Phase-1 bounded experimental use" governs all three verbs, so bounded
+Phase-1 correlation does not reopen this exception either —
+`P1_2_DOES_NOT_REOPEN_PHASE1_IDENTITY_EXCEPTIONS`.
+
+**What is unchanged.** The generic semantics in sections 2 and 3 are untouched by this exception. The
+Gmail message content-scope gate is `PROVEN` on its own evidence and is not dragged down by these
+residuals — they are statements about identity and touch no digest — and the proven content half is
+not an argument for the identity exception either. Every gate still reading `REQUIRED_UNPROVEN` is
+unaffected, including every other Gmail resource.
 
 ## 5. Acquisition Consequence
 
@@ -332,6 +448,13 @@ produced from a retained real capture of each, in two distinct canonical identit
 resource has its own acquisition module: acquisition was extended by review, not generalized into a
 provider plugin surface a caller could parameterize. For every other provider and every remaining
 GitHub resource, acquisition scope is unchanged and `ACQUISITION_SCOPE_CHANGE_REQUIRED` stays `YES`.
+
+**Gmail is the case that separates a reviewed profile from a capability, and it must not be misread.**
+Gmail messages hold a reviewed profile pair (§4.4) and a canonical namespace, and Gmail acquisition
+does **not** exist: no module, no capture, no transport, no credential flow, no retained bytes and no
+`SourceRecordV1`. `ACQUISITION_SCOPE_CHANGE_REQUIRED` stays `YES` for Gmail. A reviewed profile states
+what an acquisition would have to satisfy; it is not permission to build one, and building one is a
+separately authorized WorkUnit.
 
 ## 6. Explicit Non-Goals
 
@@ -367,9 +490,9 @@ claim about the current tree.
 | --- | --- |
 | a `SourceRecordV1` producer, adapter, consumer or persistence path | A **producer and one consumer of it** exist: `app/lib/application/source/sourceRecordProduction.ts` produces the record from an acquisition capture, and it is the only production module that imports `app/lib/domain/source/`. No persistence path exists |
 | content canonicalization or digest computation | A digest is computed at `app/lib/infrastructure/external/github/recordedIssueCapture.ts` and at `app/lib/infrastructure/external/github/recordedPullRequestCapture.ts`, over retained provider bytes under the identity canonicalization |
-| any provider profile, provider call or provider credential flow | Four GitHub profiles are reviewed and in use, two per resource: for **issues** and for **pull requests**, content-scope is proven and identity carries a scoped exception — §4.1 and §4.2 respectively. No provider call and no credential flow exists in `app/**`: acquisition reads a retained capture and never the network |
-| proving any GitHub, Slack or Google Calendar provider contract | GitHub's **content** contract is proven for issues and for pull requests. GitHub's **identity** contract is **not** proven for either — issues are accepted under §4.1 with R1–R5 unproven, pull requests under §4.2 with P-R1–P-R5 unproven. Slack and Google Calendar remain unproven |
+| any provider profile, provider call or provider credential flow | Six profiles are reviewed. Four are GitHub's, two per resource, and both pairs are **in use**: for **issues** and for **pull requests**, content-scope is proven and identity carries a scoped exception — §4.1 and §4.2. Two are **Gmail message** profiles, reviewed and **not in use**: no Gmail acquisition exists at all. No provider call and no credential flow exists in `app/**`: acquisition reads a retained capture and never the network |
+| proving any GitHub, Slack or Google Calendar provider contract | GitHub's **content** contract is proven for issues and for pull requests. GitHub's **identity** contract is **not** proven for either — issues are accepted under §4.1 with R1–R5 unproven, pull requests under §4.2 with P-R1–P-R5 unproven. **Gmail's** content contract is proven for messages, and its identity contract is **not** proven — accepted under §4.4 with G-R2–G-R5 unproven. Slack and Google Calendar remain unproven, and the Google Calendar identity route was examined and rejected on Google's own text without moving either Calendar gate |
 | raw provider payload retention | Retention exists, inline and immutable, under `acquisitions/` |
-| expanding the canonical record declaration allowlist | Unchanged. No new canonical record was declared. The record's `provider` field changed type — from the application `SourceType` to the canonical `SourceIdentityNamespace` — under §4.3; the field set, order, optionality and identity tuple are unchanged, and no field was added |
+| expanding the canonical record declaration allowlist | Unchanged. No new canonical record was declared. The record's `provider` field changed type — from the application `SourceType` to the canonical `SourceIdentityNamespace` — under §4.3, and that union's membership has since moved twice as providers were reviewed: `github` was resolved into `github_issue` and `github_pull_request`, and `gmail` into `gmail_message`. The field set, order, optionality and identity tuple are unchanged, and no field was added |
 | starting P1-2, or `CorrelationGroupV1` / `WorkUnitCandidateV1` / `WorkUnitCorrectionV1` | Unchanged. None exists |
 | marking P1-1 complete | **Crossed by the Product Authority, not by this document.** Under `ATRA_PM_P1_1_EXIT_AND_P1_2_ENTRY_RATIFIED` the PM ratified a P1-1 exit criterion and evaluated P1-1 against it. The tree is unchanged by that ratification — still two provider resources of one provider, one acquisition mode, no persistence and no consumer beyond production; each of those was classified `NOT_REQUIRED_FOR_P1_1` or `DEFERRED` rather than delivered. P1-1's status is declared in `docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md` and never here |
