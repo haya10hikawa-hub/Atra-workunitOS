@@ -12,13 +12,24 @@ import { FakeD1Database } from "./helpers/fakeD1.ts"
 import { resolveControlRepositories } from "../app/lib/infrastructure/persistence/control/controlRepositoryResolver.ts"
 import type { UserId } from "../app/lib/tenant/types.ts"
 import { signHs256Jwt } from "./helpers/jwt.ts"
+import { seedDevControlWorkspace } from "./helpers/devControlWorkspace.ts"
 
 const tenantId = "dev-tenant" as TenantId
 const JWT_SECRET = "test-jwt-secret-with-at-least-32-bytes"
 const JWT_ISSUER = "https://auth.example.test"
 const JWT_AUDIENCE = "workunit-os-test"
 
-async function withRoutePersistence(testFn: (db: FakeD1Database) => Promise<void>) {
+/**
+ * Dev-session route runtime. `role` is threaded to BOTH the dev policy and the
+ * seeded membership, because tenant and role are resolved from the membership
+ * row. Before WU-06 a test could set `DEV_SESSION_ROLE` inside the callback and
+ * the per-request GET bootstrap would mint a membership at that role; the
+ * workspace is now seeded once, up front, so the role has to be chosen here.
+ */
+async function withRoutePersistence(
+  testFn: (db: FakeD1Database) => Promise<void>,
+  role: "owner" | "manager" | "editor" | "viewer" = "owner",
+) {
   const db = new FakeD1Database()
   const envBackup = {
     NODE_ENV: process.env.NODE_ENV,
@@ -33,12 +44,13 @@ async function withRoutePersistence(testFn: (db: FakeD1Database) => Promise<void
     process.env.AUTH_ADAPTER = "dev"
     process.env.ALLOW_DEV_SESSION = "true"
     process.env.ALLOW_DEV_WORKSPACE_BOOTSTRAP = "true"
-    delete process.env.DEV_SESSION_ROLE
+    process.env.DEV_SESSION_ROLE = role
     process.env.PERSISTENCE_MODE = "d1"
     setTestRuntimeEnvForRequest({
       CONTROL_DB: db,
       TENANT_DB_DEFAULT: db,
     } as AppEnv)
+    await seedDevControlWorkspace(db, role)
     await testFn(db)
   } finally {
     restoreEnv(envBackup)
@@ -321,7 +333,6 @@ test("feedback route ignores client actor and tenant overrides", async () => {
 
 test("feedback route rejects viewer role even in explicit dev session", async () => {
   await withRoutePersistence(async () => {
-    process.env.DEV_SESSION_ROLE = "viewer"
     const response = await feedbackPost(
       new Request("http://localhost:3000/api/workunit/wu-viewer/feedback", {
         method: "POST",
@@ -331,15 +342,14 @@ test("feedback route rejects viewer role even in explicit dev session", async ()
       { params: Promise.resolve({ id: "wu-viewer" }) },
     )
     assert.equal(response.status, 403)
-  })
+  }, "viewer")
 })
 
 test("integration status route allows viewer role in explicit dev session", async () => {
   await withRoutePersistence(async () => {
-    process.env.DEV_SESSION_ROLE = "viewer"
     const response = await integrationsStatusGet(new Request("http://localhost/api/integrations/status"))
     assert.equal(response.status, 200)
-  })
+  }, "viewer")
 })
 
 test("inbox route works with jwt auth and seeded membership", async () => {

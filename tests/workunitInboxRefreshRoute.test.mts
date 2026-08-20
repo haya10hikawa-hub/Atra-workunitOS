@@ -19,6 +19,7 @@ import type { AppEnv } from "../app/types/cloudflare-env.ts"
 import type { SessionContext } from "../app/lib/domain/auth/types.ts"
 import { FakeD1Database } from "./helpers/fakeD1.ts"
 import { signHs256Jwt } from "./helpers/jwt.ts"
+import { seedDevControlWorkspace } from "./helpers/devControlWorkspace.ts"
 
 const ORIGIN = "http://localhost:3000"
 // Branded types derived from existing signatures: this file adds no
@@ -58,6 +59,9 @@ async function withRole(role: Role, run: (db: FakeD1Database) => Promise<void>):
       ALLOW_DEV_WORKSPACE_BOOTSTRAP: "true", PERSISTENCE_MODE: "d1", DEV_SESSION_ROLE: role,
     })
     setTestRuntimeEnvForRequest({ CONTROL_DB: db, TENANT_DB_DEFAULT: db } as AppEnv)
+    // WU-06: seed the workspace at the harness's role rather than relying on a
+    // safe request to bootstrap it. Role still comes from the membership row.
+    await seedDevControlWorkspace(db, role)
     await run(db)
   } finally {
     resetTestRuntimeEnvForRequest()

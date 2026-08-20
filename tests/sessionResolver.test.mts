@@ -156,20 +156,27 @@ test("suspended or invited membership does not grant active access", async () =>
   })
 })
 
+// WU-06: the request is a POST. Dev bootstrap is a durable write, and the
+// composition root now hands the bootstrap capability to mutation methods only,
+// so a GET here would exercise the read-only path instead of the bootstrap this
+// test exists to cover. The dev GATES under test are unchanged.
+// `safeMethodSessionCapability.test.mts` owns the safe-method side.
 test("dev bootstrap works only with explicit bootstrap flag", async () => {
   await withAuthEnv(async (db) => {
     process.env.ALLOW_DEV_WORKSPACE_BOOTSTRAP = "true"
-    const result = await requireSession(new Request("http://localhost"))
+    const result = await requireSession(new Request("http://localhost", { method: "POST" }))
     assert.equal(result.ok, true)
     const memberships = db.debugTable("tenant_memberships")
     assert.equal(memberships.length, 1)
   })
 })
 
+// Same POST for the same reason: with a GET this would pass for the WRONG
+// reason — the method gate, not the absent dev flag it is asserting on.
 test("dev bootstrap disabled means no auto-create", async () => {
   await withAuthEnv(async (db) => {
     delete process.env.ALLOW_DEV_WORKSPACE_BOOTSTRAP
-    const result = await requireSession(new Request("http://localhost"))
+    const result = await requireSession(new Request("http://localhost", { method: "POST" }))
     assert.equal(result.ok, false)
     if (!result.ok) assert.equal(result.reason, "unauthorized")
     const repos = resolveControlRepositories({ d1Binding: db })

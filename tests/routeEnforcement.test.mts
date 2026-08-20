@@ -74,7 +74,11 @@ test("requireSession returns session in dev with explicit adapter and bootstrap"
       await withEnv("AUTH_ADAPTER", "dev", async () => {
         await withEnv("ALLOW_DEV_SESSION", "true", async () => {
           await withEnv("ALLOW_DEV_WORKSPACE_BOOTSTRAP", "true", async () => {
-            const result = await requireSession()
+            // WU-06: an argument-free `requireSession()` defaults to a GET, and
+            // a safe method no longer carries the bootstrap capability. This
+            // test is about the dev GATES, so it passes the mutation method the
+            // bootstrap path actually serves.
+            const result = await requireSession(new Request("http://localhost", { method: "POST" }))
             assert.equal(result.ok, true)
             if (result.ok) {
               assert.equal(result.session.role, "owner")
