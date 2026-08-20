@@ -5,32 +5,32 @@
     {
       "key": "app/api/audit/recent/route.ts#GET",
       "handlerHash": "60f8f4f0cea922a1cae83a41b2cce61012660c2fb3747ad1f18323f7d00207d9",
-      "routeHash": "f656cd8857c7c08e1743c18003c5823127a1aaa2b2fee677fe60f10319dff6b1"
+      "routeHash": "f688c9c50263c4769f881485ea17eec250b7d34c432cf9eb56cd74509ebc46c3"
     },
     {
       "key": "app/api/integrations/status/route.ts#GET",
       "handlerHash": "c4cd863f62f3df71c455b088d85f402aed1de1b25daf611b9635019ac728a3a1",
-      "routeHash": "aea597a4d8e09e2b970ae26511d2fd65cc65b21685f435cd96b6fc07162c754a"
+      "routeHash": "3a6a665bde314d5ff5e599ad046ea0fef6ed7a714e2a0af495b673b09fb358e5"
     },
     {
       "key": "app/api/workunit/[id]/approval/route.ts#GET",
       "handlerHash": "8ee65fada6675e75913adaac23aed6f4c96e8fcb5f802a420ce87eb933cb9003",
-      "routeHash": "e390072e6c1faa6fc6ce2e6e778bdaaa8eda309d786d297a1412ef6f1fa0fff6"
+      "routeHash": "07cf7ff011b7115dd252cb79462d1a6ffe1004c6411dee64fde320b814cf319c"
     },
     {
       "key": "app/api/workunit/[id]/approval/status/route.ts#GET",
       "handlerHash": "c3d138873c7237fbb9392e0979c8c37b12fdf48115773ed35ae3fc6e918c6c66",
-      "routeHash": "0cfe8d3833dfda6c1227631c43eb54883f4d6ec92927f6e85b4668a9e67e0f64"
+      "routeHash": "d5b3e264abd3b9062d07e96db7bd235ab691d66a0dfc2fb745a6d0864f5375fe"
     },
     {
       "key": "app/api/workunit/inbox/route.ts#GET",
       "handlerHash": "21cf5dbdafe002f70450c37ddaf159e6fc0f1b1f9e1a4150845de72788f487d8",
-      "routeHash": "d005522fc7986c1b33ccacae8bef3f60e543e2cc34160cd61f97cbb45e01f438"
+      "routeHash": "88195b01c4b0915761f87e4f6444c7b2b1a5e6e828f66ab9a2ca886d3d44d0fe"
     },
     {
       "key": "app/api/workunit/tools/route.ts#GET",
       "handlerHash": "48b66dba3d79dd03d62a6f69775e747f3e2c3ba77039a334420226596fb9b766",
-      "routeHash": "10facbe66f216c7127a18fdb8e89d5f454dc85032309e9755b682347f1a910dd"
+      "routeHash": "5c7e5a08fba4f639c6097717d678855b3f34d65a19ab8d913bf68afed49dac51"
     }
   ],
   "reviewedStateChangingSafeHandlers": []

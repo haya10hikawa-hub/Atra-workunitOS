@@ -1,11 +1,13 @@
-import type { AuthAdapter } from "./authAdapter.ts"
-import { DevAuthAdapter } from "./devAuthAdapter.ts"
-import { JwtAuthAdapter } from "./jwtAuthAdapter.ts"
-import { NoopProductionAuthAdapter } from "./noopProductionAuthAdapter.ts"
-import type { AuthRuntimeConfig } from "../../runtime/requestRuntimeConfig.ts"
+import type { AuthAdapter } from "../application/auth/authAdapter.ts"
+import { DevAuthAdapter } from "../application/auth/devAuthAdapter.ts"
+import { JwtAuthAdapter } from "../application/auth/jwtAuthAdapter.ts"
+import { NoopProductionAuthAdapter } from "../application/auth/noopProductionAuthAdapter.ts"
+import type { AuthRuntimeConfig } from "../runtime/requestRuntimeConfig.ts"
 
 /**
  * Resolve the auth adapter from the request-scoped validated auth config. This
+ * selection is composition-owned: the application session path receives the
+ * chosen `AuthAdapter` and can no longer pick an implementation itself. This
  * function NEVER reads `process.env`; the adapter selection and all secrets come
  * from the validated config.
  *

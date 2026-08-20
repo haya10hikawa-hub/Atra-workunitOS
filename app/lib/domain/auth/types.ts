@@ -34,6 +34,19 @@ export type AuthProviderIdentity = {
   updatedAt: string
 }
 
+/**
+ * Why a session could not be established. Owned by the domain so the security
+ * boundary can map it to a transport status without depending on the
+ * application use case that produces it.
+ */
+export type SessionResolutionFailureReason =
+  | "unauthorized"
+  | "forbidden"
+  | "expired"
+  | "invalid_tenant"
+  | "invalid_role"
+  | "internal_error"
+
 export type SessionContext = {
   userId: UserId
   tenantId: TenantId

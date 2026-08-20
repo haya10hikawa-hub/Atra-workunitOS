@@ -7,7 +7,7 @@ import {
   projectLlmEnv,
 } from "../app/lib/runtime/requestRuntimeConfig.ts"
 import { runWithInjectedRuntimeEnv } from "../app/lib/runtime/requestRuntimeEnvInjection.ts"
-import { requireSession } from "../app/lib/security/session.ts"
+import { requireSession } from "../app/lib/composition/requestSession.ts"
 import { resolveControlRepositories } from "../app/lib/infrastructure/persistence/control/controlRepositoryResolver.ts"
 import { resolveLlmProvider, resolveLlmProviderConfig } from "../app/lib/llm/providerConfig.ts"
 import { evaluateRuntimeAuthorizationDryRun } from "../app/lib/security/runtimeAuthorizationGate.ts"

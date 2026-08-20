@@ -196,7 +196,9 @@ The declared debt is **not** empty. The registry holds exactly the records ratif
 
 WU-A introduced no runtime debt: it changed no file under `app/`. The violations it records were already live at the baseline named by each entry's own `source_sha`; what changed is that a policy now observes them. Any further entry still requires a separate PM/architecture decision recorded before the change, and removal still requires the live edge to disappear first.
 
-Previously declared and now resolved: `domain_tenant_hybrid_boundary` (closed by WU-01A) and `infrastructure_application_signal_contract` (closed by WU-02). Neither id may reappear.
+Previously declared and now resolved: `domain_tenant_hybrid_boundary` (closed by WU-01A), `infrastructure_application_signal_contract` (closed by WU-02), and three closed by the WU-06 request-composition-root slice — `application_session_outward_value_composition`, `application_session_d1_driver_type_contract` and `security_application_session_resolution_cycle`. No resolved id may reappear.
+
+The WU-06 contraction followed the rule above rather than around it. All three records left the ledger only after their live edges were already absent from the scan, which the suite reported as *stale declared debt* before a single ledger line was edited. `application_session_outward_value_composition` declared three targets in one record, and the record's own removal gate required all three to close in one review or be split by a human: all three closed together, so no split was needed and none was performed. `application_inbox_provider_implementation_selection` is untouched and stays `known_open` under WU-02 — the registry now holds exactly one record over six exact edges.
 
 Recording `WU-01` or `WU-02` as debt owner assigns prospective ownership only. It does **not** authorize starting, implementing, or merging those WorkUnits.
 

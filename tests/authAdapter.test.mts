@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { DevAuthAdapter } from "../app/lib/application/auth/devAuthAdapter.ts"
 import { JwtAuthAdapter } from "../app/lib/application/auth/jwtAuthAdapter.ts"
 import { NoopProductionAuthAdapter } from "../app/lib/application/auth/noopProductionAuthAdapter.ts"
-import { resolveAuthAdapter } from "../app/lib/application/auth/resolveAuthAdapter.ts"
+import { resolveAuthAdapter } from "../app/lib/composition/authAdapterSelection.ts"
 import type { AuthRuntimeConfig } from "../app/lib/runtime/requestRuntimeConfig.ts"
 import { signHs256Jwt } from "./helpers/jwt.ts"
 

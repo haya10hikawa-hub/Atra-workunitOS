@@ -1,6 +1,8 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { resolveSession } from "../app/lib/application/auth/sessionResolver.ts"
+// The use case no longer self-composes, so its behaviour is exercised through the
+// request composition root — the same path every route takes.
+import { requireSession } from "../app/lib/composition/requestSession.ts"
 import { FakeD1Database } from "./helpers/fakeD1.ts"
 import type { AppEnv } from "../app/types/cloudflare-env.ts"
 import { setTestRuntimeEnvForRequest, resetTestRuntimeEnvForRequest } from "../app/lib/runtime/requestRuntimeEnvInjection.ts"
@@ -87,7 +89,7 @@ test("verified identity plus active membership resolves SessionContext", async (
       id: "identity-1", userId: "user-1" as UserId, provider: "dev", providerSubject: "dev-user", email: "dev@example.local", createdAt: now, updatedAt: now,
     })
 
-    const result = await resolveSession(new Request("http://localhost"))
+    const result = await requireSession(new Request("http://localhost"))
     assert.equal(result.ok, true)
     if (result.ok) {
       assert.equal(result.session.tenantId, "tenant-1")
@@ -112,7 +114,7 @@ test("active membership cannot authorize a suspended tenant", async () => {
       id: "identity-suspended-tenant", userId: "user-suspended-tenant" as UserId, provider: "dev", providerSubject: "dev-user", email: "dev@example.local", createdAt: now, updatedAt: now,
     })
 
-    const result = await resolveSession(new Request("http://localhost"))
+    const result = await requireSession(new Request("http://localhost"))
     assert.equal(result.ok, false)
     if (!result.ok) assert.equal(result.reason, "forbidden")
   })
@@ -128,7 +130,7 @@ test("no membership returns forbidden", async () => {
     await repos.bundle.authIdentities.create(repos.bundle.ctx, {
       id: "identity-2", userId: "user-2" as UserId, provider: "dev", providerSubject: "dev-user", email: "dev@example.local", createdAt: now, updatedAt: now,
     })
-    const result = await resolveSession(new Request("http://localhost"))
+    const result = await requireSession(new Request("http://localhost"))
     assert.equal(result.ok, false)
     if (!result.ok) assert.equal(result.reason, "forbidden")
   })
@@ -148,7 +150,7 @@ test("suspended or invited membership does not grant active access", async () =>
     await repos.bundle.authIdentities.create(repos.bundle.ctx, {
       id: "identity-3", userId: "user-3" as UserId, provider: "dev", providerSubject: "dev-user", email: "dev@example.local", createdAt: now, updatedAt: now,
     })
-    const result = await resolveSession(new Request("http://localhost"))
+    const result = await requireSession(new Request("http://localhost"))
     assert.equal(result.ok, false)
     if (!result.ok) assert.equal(result.reason, "forbidden")
   })
@@ -157,7 +159,7 @@ test("suspended or invited membership does not grant active access", async () =>
 test("dev bootstrap works only with explicit bootstrap flag", async () => {
   await withAuthEnv(async (db) => {
     process.env.ALLOW_DEV_WORKSPACE_BOOTSTRAP = "true"
-    const result = await resolveSession(new Request("http://localhost"))
+    const result = await requireSession(new Request("http://localhost"))
     assert.equal(result.ok, true)
     const memberships = db.debugTable("tenant_memberships")
     assert.equal(memberships.length, 1)
@@ -167,7 +169,7 @@ test("dev bootstrap works only with explicit bootstrap flag", async () => {
 test("dev bootstrap disabled means no auto-create", async () => {
   await withAuthEnv(async (db) => {
     delete process.env.ALLOW_DEV_WORKSPACE_BOOTSTRAP
-    const result = await resolveSession(new Request("http://localhost"))
+    const result = await requireSession(new Request("http://localhost"))
     assert.equal(result.ok, false)
     if (!result.ok) assert.equal(result.reason, "unauthorized")
     const repos = resolveControlRepositories({ d1Binding: db })
@@ -194,7 +196,7 @@ test("jwt identity plus active membership resolves SessionContext from membershi
       id: "identity-jwt", userId: "jwt-user-row" as UserId, provider: "jwt", providerSubject: "jwt-subject", email: "jwt@example.local", createdAt: now, updatedAt: now,
     })
     const token = await signHs256Jwt({ sub: "jwt-subject", email: "jwt@example.local", tenantId: "evil-tenant", role: "owner", iss: JWT_ISSUER, aud: JWT_AUDIENCE }, JWT_SECRET)
-    const result = await resolveSession(new Request("http://localhost", { headers: { Authorization: `Bearer ${token}` } }))
+    const result = await requireSession(new Request("http://localhost", { headers: { Authorization: `Bearer ${token}` } }))
     assert.equal(result.ok, true)
     if (result.ok) {
       assert.equal(result.session.tenantId, "tenant-jwt")
@@ -216,7 +218,7 @@ test("jwt identity without membership returns forbidden", async () => {
       id: "identity-jwt-no-membership", userId: "jwt-user-no-membership" as UserId, provider: "jwt", providerSubject: "jwt-no-membership", email: "jwt2@example.local", createdAt: now, updatedAt: now,
     })
     const token = await signHs256Jwt({ sub: "jwt-no-membership", email: "jwt2@example.local", iss: JWT_ISSUER, aud: JWT_AUDIENCE }, JWT_SECRET)
-    const result = await resolveSession(new Request("http://localhost", { headers: { Authorization: `Bearer ${token}` } }))
+    const result = await requireSession(new Request("http://localhost", { headers: { Authorization: `Bearer ${token}` } }))
     assert.equal(result.ok, false)
     if (!result.ok) assert.equal(result.reason, "forbidden")
   })
@@ -237,7 +239,7 @@ test("jwt identity with invited or suspended membership is rejected", async () =
       id: "identity-jwt-invited", userId: "jwt-user-invited" as UserId, provider: "jwt", providerSubject: "jwt-invited", email: "jwt3@example.local", createdAt: now, updatedAt: now,
     })
     const token = await signHs256Jwt({ sub: "jwt-invited", email: "jwt3@example.local", iss: JWT_ISSUER, aud: JWT_AUDIENCE }, JWT_SECRET)
-    const result = await resolveSession(new Request("http://localhost", { headers: { Authorization: `Bearer ${token}` } }))
+    const result = await requireSession(new Request("http://localhost", { headers: { Authorization: `Bearer ${token}` } }))
     assert.equal(result.ok, false)
     if (!result.ok) assert.equal(result.reason, "forbidden")
   })
@@ -258,7 +260,7 @@ test("jwt identity with suspended membership is rejected", async () => {
       id: "identity-jwt-suspended", userId: "jwt-user-suspended" as UserId, provider: "jwt", providerSubject: "jwt-suspended", email: "jwt4@example.local", createdAt: now, updatedAt: now,
     })
     const token = await signHs256Jwt({ sub: "jwt-suspended", email: "jwt4@example.local", tenantId: "evil-tenant", role: "owner", iss: JWT_ISSUER, aud: JWT_AUDIENCE }, JWT_SECRET)
-    const result = await resolveSession(new Request("http://localhost", { headers: { Authorization: `Bearer ${token}` } }))
+    const result = await requireSession(new Request("http://localhost", { headers: { Authorization: `Bearer ${token}` } }))
     assert.equal(result.ok, false)
     if (!result.ok) assert.equal(result.reason, "forbidden")
   })

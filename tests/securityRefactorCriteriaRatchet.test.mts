@@ -21,7 +21,7 @@ import {
   type RouteExport,
 } from "./helpers/routeSurface.ts"
 import { NoopProductionAuthAdapter } from "../app/lib/application/auth/noopProductionAuthAdapter.ts"
-import { resolveAuthAdapter } from "../app/lib/application/auth/resolveAuthAdapter.ts"
+import { resolveAuthAdapter } from "../app/lib/composition/authAdapterSelection.ts"
 import type { AuthRuntimeConfig } from "../app/lib/runtime/requestRuntimeConfig.ts"
 import { POST as toolsPost } from "../app/api/workunit/tools/route.ts"
 import { POST as previewPost } from "../app/api/workunit/[id]/action-preview/route.ts"
