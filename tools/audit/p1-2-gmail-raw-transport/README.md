@@ -87,7 +87,8 @@ real network call:
   preserved — is detected by `verifyByteFidelity`; a truncated write is also detected;
   the unmodified CLI acquire path is proven `byte_equal: true` end to end
 - **C** an existing destination is never overwritten; a destination outside the
-  authorized root (including a path-traversal attempt) is refused before any fetch
+  authorized root — including a path-traversal attempt and a symlink planted inside
+  the root that resolves outside it — is refused before any fetch
 - **D** a missing or malformed credential fails closed with a stable code; the token
   never appears in CLI stdout/stderr or in a thrown error's message
 - **E** every request is `GET` to the pinned origin with `format=raw`; a response
@@ -95,11 +96,20 @@ real network call:
 - **F** `auth-check` reports `available` without ever returning profile body fields,
   fails closed with a stable code on 401, and makes no network call when no
   credential is configured
+- **G** the pre-T0 preflight is content-free PASS/FAIL over structural checks,
+  including that every reused Run-2 GitHub row traces to the resolved selection
+  authority and that `dataset_record_id` ordering is exactly sequential — not just
+  present-and-unique
 
-20/20 pass. Two hand-written mutations were replayed to confirm the suite actually
-exercises the properties above rather than passing vacuously: forcing
-`byteEqual: true` unconditionally (B1/B2 fail, as required), and removing the root
-containment check (C2/C3 fail, as required).
+29/29 pass. `byteEqual` is a direct binary comparison of provider vs. persisted
+bytes, not a digest comparison — B4 proves this with a forced digest collision.
+`assertInsideRoot` resolves both the root and the destination's parent through
+`realpathSync` before any fetch, so a symlink cannot lexically pass containment while
+resolving outside the root — C4 proves this. Three hand-written mutations were
+replayed to confirm the suite actually exercises these properties rather than passing
+vacuously: forcing `byteEqual` back to digest equality (B4 fails, as required),
+removing the realpath containment check (C4 fails, as required), and accepting
+unselected/non-sequential Run-2 GitHub reuse metadata (G6/G7 fail, as required).
 
 ## Not built
 

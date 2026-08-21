@@ -10,6 +10,7 @@ export declare function runPreflight(input: {
   run2ManifestPath: string;
   run2AcquisitionWindowStartIso: string;
   run2AcquisitionWindowEndIso: string;
+  run2SelectionResolvedPath: string;
 }): Promise<
   Readonly<{
     overall_pass: boolean;

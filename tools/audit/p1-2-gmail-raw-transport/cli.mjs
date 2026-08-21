@@ -29,7 +29,8 @@ const USAGE = [
   '  cli.mjs auth-check',
   '  cli.mjs acquire --message-id <id> --root <dir> --dest <path>',
   '  cli.mjs preflight --run-root <dir> --plan <path> --plan-sha256 <hex> \\',
-  '    --run2-manifest <path> --run2-window-start <iso> --run2-window-end <iso>',
+  '    --run2-manifest <path> --run2-window-start <iso> --run2-window-end <iso> \\',
+  '    --run2-selection-resolved <path>',
 ].join('\n');
 
 function parsePreflightArgs(argv) {
@@ -40,6 +41,7 @@ function parsePreflightArgs(argv) {
     run2Manifest: null,
     run2WindowStart: null,
     run2WindowEnd: null,
+    run2SelectionResolved: null,
   };
   const flagMap = {
     '--run-root': 'runRoot',
@@ -48,6 +50,7 @@ function parsePreflightArgs(argv) {
     '--run2-manifest': 'run2Manifest',
     '--run2-window-start': 'run2WindowStart',
     '--run2-window-end': 'run2WindowEnd',
+    '--run2-selection-resolved': 'run2SelectionResolved',
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -128,6 +131,7 @@ export async function main(argv, env) {
       run2ManifestPath: options.run2Manifest,
       run2AcquisitionWindowStartIso: options.run2WindowStart,
       run2AcquisitionWindowEndIso: options.run2WindowEnd,
+      run2SelectionResolvedPath: options.run2SelectionResolved,
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return result.overall_pass ? 0 : 2;

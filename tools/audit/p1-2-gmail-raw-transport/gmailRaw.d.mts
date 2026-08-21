@@ -17,7 +17,11 @@ export declare function sha256Hex(buffer: Buffer): string;
 export declare function writeBytesDurable(destPath: string, buffer: Buffer): void;
 export declare function readBytesDurable(destPath: string): Buffer;
 
-export declare function verifyByteFidelity(input: { providerBytes: Buffer; destPath: string }): Readonly<{
+export declare function verifyByteFidelity(input: {
+  providerBytes: Buffer;
+  destPath: string;
+  hashFn?: (buffer: Buffer) => string;
+}): Readonly<{
   providerLength: number;
   persistedLength: number;
   providerSha256: string;

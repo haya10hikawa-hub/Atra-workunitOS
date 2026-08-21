@@ -16,7 +16,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -184,6 +184,22 @@ test('B3: the CLI acquire path reports byte_equal=false and a non-zero exit on c
   });
 });
 
+test('B4: byte_equal is derived from direct byte comparison, not digest equality', () => {
+  withTmpRoot((root) => {
+    const providerBytes = Buffer.from('AAAA provider bytes', 'utf8');
+    const persistedBytes = Buffer.from('BBBB different bytes', 'utf8');
+    const dest = join(root, 'msg-forced-digest-collision.eml');
+    writeBytesDurable(dest, persistedBytes);
+
+    // A hash collision is not something a test can construct against real
+    // SHA-256; `hashFn` lets this test simulate one so the assertion below is
+    // meaningful evidence about which comparison `byteEqual` actually uses.
+    const fidelity = verifyByteFidelity({ providerBytes, destPath: dest, hashFn: () => 'forced-equal-digest' });
+    assert.equal(fidelity.providerSha256, fidelity.persistedSha256, 'digests are forced equal by the test double');
+    assert.equal(fidelity.byteEqual, false, 'byte_equal must stay false — the bytes actually differ');
+  });
+});
+
 async function withTmpRootAsync<T>(fn: (root: string) => Promise<T>): Promise<T> {
   const root = mkdtempSync(join(tmpdir(), 'p1-2-gmail-raw-'));
   try {
@@ -246,6 +262,33 @@ test('C3: a path-traversal destination inside a plausible-looking prefix is stil
       );
     } finally {
       restore();
+    }
+  });
+});
+
+test('C4: a symlinked directory inside the authorized root that resolves outside it is refused before any network call', async () => {
+  await withTmpRootAsync(async (root) => {
+    const outside = mkdtempSync(join(tmpdir(), 'p1-2-gmail-raw-outside-'));
+    try {
+      symlinkSync(outside, join(root, 'escape'), 'dir');
+      let fetchCalled = false;
+      const restore = mockFetchOnce(async () => {
+        fetchCalled = true;
+        throw new Error('must not be called');
+      });
+      try {
+        const dest = join(root, 'escape', 'message.eml');
+        await assert.rejects(
+          acquireGmailRawMessage({ messageId: 'm1', destPath: dest, root, env: { [CREDENTIAL_ENV]: TOKEN } }),
+          (error) => error instanceof GmailTransportError && error.code === 'gmail_raw_destination_outside_root',
+        );
+        assert.equal(fetchCalled, false);
+        assert.equal(existsSync(join(outside, 'message.eml')), false);
+      } finally {
+        restore();
+      }
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
     }
   });
 });
@@ -390,14 +433,26 @@ test('F3: auth-check with no credential fails closed without a network call', as
 // G. pre-T0 preflight — content-free PASS/FAIL over structural checks
 // ---------------------------------------------------------------------------
 
-function synthGithubManifestLine(id: string, observedAtIso: string) {
+function synthGithubManifestLine(id: string, observedAtIso: string, prNumber: number) {
   return JSON.stringify({
     dataset_record_id: id,
     provider: 'github',
+    resource_class: 'github_pull_request',
     content_sha256: sha256Hex(Buffer.from(id)),
     provider_identity_commitment_sha256: sha256Hex(Buffer.from(`identity-${id}`)),
     observed_at: observedAtIso,
     source_event_at: '2026-08-15T00:00:00Z',
+    work_universe_id: 'U-COLLAB',
+    raw_artifact_relative_path: `synthetic-pr-${prNumber}.json`,
+  });
+}
+
+/** The selection-resolution authority's `{universe: {resource_class: {selected: [...]}}}` shape. */
+function synthSelectionResolved(selectedPrNumbers: number[]) {
+  return JSON.stringify({
+    'U-COLLAB': {
+      github_pull_request: { selected: selectedPrNumbers },
+    },
   });
 }
 
@@ -411,8 +466,10 @@ test('G1: preflight passes when every structural condition is satisfied', async 
     const manifestPath = join(root, 'manifest.jsonl');
     writeFileSync(
       manifestPath,
-      [synthGithubManifestLine('P1D-0002', '2026-08-21T01:33:45Z'), synthGithubManifestLine('P1D-0003', '2026-08-21T01:33:46Z')].join('\n'),
+      [synthGithubManifestLine('P1D-0002', '2026-08-21T01:33:45Z', 2), synthGithubManifestLine('P1D-0003', '2026-08-21T01:33:46Z', 3)].join('\n'),
     );
+    const selectionResolvedPath = join(root, 'selection-resolved.json');
+    writeFileSync(selectionResolvedPath, synthSelectionResolved([2, 3]));
 
     const restore = mockFetchOnce(async () => new Response(JSON.stringify({}), { status: 200 }));
     try {
@@ -424,6 +481,7 @@ test('G1: preflight passes when every structural condition is satisfied', async 
         run2ManifestPath: manifestPath,
         run2AcquisitionWindowStartIso: '2026-08-21T01:25:19Z',
         run2AcquisitionWindowEndIso: '2026-08-21T05:25:19Z',
+        run2SelectionResolvedPath: selectionResolvedPath,
       });
       assert.equal(result.overall_pass, true);
       assert.deepEqual(result.failed_checks, []);
@@ -441,7 +499,9 @@ test('G2: preflight fails closed on a plan hash mismatch, without failing every 
     writeFileSync(planPath, JSON.stringify({ hello: 'plan' }));
 
     const manifestPath = join(root, 'manifest.jsonl');
-    writeFileSync(manifestPath, synthGithubManifestLine('P1D-0002', '2026-08-21T01:33:45Z'));
+    writeFileSync(manifestPath, synthGithubManifestLine('P1D-0002', '2026-08-21T01:33:45Z', 2));
+    const selectionResolvedPath = join(root, 'selection-resolved.json');
+    writeFileSync(selectionResolvedPath, synthSelectionResolved([2]));
 
     const restore = mockFetchOnce(async () => new Response(JSON.stringify({}), { status: 200 }));
     try {
@@ -453,6 +513,7 @@ test('G2: preflight fails closed on a plan hash mismatch, without failing every 
         run2ManifestPath: manifestPath,
         run2AcquisitionWindowStartIso: '2026-08-21T01:25:19Z',
         run2AcquisitionWindowEndIso: '2026-08-21T05:25:19Z',
+        run2SelectionResolvedPath: selectionResolvedPath,
       });
       assert.equal(result.overall_pass, false);
       assert.ok(result.failed_checks.includes('plan_hash_matches'));
@@ -473,7 +534,9 @@ test('G3: preflight fails closed when a Run-2 GitHub row falls outside the acqui
 
     const manifestPath = join(root, 'manifest.jsonl');
     // Outside the T0..deadline acquisition window, even though it is inside the observation window.
-    writeFileSync(manifestPath, synthGithubManifestLine('P1D-0002', '2026-08-14T12:00:00Z'));
+    writeFileSync(manifestPath, synthGithubManifestLine('P1D-0002', '2026-08-14T12:00:00Z', 2));
+    const selectionResolvedPath = join(root, 'selection-resolved.json');
+    writeFileSync(selectionResolvedPath, synthSelectionResolved([2]));
 
     const restore = mockFetchOnce(async () => new Response(JSON.stringify({}), { status: 200 }));
     try {
@@ -485,9 +548,80 @@ test('G3: preflight fails closed when a Run-2 GitHub row falls outside the acqui
         run2ManifestPath: manifestPath,
         run2AcquisitionWindowStartIso: '2026-08-21T01:25:19Z',
         run2AcquisitionWindowEndIso: '2026-08-21T05:25:19Z',
+        run2SelectionResolvedPath: selectionResolvedPath,
       });
       assert.equal(result.overall_pass, false);
       assert.ok(result.failed_checks.includes('run2_github_reuse_metadata_valid'));
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('G6: preflight fails closed when a reused GitHub row is not tied to the resolved selection', async () => {
+  await withTmpRootAsync(async (root) => {
+    const runRoot = join(root, 'run3');
+    const planPath = join(root, 'plan.json');
+    writeFileSync(planPath, '{}');
+    const planSha256 = sha256Hex(readFileSync(planPath));
+
+    const manifestPath = join(root, 'manifest.jsonl');
+    writeFileSync(manifestPath, synthGithubManifestLine('P1D-0002', '2026-08-21T01:33:45Z', 2));
+    const selectionResolvedPath = join(root, 'selection-resolved.json');
+    // The row references PR #2, but the resolved selection only ever selected #3 — no provenance tie.
+    writeFileSync(selectionResolvedPath, synthSelectionResolved([3]));
+
+    const restore = mockFetchOnce(async () => new Response(JSON.stringify({}), { status: 200 }));
+    try {
+      const result = await runPreflight({
+        env: { [CREDENTIAL_ENV]: TOKEN },
+        runRoot,
+        planPath,
+        expectedPlanSha256: planSha256,
+        run2ManifestPath: manifestPath,
+        run2AcquisitionWindowStartIso: '2026-08-21T01:25:19Z',
+        run2AcquisitionWindowEndIso: '2026-08-21T05:25:19Z',
+        run2SelectionResolvedPath: selectionResolvedPath,
+      });
+      assert.equal(result.overall_pass, false);
+      assert.ok(result.failed_checks.includes('run2_github_selection_provenance_valid'));
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('G7: preflight fails closed when reused dataset_record_id ordering has a gap', async () => {
+  await withTmpRootAsync(async (root) => {
+    const runRoot = join(root, 'run3');
+    const planPath = join(root, 'plan.json');
+    writeFileSync(planPath, '{}');
+    const planSha256 = sha256Hex(readFileSync(planPath));
+
+    const manifestPath = join(root, 'manifest.jsonl');
+    // P1D-0002 then P1D-0004 — a gap. Both ids are unique, so the existing uniqueness
+    // check alone would not catch this; ordering must be exactly the sequential run.
+    writeFileSync(
+      manifestPath,
+      [synthGithubManifestLine('P1D-0002', '2026-08-21T01:33:45Z', 2), synthGithubManifestLine('P1D-0004', '2026-08-21T01:33:46Z', 4)].join('\n'),
+    );
+    const selectionResolvedPath = join(root, 'selection-resolved.json');
+    writeFileSync(selectionResolvedPath, synthSelectionResolved([2, 4]));
+
+    const restore = mockFetchOnce(async () => new Response(JSON.stringify({}), { status: 200 }));
+    try {
+      const result = await runPreflight({
+        env: { [CREDENTIAL_ENV]: TOKEN },
+        runRoot,
+        planPath,
+        expectedPlanSha256: planSha256,
+        run2ManifestPath: manifestPath,
+        run2AcquisitionWindowStartIso: '2026-08-21T01:25:19Z',
+        run2AcquisitionWindowEndIso: '2026-08-21T05:25:19Z',
+        run2SelectionResolvedPath: selectionResolvedPath,
+      });
+      assert.equal(result.overall_pass, false);
+      assert.ok(result.failed_checks.includes('run2_github_record_id_sequential'));
     } finally {
       restore();
     }
@@ -501,7 +635,9 @@ test('G4: preflight reports auth_available=false without a configured credential
     writeFileSync(planPath, '{}');
     const planSha256 = sha256Hex(readFileSync(planPath));
     const manifestPath = join(root, 'manifest.jsonl');
-    writeFileSync(manifestPath, synthGithubManifestLine('P1D-0002', '2026-08-21T01:33:45Z'));
+    writeFileSync(manifestPath, synthGithubManifestLine('P1D-0002', '2026-08-21T01:33:45Z', 2));
+    const selectionResolvedPath = join(root, 'selection-resolved.json');
+    writeFileSync(selectionResolvedPath, synthSelectionResolved([2]));
 
     const result = await runPreflight({
       env: {},
@@ -511,6 +647,7 @@ test('G4: preflight reports auth_available=false without a configured credential
       run2ManifestPath: manifestPath,
       run2AcquisitionWindowStartIso: '2026-08-21T01:25:19Z',
       run2AcquisitionWindowEndIso: '2026-08-21T05:25:19Z',
+      run2SelectionResolvedPath: selectionResolvedPath,
     });
     assert.equal(result.checks.auth_available, false);
     assert.equal(result.overall_pass, false);
@@ -527,7 +664,9 @@ test('G5: preflight fails closed when the run root already holds files', async (
     writeFileSync(planPath, '{}');
     const planSha256 = sha256Hex(readFileSync(planPath));
     const manifestPath = join(root, 'manifest.jsonl');
-    writeFileSync(manifestPath, synthGithubManifestLine('P1D-0002', '2026-08-21T01:33:45Z'));
+    writeFileSync(manifestPath, synthGithubManifestLine('P1D-0002', '2026-08-21T01:33:45Z', 2));
+    const selectionResolvedPath = join(root, 'selection-resolved.json');
+    writeFileSync(selectionResolvedPath, synthSelectionResolved([2]));
 
     const restore = mockFetchOnce(async () => new Response(JSON.stringify({}), { status: 200 }));
     try {
@@ -539,6 +678,7 @@ test('G5: preflight fails closed when the run root already holds files', async (
         run2ManifestPath: manifestPath,
         run2AcquisitionWindowStartIso: '2026-08-21T01:25:19Z',
         run2AcquisitionWindowEndIso: '2026-08-21T05:25:19Z',
+        run2SelectionResolvedPath: selectionResolvedPath,
       });
       assert.equal(result.checks.run_root_valid, false);
       assert.equal(result.overall_pass, false);

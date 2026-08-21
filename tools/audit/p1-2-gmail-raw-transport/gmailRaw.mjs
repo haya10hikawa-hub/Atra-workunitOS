@@ -138,32 +138,68 @@ export function readBytesDurable(destPath) {
 /**
  * Compare provider-derived bytes against an independent persisted read-back.
  * This is the single check the Run-2 canary failed: length equal, digest
- * unequal. Both are reported so a future length-only check cannot be
- * mistaken for this one.
+ * unequal. `byteEqual` is derived from a direct binary comparison of the two
+ * buffers — never from digest equality, which a hash collision (or a bug that
+ * happens to produce one) could satisfy without the bytes actually matching.
+ * The digests are still reported, as independent evidence fields, not as the
+ * fidelity authority.
+ *
+ * `hashFn` defaults to `sha256Hex` and exists only so a test can simulate a
+ * forced digest collision to prove `byteEqual` does not depend on it — it is
+ * not a configuration point for real callers.
  */
-export function verifyByteFidelity({ providerBytes, destPath }) {
+export function verifyByteFidelity({ providerBytes, destPath, hashFn = sha256Hex }) {
   const providerLength = providerBytes.length;
-  const providerSha256 = sha256Hex(providerBytes);
+  const providerSha256 = hashFn(providerBytes);
   const persisted = readBytesDurable(destPath);
   const persistedLength = persisted.length;
-  const persistedSha256 = sha256Hex(persisted);
+  const persistedSha256 = hashFn(persisted);
   return Object.freeze({
     providerLength,
     persistedLength,
     providerSha256,
     persistedSha256,
     lengthEqual: providerLength === persistedLength,
-    byteEqual: providerSha256 === persistedSha256,
+    byteEqual: Buffer.compare(providerBytes, persisted) === 0,
   });
 }
 
-/** Destination must resolve strictly inside the authorized root. No exceptions. */
+/**
+ * Destination must resolve strictly inside the authorized root. No exceptions.
+ *
+ * A lexical `path.resolve` check alone is not enough: a symlink planted
+ * inside the root (e.g. `root/escape -> /outside`) resolves lexically inside
+ * the root while pointing the real destination outside it. `destPath`'s
+ * parent directory must already exist by the time this runs (`writeBytesDurable`
+ * requires it), so it is safe to `realpathSync` that parent and the root and
+ * compare the real, symlink-resolved paths — before any network call.
+ */
 function assertInsideRoot(destPath, root) {
   const resolvedRoot = path.resolve(root);
   const resolvedDest = path.resolve(destPath);
   if (resolvedDest !== resolvedRoot && !resolvedDest.startsWith(resolvedRoot + path.sep)) {
     throw new GmailTransportError('gmail_raw_destination_outside_root');
   }
+
+  let realRoot;
+  try {
+    realRoot = fs.realpathSync(resolvedRoot);
+  } catch {
+    throw new GmailTransportError('gmail_raw_destination_outside_root');
+  }
+
+  const destDir = path.dirname(resolvedDest);
+  let realDestDir;
+  try {
+    realDestDir = fs.realpathSync(destDir);
+  } catch {
+    throw new GmailTransportError('gmail_raw_destination_outside_root');
+  }
+
+  if (realDestDir !== realRoot && !realDestDir.startsWith(realRoot + path.sep)) {
+    throw new GmailTransportError('gmail_raw_destination_outside_root');
+  }
+
   return resolvedDest;
 }
 

@@ -28,6 +28,8 @@ const CHECK_NAMES = Object.freeze([
   'run_root_valid',
   'plan_hash_matches',
   'run2_github_reuse_metadata_valid',
+  'run2_github_selection_provenance_valid',
+  'run2_github_record_id_sequential',
 ]);
 
 const MIN_FREE_BYTES = 256 * 1024 * 1024;
@@ -123,6 +125,74 @@ function checkRun2GithubReuseMetadata(manifestPath, acquisitionWindowStartIso, a
   return true;
 }
 
+const DATASET_RECORD_ID_RE = /^P1D-(\d+)$/;
+/** `raw_artifact_relative_path` for a reused github row, e.g. `aihack-pr-14.json` or `atra-issue-7.json`. */
+const GITHUB_ARTIFACT_NUMBER_RE = /-(?:pr|issue)-(\d+)\.json$/;
+const RESOURCE_CLASS_TO_SELECTION_KEY = Object.freeze({
+  github_pull_request: 'github_pull_request',
+  github_issue: 'github_issue',
+});
+
+/**
+ * Every reused GitHub row must trace to an explicit, pre-registered selection
+ * decision — not merely carry a well-formed hash. Ties each row's
+ * `(work_universe_id, resource_class, artifact number)` back to the exact
+ * `selected` list the selection-resolution authority recorded for that
+ * universe/class. Reads only manifest and selection-resolution metadata
+ * fields, never artifact content.
+ */
+function checkRun2GithubSelectionProvenance(manifestPath, selectionResolvedPath) {
+  const lines = fs.readFileSync(manifestPath, 'utf8').split('\n').filter((line) => line.trim().length > 0);
+  const rows = lines.map((line) => JSON.parse(line));
+  const github = rows.filter((row) => row.provider === 'github');
+  if (github.length === 0) return false;
+
+  const selection = JSON.parse(fs.readFileSync(selectionResolvedPath, 'utf8'));
+  if (selection === null || typeof selection !== 'object') return false;
+
+  for (const row of github) {
+    const universeId = row.work_universe_id;
+    const resourceClass = row.resource_class;
+    const artifactPath = row.raw_artifact_relative_path;
+    if (typeof universeId !== 'string' || typeof resourceClass !== 'string' || typeof artifactPath !== 'string') {
+      return false;
+    }
+    const selectionKey = RESOURCE_CLASS_TO_SELECTION_KEY[resourceClass];
+    const universe = selection[universeId];
+    if (selectionKey === undefined || universe === null || typeof universe !== 'object') return false;
+    const bucket = universe[selectionKey];
+    if (bucket === null || typeof bucket !== 'object' || !Array.isArray(bucket.selected)) return false;
+
+    const match = GITHUB_ARTIFACT_NUMBER_RE.exec(artifactPath);
+    if (!match) return false;
+    const number = Number(match[1]);
+    if (!bucket.selected.includes(number)) return false;
+  }
+  return true;
+}
+
+/**
+ * `dataset_record_id` must be a strictly sequential, gap-free, non-reordered
+ * run of `P1D-NNNN` values in manifest file order — uniqueness alone (the
+ * existing check) cannot catch a reordered or gapped sequence with all-unique
+ * ids.
+ */
+function checkRun2DatasetRecordIdSequential(manifestPath) {
+  const lines = fs.readFileSync(manifestPath, 'utf8').split('\n').filter((line) => line.trim().length > 0);
+  const rows = lines.map((line) => JSON.parse(line));
+  if (rows.length === 0) return false;
+
+  let previous = null;
+  for (const row of rows) {
+    const match = typeof row.dataset_record_id === 'string' ? DATASET_RECORD_ID_RE.exec(row.dataset_record_id) : null;
+    if (!match) return false;
+    const value = Number(match[1]);
+    if (previous !== null && value !== previous + 1) return false;
+    previous = value;
+  }
+  return true;
+}
+
 /**
  * @param {{
  *   env: Record<string, string|undefined>,
@@ -132,6 +202,7 @@ function checkRun2GithubReuseMetadata(manifestPath, acquisitionWindowStartIso, a
  *   run2ManifestPath: string,
  *   run2AcquisitionWindowStartIso: string,
  *   run2AcquisitionWindowEndIso: string,
+ *   run2SelectionResolvedPath: string,
  * }} input
  */
 export async function runPreflight({
@@ -142,6 +213,7 @@ export async function runPreflight({
   run2ManifestPath,
   run2AcquisitionWindowStartIso,
   run2AcquisitionWindowEndIso,
+  run2SelectionResolvedPath,
 }) {
   const results = {};
 
@@ -155,6 +227,10 @@ export async function runPreflight({
   results.run2_github_reuse_metadata_valid = tryCheck(() =>
     checkRun2GithubReuseMetadata(run2ManifestPath, run2AcquisitionWindowStartIso, run2AcquisitionWindowEndIso),
   );
+  results.run2_github_selection_provenance_valid = tryCheck(() =>
+    checkRun2GithubSelectionProvenance(run2ManifestPath, run2SelectionResolvedPath),
+  );
+  results.run2_github_record_id_sequential = tryCheck(() => checkRun2DatasetRecordIdSequential(run2ManifestPath));
 
   const checks = {};
   for (const name of CHECK_NAMES) {
