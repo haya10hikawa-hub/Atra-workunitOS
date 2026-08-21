@@ -108,11 +108,6 @@ test("3. tools route source: external_action_blocked persists fail-open and adds
   assert.ok(src.includes("areExternalActionsEnabled(killSwitchEnv)"))
   assert.ok(src.includes("projectRuntimeAuthorizationEnv(runtime.security)"))
   assert.equal(src.includes("areExternalActionsEnabled()"), false)
-  // LLM resolution uses the request-scoped config projection, not process.env.
-  assert.ok(src.includes("resolveLlmProvider(llmEnv)"))
-  assert.equal(src.includes("resolveLlmProvider()"), false)
-  // The Runtime Authorization gate receives the request-scoped kill-switch env.
-  assert.ok(src.includes("env: projectRuntimeAuthorizationEnv(runtime.security)"))
   // No runtime secret is ever surfaced in a response or audit metadata.
   assert.equal(src.includes("runtime.auth.jwt"), false)
   assert.ok(src.includes('"external_action_blocked"'))
@@ -122,6 +117,27 @@ test("3. tools route source: external_action_blocked persists fail-open and adds
   // No new external execution: the external clients are never imported here.
   for (const bad of ["externalToolClients", "realGitHubClient", "chat.postMessage", "messages/send"]) {
     assert.equal(src.includes(bad), false, `tools route must not call ${bad}`)
+  }
+})
+
+// WU-06 final route delegation: LLM provider selection and the Runtime
+// Authorization gate call moved from the route into the composition root
+// (app/lib/composition/workunitTools.ts) — the route no longer selects a
+// provider or invokes the gate directly. The request-scoped-config assertions
+// that used to read the route's source now read the composition root instead;
+// the semantic requirement (never ambient process.env) is unchanged.
+test("3b. the tools-route composition root selects the LLM provider and drives the runtime authorization gate from the request-scoped config", () => {
+  const src = readToolsCompositionSource()
+  // LLM resolution uses the request-scoped config projection, not process.env.
+  assert.ok(src.includes("resolveLlmProvider(llmEnv)"))
+  assert.equal(src.includes("resolveLlmProvider()"), false)
+  // The Runtime Authorization gate receives the request-scoped kill-switch env.
+  assert.ok(src.includes("env: projectRuntimeAuthorizationEnv(runtime.security)"))
+  // No runtime secret is ever surfaced in a response or audit metadata.
+  assert.equal(src.includes("runtime.auth.jwt"), false)
+  // No new external execution: the external clients are never imported here.
+  for (const bad of ["externalToolClients", "realGitHubClient", "chat.postMessage", "messages/send"]) {
+    assert.equal(src.includes(bad), false, `tools composition root must not call ${bad}`)
   }
 })
 
@@ -161,4 +177,8 @@ test("5. in-memory approval reads + markUsed remain tenant-scoped", async () => 
 
 function readToolsRouteSource(): string {
   return readFileSync(path.join(process.cwd(), "app/api/workunit/tools/route.ts"), "utf8")
+}
+
+function readToolsCompositionSource(): string {
+  return readFileSync(path.join(process.cwd(), "app/lib/composition/workunitTools.ts"), "utf8")
 }

@@ -14,29 +14,38 @@ import { recordAuditEvent } from "../../../lib/security/auditPersistence.ts"
 import type { WorkUnitPermission } from "../../../lib/security/policy.ts"
 import type { ToolBackendOperation, ToolBackendRequest } from "../../../types/toolBackend.ts"
 
-// LLM pipeline imports
-import { processWorkSignal } from "../../../lib/llm/processWorkSignal.ts"
-import { resolveLlmProvider, resolveLlmProviderConfig } from "../../../lib/llm/providerConfig.ts"
-import { createExternalSignal } from "../../../lib/domain/types.ts"
+// Tools-route Application use cases (WU-06 final route delegation): business
+// orchestration for LLM ingest and runtime-authorization preparation now lives
+// here, not in this route. See app/lib/application/workunitTools/.
+import {
+  runIngestOrchestration,
+  prepareAndAuthorizeExternalOperation,
+} from "../../../lib/application/workunitTools/toolOperationUseCases.ts"
+// Composition root: selects the concrete LLM provider and wraps the Runtime
+// Authorization gate behind the capability contracts the use cases above declare.
+import {
+  buildIngestCapabilities,
+  buildRuntimeAuthorizationCapabilities,
+} from "../../../lib/composition/workunitTools.ts"
 import type { TenantId } from "../../../lib/tenant/types.ts"
 
-// Approval store import
+// Approval store import (legacy backend path only — the runtime-authorization
+// path's ApprovalStore is resolved inside the composition root).
 import { resolveApprovalStore, resolveRepositoryBackedApprovalStore } from "../../../lib/security/approvalStoreResolver.ts"
 
 // Repository resolver (for preview hash context resolution)
 import { resolveRouteRepositories } from "../../../lib/persistence/routeRepositories.ts"
 
 // Runtime authorization gate (Issue #145) — the final gate for external ops.
-import { authorizeRuntimeCommand } from "../../../lib/security/runtimeAuthorizationGate.ts"
-import { resolveRuntimeAuthorizationEvidenceResolver } from "../../../lib/security/runtimeAuthorizationEvidenceResolver.ts"
+// The route no longer calls it directly; it constructs the audit sink (a
+// genuinely HTTP-facing / durable-persistence delivery concern) and threads it
+// through the composition root, which performs the actual gate call.
 import type { RuntimeAuthorizationAuditSink } from "../../../lib/phase6/runtimeAuthorization/index.ts"
-import type { ApprovalActionType } from "../../../lib/domain/types.ts"
 
 // Request-scoped validated runtime config (auth / security / llm / persistence).
 import {
   resolveValidatedRequestRuntimeConfig,
   projectRuntimeAuthorizationEnv,
-  projectLlmEnv,
   type ValidatedRequestRuntimeConfig,
 } from "../../../lib/runtime/requestRuntimeConfig.ts"
 
@@ -218,42 +227,33 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   // ── 6. LLM Ingest Path ────────────────────────────────────────
   if (validated.operation === "ingest" && validated.event) {
-    const llmEnv = projectLlmEnv(runtime.llm)
-    const providerResult = resolveLlmProvider(llmEnv)
-    const config = resolveLlmProviderConfig(llmEnv)
+    const outcome = await runIngestOrchestration(
+      {
+        id: validated.id,
+        source: validated.source,
+        tenantId: session.tenantId,
+        eventId: validated.event.id,
+        eventTimestamp: validated.event.timestamp,
+        metadata: validated.event as unknown as Record<string, unknown>,
+      },
+      buildIngestCapabilities(runtime),
+    )
 
-    if (!providerResult) {
-      // Legacy fallback: only if explicitly allowed
-      if (!config.allowLegacyFallback) {
-        audit("llm_processing_blocked", requestId, { reason: "no_llm_provider" })
-        return errorResponse(requestId, "integration_missing", 503)
-      }
+    if (outcome.kind === "no_provider_blocked") {
+      audit("llm_processing_blocked", requestId, { reason: "no_llm_provider" })
+      return errorResponse(requestId, "integration_missing", 503)
+    }
+    if (outcome.kind === "no_provider_fallback") {
       // Fall through to legacy backend
       audit("llm_processing_blocked", requestId, { reason: "no_llm_provider_fallback_to_legacy" })
+    } else if (outcome.kind === "llm_error") {
+      audit("llm_processing_started", requestId)
+      // Map LLM pipeline errors to safe API errors
+      const mapped = mapLlmError(outcome.error)
+      audit(mapped.auditKind, requestId, { operation: "ingest", reason: outcome.error })
+      return errorResponse(requestId, mapped.code, mapped.status)
     } else {
       audit("llm_processing_started", requestId)
-
-      const signal = createExternalSignal({
-        id: validated.event.id ?? validated.id,
-        tenantId: session.tenantId as TenantId,
-        sourceType: (validated.source === "github" ? "github" : validated.source) as Parameters<typeof createExternalSignal>[0]["sourceType"],
-        sourceRef: {
-          source: (validated.source === "github" ? "github" : validated.source) as Parameters<typeof createExternalSignal>[0]["sourceRef"]["source"],
-          externalId: validated.event.id ?? validated.id,
-          capturedAt: validated.event.timestamp ?? new Date().toISOString(),
-        },
-        metadata: validated.event as unknown as Record<string, unknown>,
-      })
-
-      const result = await processWorkSignal(providerResult.provider, signal, session.tenantId as TenantId, { createdBy: "ai" })
-
-      if (!result.ok) {
-        // Map LLM pipeline errors to safe API errors
-        const mapped = mapLlmError(result.error)
-        audit(mapped.auditKind, requestId, { operation: "ingest", reason: result.error })
-        return errorResponse(requestId, mapped.code, mapped.status)
-      }
-
       audit("llm_processing_completed", requestId, { operation: "ingest" })
 
       return json({
@@ -261,13 +261,13 @@ export async function POST(request: Request): Promise<NextResponse> {
         requestId,
         target: "hopper",
         result: {
-          candidate: result.candidate,
-          draft: result.draft,
-          evaluation: result.evaluation,
+          candidate: outcome.result.candidate,
+          draft: outcome.result.draft,
+          evaluation: outcome.result.evaluation,
         },
-        sanitizedSignal: result.sanitizedSignal,
-        warnings: result.warnings,
-        riskFlags: result.riskFlags,
+        sanitizedSignal: outcome.result.sanitizedSignal,
+        warnings: outcome.result.warnings,
+        riskFlags: outcome.result.riskFlags,
         errors: [],
       }, 200)
     }
@@ -320,6 +320,15 @@ export async function POST(request: Request): Promise<NextResponse> {
     let approvalStore = resolveApprovalStore(session.tenantId as TenantId)
 
     // Resolve preview hash context for external operations
+    // WU-06 final route delegation — classified DEAD_LEGACY_WIRING, inspected once,
+    // left in place: every external operation returns at "7b" above via
+    // authorizeExternalOperation, so `isExternalOperation(validated.operation)` is
+    // always false by the time execution reaches here — this block is dead code.
+    // Not removed in this slice: removal is behavior-neutral for the route's own
+    // control flow, but would also drop the only call site that exercises
+    // `resolveRepositoryBackedApprovalStore` and the ActionPreview lookup path in
+    // this file, which is new review scope beyond this WorkUnit's toolBackend/
+    // external-execution-semantics boundary ("do not redesign toolBackend").
     let previewHashContext: { actionPreviewId: string; targetHash: string; payloadHash: string } | undefined
     if (isExternalOperation(validated.operation) && validated.approvalId && validated.actionPreviewId) {
       const repoResult = await resolveRouteRepositories(session.tenantId as TenantId, runtime)
@@ -367,17 +376,6 @@ export async function POST(request: Request): Promise<NextResponse> {
 
 // ─── Runtime Authorization (Issue #145) ─────────────────────────
 
-/** Map an external operation + source to its ApprovalActionType. */
-function runtimeActionTypeFor(
-  operation: ToolBackendOperation,
-  source: ToolBackendRequest["source"],
-): ApprovalActionType | null {
-  if (operation === "create_issue") return "github_issue"
-  if (operation === "schedule") return "calendar_event"
-  if (operation === "reply") return source === "gmail" ? "gmail_reply" : "slack_reply"
-  return null
-}
-
 /** Map a runtime authorization failure state to a safe error + audit kind. */
 function mapRuntimeAuthorizationFailure(
   state: string,
@@ -416,30 +414,15 @@ async function authorizeExternalOperation(
   requestId: string,
   runtime: ValidatedRequestRuntimeConfig,
 ): Promise<NextResponse> {
-  const actionType = runtimeActionTypeFor(validated.operation, validated.source)
-  const workUnitId = validated.draft?.id
-  if (!actionType || !workUnitId) {
-    audit("runtime_authorization_rejected", requestId, { operation: validated.operation, reason: "invalid_request" })
-    return errorResponse(requestId, "invalid_request", 400)
-  }
-  if (!validated.approvalId || !validated.actionPreviewId) {
-    audit("runtime_authorization_rejected", requestId, { operation: validated.operation, reason: "approval_required" })
-    return errorResponse(requestId, "approval_required", 403)
-  }
-
-  // The ApprovalStore is resolved for the atomic claim; the evidence resolver is
-  // default-deny in this patch, so the gate fails closed before any claim in
-  // production. Neither carries client-supplied evidence.
-  const approvalStore = resolveApprovalStore(session.tenantId as TenantId)
-  const evidenceResolver = resolveRuntimeAuthorizationEvidenceResolver(session.tenantId as TenantId)
-
   // Redacted, DURABLE audit sink: the gate buffers the requested → eligible →
   // claimed → created lifecycle (or rejected/replayed/blocked) as already-redacted
   // events and flushes them here ONCE, after the terminal decision — never inside
   // the security-critical window. Persistence is AWAITED (internally fail-open) so
   // its completion is attached to the request lifecycle; a persistence failure
   // never changes the authorization result. Issue codes are the gate's canonical
-  // allowlisted reasons.
+  // allowlisted reasons. This stays a route-level (delivery) concern: it is the
+  // HTTP request's own audit + durable-persistence plumbing, threaded through the
+  // composition root to the gate rather than assembled there.
   const auditSink: RuntimeAuthorizationAuditSink = {
     async flush(events) {
       for (const event of events) {
@@ -466,24 +449,28 @@ async function authorizeExternalOperation(
     },
   }
 
-  const result = await authorizeRuntimeCommand({
-    session,
-    request: {
-      tenantId: session.tenantId,
-      workUnitId,
-      actionPreviewId: validated.actionPreviewId,
+  const outcome = await prepareAndAuthorizeExternalOperation(
+    {
+      operation: validated.operation,
+      source: validated.source,
+      draftId: validated.draft?.id,
       approvalId: validated.approvalId,
-      actionType,
+      actionPreviewId: validated.actionPreviewId,
+      tenantId: session.tenantId,
     },
-    approvalStore,
-    evidenceResolver,
-    // Kill-switch state comes from the request-scoped security config, NOT process.env.
-    env: projectRuntimeAuthorizationEnv(runtime.security),
-    auditSink,
-  })
+    buildRuntimeAuthorizationCapabilities(session, runtime, auditSink),
+  )
 
-  if (!result.ok) {
-    const mapped = mapRuntimeAuthorizationFailure(result.state)
+  if (outcome.kind === "invalid_request") {
+    audit("runtime_authorization_rejected", requestId, { operation: validated.operation, reason: "invalid_request" })
+    return errorResponse(requestId, "invalid_request", 400)
+  }
+  if (outcome.kind === "approval_required") {
+    audit("runtime_authorization_rejected", requestId, { operation: validated.operation, reason: "approval_required" })
+    return errorResponse(requestId, "approval_required", 403)
+  }
+  if (outcome.kind === "rejected") {
+    const mapped = mapRuntimeAuthorizationFailure(outcome.state)
     return errorResponse(requestId, mapped.code, mapped.status)
   }
 
@@ -493,12 +480,12 @@ async function authorizeExternalOperation(
     requestId,
     mode: "runtime_authorization",
     status: "authorized_not_executed",
-    authorizationId: result.receipt.authorization_id,
-    workUnitId,
-    actionPreviewId: validated.actionPreviewId,
-    approvalId: validated.approvalId,
-    actionType: result.receipt.action_type,
-    expiresAt: result.receipt.expires_at,
+    authorizationId: outcome.authorizationId,
+    workUnitId: outcome.workUnitId,
+    actionPreviewId: outcome.actionPreviewId,
+    approvalId: outcome.approvalId,
+    actionType: outcome.actionType,
+    expiresAt: outcome.expiresAt,
     errors: [],
   }, 200)
 }
