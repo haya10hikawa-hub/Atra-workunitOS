@@ -19,5 +19,6 @@ export declare function runPreflight(input: {
     overall_pass: boolean;
     checks: Readonly<Record<string, boolean>>;
     failed_checks: readonly string[];
+    diagnostics: Readonly<{ oauth_client_available: boolean; oauth_refresh_state_available: boolean }>;
   }>
 >;

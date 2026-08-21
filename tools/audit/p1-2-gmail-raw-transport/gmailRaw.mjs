@@ -40,6 +40,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { isOAuthClientConfigured, resolveOAuthAccessToken } from './oauthCredential.mjs';
+
 export class GmailTransportError extends Error {
   constructor(code) {
     super(code);
@@ -69,6 +71,28 @@ export function readCredential(env) {
   }
   if (!TOKEN_RE.test(token)) throw new GmailTransportError('gmail_raw_credential_invalid');
   return token;
+}
+
+/**
+ * Resolves the bearer token used for both the RAW message fetch and the
+ * auth-check profile call.
+ *
+ * CREDENTIAL PRECEDENCE (highest to lowest):
+ *   1. OAuth — tried whenever a Desktop OAuth client (`credentials.json`) is
+ *      configured. This is the primary Run-3 path: `oauthCredential.mjs`
+ *      owns first-run consent and automatic refresh.
+ *   2. `ATRA_P1_2_GMAIL_TOKEN` — read only when no OAuth client is
+ *      configured at all. It exists for tests and for operating an
+ *      *unconfigured* installation; once a Desktop OAuth client is present,
+ *      this branch is unreachable, so it can never silently outrank or
+ *      weaken the OAuth path.
+ * `GMAIL_ACCESS_TOKEN` (or any other runtime credential) is never read at
+ * either level — this function and everything it calls are OAuth- and
+ * `ATRA_P1_2_GMAIL_TOKEN`-only.
+ */
+export async function resolveGmailBearerToken(env) {
+  if (isOAuthClientConfigured(env)) return resolveOAuthAccessToken(env);
+  return readCredential(env);
 }
 
 /**
@@ -277,7 +301,7 @@ export async function acquireGmailRawMessage({ messageId, destPath, root, env })
     throw new GmailTransportError('gmail_raw_message_id_invalid');
   }
   const resolvedDest = assertInsideRoot(destPath, root);
-  const token = readCredential(env);
+  const token = await resolveGmailBearerToken(env);
 
   const rawField = await fetchRawField(messageId, token);
   const providerBytes = decodeBase64Url(rawField);

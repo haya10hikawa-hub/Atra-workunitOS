@@ -11,7 +11,8 @@
  * @module p1-2-gmail-raw-transport/authPreflight
  */
 
-import { API_ORIGIN, CREDENTIAL_ENV, GmailTransportError, readCredential } from './gmailRaw.mjs';
+import { API_ORIGIN, CREDENTIAL_ENV, GmailTransportError, resolveGmailBearerToken } from './gmailRaw.mjs';
+import { GmailOAuthError } from './oauthCredential.mjs';
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
@@ -22,9 +23,9 @@ const REQUEST_TIMEOUT_MS = 15_000;
 export async function checkGmailAuth({ env } = {}) {
   let token;
   try {
-    token = readCredential(env);
+    token = await resolveGmailBearerToken(env);
   } catch (error) {
-    const code = error instanceof GmailTransportError ? error.code : 'internal_error';
+    const code = error instanceof GmailTransportError || error instanceof GmailOAuthError ? error.code : 'internal_error';
     return Object.freeze({ available: false, reason_code: code });
   }
 

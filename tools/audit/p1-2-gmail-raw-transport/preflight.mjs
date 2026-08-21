@@ -18,10 +18,11 @@ import path from 'node:path';
 
 import { checkGmailAuth } from './authPreflight.mjs';
 import { decodeBase64Url, readBytesDurable, sha256Hex, writeBytesDurable } from './gmailRaw.mjs';
+import { hasRefreshState, isOAuthClientConfigured, readTokenState } from './oauthCredential.mjs';
 
 const CHECK_NAMES = Object.freeze([
   'runner_installed',
-  'auth_available',
+  'gmail_auth_available',
   'destination_writable',
   'readback_works',
   'disk_space_sufficient',
@@ -72,6 +73,23 @@ async function tryCheckAsync(fn) {
 
 function checkRunnerInstalled() {
   return typeof writeBytesDurable === 'function' && typeof readBytesDurable === 'function';
+}
+
+/**
+ * Diagnostic-only sub-signals for `gmail_auth_available`, reported alongside
+ * `checks` but not part of `CHECK_NAMES`/`overall_pass`: `gmail_auth_available`
+ * already covers both the OAuth path and the documented
+ * `ATRA_P1_2_GMAIL_TOKEN` fallback end to end, so gating on these two as well
+ * would wrongly fail a preflight that is legitimately using the fallback
+ * (no OAuth client configured at all). They exist purely so a human reading
+ * a failed preflight can tell *why* — client never provisioned vs. client
+ * provisioned but consent never completed — without gating on either.
+ */
+function oauthDiagnostics(env) {
+  return Object.freeze({
+    oauth_client_available: isOAuthClientConfigured(env),
+    oauth_refresh_state_available: hasRefreshState(readTokenState(env)),
+  });
 }
 
 function checkDestinationWritableAndReadback(runRoot) {
@@ -420,7 +438,7 @@ export async function runPreflight({
   const results = {};
 
   results.runner_installed = tryCheck(() => checkRunnerInstalled());
-  results.auth_available = await tryCheckAsync(async () => (await checkGmailAuth({ env })).available);
+  results.gmail_auth_available = await tryCheckAsync(async () => (await checkGmailAuth({ env })).available);
   results.destination_writable = tryCheck(() => checkDestinationWritableAndReadback(runRoot));
   results.readback_works = results.destination_writable;
   results.disk_space_sufficient = tryCheck(() => checkDiskSpace(runRoot));
@@ -461,6 +479,7 @@ export async function runPreflight({
     overall_pass: overall,
     checks: Object.freeze(checks),
     failed_checks: Object.freeze(failedChecks),
+    diagnostics: oauthDiagnostics(env),
   });
 }
 

@@ -4,16 +4,27 @@
  *
  * AUDIT-ONLY UTILITY. Not part of the Atra runtime.
  *
- *   ATRA_P1_2_GMAIL_TOKEN=<gmail.readonly-scoped access token> \
- *     node tools/audit/p1-2-gmail-raw-transport/cli.mjs auth-check
+ * Normal operation needs no manual token: provision a Desktop OAuth client
+ * once (see README), then
  *
- *   ATRA_P1_2_GMAIL_TOKEN=<gmail.readonly-scoped access token> \
- *     node tools/audit/p1-2-gmail-raw-transport/cli.mjs acquire \
- *       --message-id <id> --root /secure/local/p1-2/sources/gmail \
- *       --dest /secure/local/p1-2/sources/gmail/<id>.eml
+ *   node tools/audit/p1-2-gmail-raw-transport/cli.mjs oauth-authorize
  *
- * Prints only the content-free result: message id, byte length, two hex
- * digests, and a boolean. Never the token, never message bytes.
+ * completes one-time browser consent (or refreshes silently if consent was
+ * already granted). After that:
+ *
+ *   node tools/audit/p1-2-gmail-raw-transport/cli.mjs auth-check
+ *
+ *   node tools/audit/p1-2-gmail-raw-transport/cli.mjs acquire \
+ *     --message-id <id> --root /secure/local/p1-2/sources/gmail \
+ *     --dest /secure/local/p1-2/sources/gmail/<id>.eml
+ *
+ * `ATRA_P1_2_GMAIL_TOKEN=<gmail.readonly-scoped access token>` remains as a
+ * fallback for tests and unconfigured installs — see `resolveGmailBearerToken`
+ * in `gmailRaw.mjs` for the exact precedence.
+ *
+ * Prints only content-free results: message id, byte length, two hex
+ * digests, a boolean, or a stable status/reason code. Never a token, a
+ * client secret, or message bytes.
  */
 
 import process from 'node:process';
@@ -22,11 +33,13 @@ import { fileURLToPath } from 'node:url';
 
 import { checkGmailAuth } from './authPreflight.mjs';
 import { GmailTransportError, acquireGmailRawMessage } from './gmailRaw.mjs';
+import { GmailOAuthError, isOAuthClientConfigured, resolveOAuthAccessToken, runFirstRunConsent } from './oauthCredential.mjs';
 import { runPreflight } from './preflight.mjs';
 
 const USAGE = [
   'usage:',
   '  cli.mjs auth-check',
+  '  cli.mjs oauth-authorize',
   '  cli.mjs acquire --message-id <id> --root <dir> --dest <path>',
   '  cli.mjs preflight --run-root <dir> --plan <path> --plan-sha256 <hex> \\',
   '    --run2-manifest <path> --run2-window-start <iso> --run2-window-end <iso> \\',
@@ -95,6 +108,38 @@ export async function main(argv, env) {
     return result.available ? 0 : 2;
   }
 
+  if (command === 'oauth-authorize') {
+    if (!isOAuthClientConfigured(env)) {
+      process.stdout.write(`${JSON.stringify({ status: 'HUMAN_GOOGLE_OAUTH_CLIENT_REQUIRED' }, null, 2)}\n`);
+      return 2;
+    }
+    try {
+      // Silent path: a refresh token is already on disk, so no browser step
+      // is needed — this also covers "already authorized, just refresh".
+      await resolveOAuthAccessToken(env);
+      process.stdout.write(`${JSON.stringify({ status: 'READY' }, null, 2)}\n`);
+      return 0;
+    } catch (error) {
+      const code = error instanceof GmailOAuthError ? error.code : 'internal_error';
+      if (code !== 'gmail_oauth_consent_required') {
+        process.stdout.write(`${JSON.stringify({ status: 'HUMAN_GOOGLE_OAUTH_CLIENT_REQUIRED', error_code: code }, null, 2)}\n`);
+        return 2;
+      }
+    }
+    // No usable refresh state yet: run the one-time consent flow. The human
+    // action needed is exactly "click Allow in the browser" — everything
+    // mechanical (server, code exchange, persistence) happens here.
+    try {
+      const result = await runFirstRunConsent(env);
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      return result.status === 'READY' ? 0 : 2;
+    } catch (error) {
+      const code = error instanceof GmailOAuthError ? error.code : 'internal_error';
+      process.stdout.write(`${JSON.stringify({ status: 'HUMAN_GOOGLE_OAUTH_CONSENT_REQUIRED', error_code: code }, null, 2)}\n`);
+      return 2;
+    }
+  }
+
   if (command === 'acquire') {
     const options = parseAcquireArgs(rest);
     if (options.invalid) {
@@ -113,7 +158,7 @@ export async function main(argv, env) {
     } catch (error) {
       // Fail closed; never let the underlying error message out — it can
       // quote a path or, from some runtimes, request internals.
-      const code = error instanceof GmailTransportError ? error.code : 'internal_error';
+      const code = error instanceof GmailTransportError || error instanceof GmailOAuthError ? error.code : 'internal_error';
       process.stdout.write(`${JSON.stringify({ error_code: code }, null, 2)}\n`);
       return 2;
     }

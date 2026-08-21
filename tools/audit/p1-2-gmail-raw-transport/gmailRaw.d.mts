@@ -12,6 +12,14 @@ export declare class GmailTransportError extends Error {
 }
 
 export declare function readCredential(env: Record<string, string | undefined> | undefined): string;
+
+/**
+ * OAuth first (when a Desktop OAuth client is configured), `ATRA_P1_2_GMAIL_TOKEN`
+ * only when it is not. Never reads `GMAIL_ACCESS_TOKEN`. See the doc comment
+ * on the implementation for the full precedence rule.
+ */
+export declare function resolveGmailBearerToken(env: Record<string, string | undefined> | undefined): Promise<string>;
+
 export declare function decodeBase64Url(value: string): Buffer;
 export declare function sha256Hex(buffer: Buffer): string;
 export declare function writeBytesDurable(destPath: string, buffer: Buffer): void;

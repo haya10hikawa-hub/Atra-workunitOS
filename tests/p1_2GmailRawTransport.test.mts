@@ -16,7 +16,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,12 +28,25 @@ import {
   acquireGmailRawMessage,
   decodeBase64Url,
   readCredential,
+  resolveGmailBearerToken,
   sha256Hex,
   verifyByteFidelity,
   writeBytesDurable,
 } from '../tools/audit/p1-2-gmail-raw-transport/gmailRaw.mjs';
 import { checkGmailAuth } from '../tools/audit/p1-2-gmail-raw-transport/authPreflight.mjs';
 import { CHECK_NAMES, runPreflight } from '../tools/audit/p1-2-gmail-raw-transport/preflight.mjs';
+import {
+  GmailOAuthError,
+  OAUTH_CREDENTIALS_PATH_ENV,
+  OAUTH_SCOPE,
+  OAUTH_TOKEN_PATH_ENV,
+  hasRefreshState,
+  isOAuthClientConfigured,
+  readTokenState,
+  refreshAccessToken,
+  resolveOAuthAccessToken,
+  runFirstRunConsent,
+} from '../tools/audit/p1-2-gmail-raw-transport/oauthCredential.mjs';
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const TOOL_DIR = resolve(TEST_DIR, '..', 'tools', 'audit', 'p1-2-gmail-raw-transport');
@@ -43,6 +56,33 @@ const CLI_PATH = join(TOOL_DIR, 'cli.mjs');
 const TOKEN = 'SYNTHETIC_READONLY_TOKEN_MUST_NOT_LEAK_00000000';
 /** Planted in synthetic message bytes; must never appear in any printed output. */
 const MARKER = Buffer.from('SYNTHETIC_GMAIL_BODY_MARKER_MUST_NOT_LEAK', 'utf8');
+
+/** Planted OAuth secrets; must never appear in any printed output or thrown error. */
+const OAUTH_CLIENT_SECRET = 'SYNTHETIC_OAUTH_CLIENT_SECRET_MUST_NOT_LEAK';
+const OAUTH_REFRESH_TOKEN = 'SYNTHETIC_OAUTH_REFRESH_TOKEN_MUST_NOT_LEAK';
+const OAUTH_ACCESS_TOKEN = 'SYNTHETIC_OAUTH_ACCESS_TOKEN_MUST_NOT_LEAK';
+
+function oauthPaths(root: string) {
+  return { credentialsPath: join(root, 'credentials.json'), tokenPath: join(root, 'token.json') };
+}
+
+function oauthEnv(root: string, extra: Record<string, string> = {}) {
+  const { credentialsPath, tokenPath } = oauthPaths(root);
+  return { [OAUTH_CREDENTIALS_PATH_ENV]: credentialsPath, [OAUTH_TOKEN_PATH_ENV]: tokenPath, ...extra };
+}
+
+function writeOAuthCredentialsFile(root: string, { clientSecret = OAUTH_CLIENT_SECRET }: { clientSecret?: string } = {}) {
+  const { credentialsPath } = oauthPaths(root);
+  writeFileSync(
+    credentialsPath,
+    JSON.stringify({ installed: { client_id: 'synthetic-client-id.apps.googleusercontent.com', client_secret: clientSecret, redirect_uris: ['http://localhost'] } }),
+  );
+}
+
+function writeOAuthTokenFile(root: string, state: Record<string, unknown>) {
+  const { tokenPath } = oauthPaths(root);
+  writeFileSync(tokenPath, JSON.stringify(state));
+}
 
 function withTmpRoot<T>(fn: (root: string) => T): T {
   const root = mkdtempSync(join(tmpdir(), 'p1-2-gmail-raw-'));
@@ -665,7 +705,7 @@ test('G7: preflight fails closed when reused dataset_record_id ordering has a ga
   });
 });
 
-test('G4: preflight reports auth_available=false without a configured credential, and does not throw', async () => {
+test('G4: preflight reports gmail_auth_available=false without a configured credential, and does not throw', async () => {
   await withTmpRootAsync(async (root) => {
     const runRoot = join(root, 'run3');
     const planPath = join(root, 'plan.json');
@@ -679,7 +719,7 @@ test('G4: preflight reports auth_available=false without a configured credential
     writeSynthGithubArtifact(artifactRoot, 'P1D-0002', 2);
 
     const result = await runPreflight({
-      env: {},
+      env: { [OAUTH_CREDENTIALS_PATH_ENV]: join(root, 'no-such-credentials.json') },
       runRoot,
       planPath,
       expectedPlanSha256: planSha256,
@@ -690,8 +730,10 @@ test('G4: preflight reports auth_available=false without a configured credential
       run2ArtifactRoot: artifactRoot,
       expectedGithubReuseCount: 1,
     });
-    assert.equal(result.checks.auth_available, false);
+    assert.equal(result.checks.gmail_auth_available, false);
     assert.equal(result.overall_pass, false);
+    assert.equal(result.diagnostics.oauth_client_available, false);
+    assert.equal(result.diagnostics.oauth_refresh_state_available, false);
   });
 });
 
@@ -890,6 +932,346 @@ test('H4: preflight fails closed when a duplicate row represents the same select
       assert.equal(result.overall_pass, false);
       assert.ok(result.failed_checks.includes('run2_github_count_exact'));
       assert.ok(result.failed_checks.includes('run2_github_selection_set_equal'));
+    } finally {
+      restore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// I. OAuth lifecycle — cached use, automatic refresh, first-run consent,
+//    precedence over the manual token fallback, and secret-leak freedom.
+//    Every case here is synthetic and every Google call is either mocked via
+//    an injected `createClient`/`exchangeCode`, or never made at all (the
+//    fresh-cached-token path returns without touching the network). No test
+//    in this section performs a real request to Google.
+// ---------------------------------------------------------------------------
+
+test('I1: a fresh cached access token is used as-is, with no refresh call', async () => {
+  await withTmpRootAsync(async (root) => {
+    writeOAuthCredentialsFile(root);
+    writeOAuthTokenFile(root, {
+      refresh_token: OAUTH_REFRESH_TOKEN,
+      access_token: OAUTH_ACCESS_TOKEN,
+      expiry_date: Date.now() + 3_600_000,
+      scope: OAUTH_SCOPE,
+    });
+    const env = oauthEnv(root);
+    let refreshCalled = false;
+    const token = await resolveOAuthAccessToken(env, {
+      createClient: () => {
+        refreshCalled = true;
+        throw new Error('must not be called — the cached token is still fresh');
+      },
+    });
+    assert.equal(token, OAUTH_ACCESS_TOKEN);
+    assert.equal(refreshCalled, false);
+  });
+});
+
+test('I2: an expired access token with a valid refresh token is automatically refreshed and persisted', async () => {
+  await withTmpRootAsync(async (root) => {
+    writeOAuthCredentialsFile(root);
+    writeOAuthTokenFile(root, {
+      refresh_token: OAUTH_REFRESH_TOKEN,
+      access_token: 'stale-access-token',
+      expiry_date: Date.now() - 1_000,
+      scope: OAUTH_SCOPE,
+    });
+    const env = oauthEnv(root);
+    const newExpiry = Date.now() + 3_600_000;
+    let setCredentialsArg: unknown = null;
+    const token = await resolveOAuthAccessToken(env, {
+      createClient: () => ({
+        setCredentials: (creds: unknown) => {
+          setCredentialsArg = creds;
+        },
+        refreshAccessToken: async () => ({
+          credentials: { access_token: 'refreshed-access-token', expiry_date: newExpiry, refresh_token: OAUTH_REFRESH_TOKEN },
+        }),
+      }),
+    });
+    assert.equal(token, 'refreshed-access-token');
+    assert.deepEqual(setCredentialsArg, { refresh_token: OAUTH_REFRESH_TOKEN });
+
+    const persisted = readTokenState(env);
+    assert.equal(persisted?.access_token, 'refreshed-access-token');
+    assert.equal(persisted?.expiry_date, newExpiry);
+    assert.equal(persisted?.refresh_token, OAUTH_REFRESH_TOKEN);
+  });
+});
+
+test('I2b: a persist failure after a successful refresh fails closed with a stable code, not a raw fs error', async () => {
+  await withTmpRootAsync(async (root) => {
+    writeOAuthCredentialsFile(root);
+    writeOAuthTokenFile(root, {
+      refresh_token: OAUTH_REFRESH_TOKEN,
+      access_token: 'stale-access-token',
+      expiry_date: Date.now() - 1_000,
+      scope: OAUTH_SCOPE,
+    });
+    const env = oauthEnv(root);
+    const { tokenPath } = oauthPaths(root);
+    const tokenDir = dirname(tokenPath);
+    // The token file itself already exists (read succeeds, refresh proceeds
+    // normally); the directory is then made read-only so the durable
+    // tmp-file-plus-rename write inside `persistTokenState` cannot create
+    // its temp file — this fails the *write*, not the read.
+    chmodSync(tokenDir, 0o500);
+    try {
+      await assert.rejects(
+        resolveOAuthAccessToken(env, {
+          createClient: () => ({
+            setCredentials: () => {},
+            refreshAccessToken: async () => ({
+              credentials: { access_token: 'refreshed-access-token', expiry_date: Date.now() + 3_600_000, refresh_token: OAUTH_REFRESH_TOKEN },
+            }),
+          }),
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof GmailOAuthError);
+          assert.equal(error.code, 'gmail_oauth_persist_failed');
+          assert.ok(!error.message.includes(tokenDir));
+          return true;
+        },
+      );
+    } finally {
+      chmodSync(tokenDir, 0o700);
+    }
+  });
+});
+
+test('I3: a refresh failure fails closed with a stable code, leaks no secret, and leaves disk state untouched', async () => {
+  await withTmpRootAsync(async (root) => {
+    writeOAuthCredentialsFile(root);
+    const originalState = {
+      refresh_token: OAUTH_REFRESH_TOKEN,
+      access_token: 'stale-access-token',
+      expiry_date: Date.now() - 1_000,
+      scope: OAUTH_SCOPE,
+    };
+    writeOAuthTokenFile(root, originalState);
+    const env = oauthEnv(root);
+
+    await assert.rejects(
+      resolveOAuthAccessToken(env, {
+        createClient: () => ({
+          setCredentials: () => {},
+          // Simulates a library rejection that quotes request internals —
+          // the secret must not survive past refreshAccessToken's boundary.
+          refreshAccessToken: async () => {
+            throw new Error(`refresh denied for client_secret=${OAUTH_CLIENT_SECRET} refresh_token=${OAUTH_REFRESH_TOKEN}`);
+          },
+        }),
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof GmailOAuthError);
+        assert.equal(error.code, 'gmail_oauth_refresh_failed');
+        assert.ok(!error.message.includes(OAUTH_CLIENT_SECRET));
+        assert.ok(!error.message.includes(OAUTH_REFRESH_TOKEN));
+        return true;
+      },
+    );
+
+    const persisted = readTokenState(env);
+    assert.deepEqual(persisted, originalState);
+  });
+});
+
+test('I4: a missing OAuth client fails closed with a stable code', async () => {
+  await withTmpRootAsync(async (root) => {
+    // credentials.json deliberately never written.
+    const env = oauthEnv(root);
+    assert.equal(isOAuthClientConfigured(env), false);
+    await assert.rejects(
+      refreshAccessToken(env),
+      (error: unknown) => error instanceof GmailOAuthError && error.code === 'gmail_oauth_client_not_configured',
+    );
+  });
+});
+
+test('I5: missing refresh state signals the first-run consent path, not a generic failure', async () => {
+  await withTmpRootAsync(async (root) => {
+    writeOAuthCredentialsFile(root);
+    // token.json deliberately never written — no prior consent.
+    const env = oauthEnv(root);
+    await assert.rejects(
+      resolveOAuthAccessToken(env),
+      (error: unknown) => error instanceof GmailOAuthError && error.code === 'gmail_oauth_consent_required',
+    );
+  });
+});
+
+test('I5b: runFirstRunConsent completes the real local-loopback server round trip and persists refresh state', async () => {
+  await withTmpRootAsync(async (root) => {
+    writeOAuthCredentialsFile(root);
+    const env = oauthEnv(root);
+    const newExpiry = Date.now() + 3_600_000;
+    let exchangedCode: string | null = null;
+
+    const result = await runFirstRunConsent(env, {
+      // The token exchange itself is mocked (no real Google call); the HTTP
+      // server, the redirect URL, and the callback round trip below are real.
+      exchangeCode: async ({ code }) => {
+        exchangedCode = code;
+        return { refresh_token: OAUTH_REFRESH_TOKEN, access_token: OAUTH_ACCESS_TOKEN, expiry_date: newExpiry };
+      },
+      // Stands in for opening a real browser: parses the real redirect_uri
+      // out of the real consent URL and fires the callback a human's
+      // "Allow" click would produce, against the real ephemeral server.
+      openBrowser: (url) => {
+        const parsed = new URL(url);
+        const redirectUri = parsed.searchParams.get('redirect_uri');
+        assert.ok(typeof redirectUri === 'string' && redirectUri.startsWith('http://127.0.0.1:'));
+        // Scope must be exactly gmail.readonly — never widened, never a second scope.
+        assert.equal(parsed.searchParams.get('scope'), OAUTH_SCOPE);
+        assert.equal(parsed.searchParams.get('access_type'), 'offline');
+        fetch(`${redirectUri}?code=synthetic-auth-code`).catch(() => {});
+        return true;
+      },
+    });
+
+    assert.deepEqual(result, { status: 'READY' });
+    assert.equal(exchangedCode, 'synthetic-auth-code');
+
+    const persisted = readTokenState(env);
+    assert.equal(persisted?.refresh_token, OAUTH_REFRESH_TOKEN);
+    assert.equal(persisted?.access_token, OAUTH_ACCESS_TOKEN);
+    assert.equal(persisted?.expiry_date, newExpiry);
+    assert.ok(hasRefreshState(persisted));
+  });
+});
+
+test('I6: the send-capable GMAIL_ACCESS_TOKEN is never read, at any precedence level', async () => {
+  await withTmpRootAsync(async (root) => {
+    // No OAuth client configured, no ATRA_P1_2_GMAIL_TOKEN — only a
+    // send-capable runtime credential is present. Resolution must still
+    // fail closed rather than silently pick it up.
+    const env = oauthEnv(root, { GMAIL_ACCESS_TOKEN: 'SEND_CAPABLE_TOKEN_MUST_NOT_BE_USED' });
+    await assert.rejects(
+      resolveGmailBearerToken(env),
+      (error: unknown) => error instanceof GmailTransportError && error.code === 'gmail_raw_credential_not_configured',
+    );
+  });
+});
+
+test('I6b: neither gmailRaw.mjs nor oauthCredential.mjs ever access env.GMAIL_ACCESS_TOKEN in code', () => {
+  // Prose may explain what is deliberately NOT read (both files' doc
+  // comments do); no line may actually look it up as a property/index.
+  const ACCESS_PATTERN = /\.GMAIL_ACCESS_TOKEN\b|\[['"]GMAIL_ACCESS_TOKEN['"]\]/;
+  for (const file of ['gmailRaw.mjs', 'oauthCredential.mjs']) {
+    const source = readFileSync(join(TOOL_DIR, file), 'utf8');
+    assert.ok(!ACCESS_PATTERN.test(source), `${file} must never access env.GMAIL_ACCESS_TOKEN`);
+  }
+});
+
+test('I7: OAuth takes precedence over ATRA_P1_2_GMAIL_TOKEN once a client is configured — the manual token is never consulted', async () => {
+  await withTmpRootAsync(async (root) => {
+    writeOAuthCredentialsFile(root);
+    writeOAuthTokenFile(root, {
+      refresh_token: OAUTH_REFRESH_TOKEN,
+      access_token: OAUTH_ACCESS_TOKEN,
+      expiry_date: Date.now() + 3_600_000,
+      scope: OAUTH_SCOPE,
+    });
+    // A manual token is also set, and it is intentionally malformed (would
+    // fail TOKEN_RE) — if it were ever consulted, resolution would throw.
+    const env = oauthEnv(root, { [CREDENTIAL_ENV]: 'not a valid token' });
+    const token = await resolveGmailBearerToken(env);
+    assert.equal(token, OAUTH_ACCESS_TOKEN);
+  });
+});
+
+test('I8: with no OAuth client configured, the manual ATRA_P1_2_GMAIL_TOKEN fallback still works unchanged', async () => {
+  await withTmpRootAsync(async (root) => {
+    const env = oauthEnv(root, { [CREDENTIAL_ENV]: TOKEN });
+    assert.equal(isOAuthClientConfigured(env), false);
+    const token = await resolveGmailBearerToken(env);
+    assert.equal(token, TOKEN);
+  });
+});
+
+test('I9: CLI oauth-authorize reports READY without a network call when a fresh token is already cached, and leaks no planted secret', async () => {
+  await withTmpRootAsync(async (root) => {
+    writeOAuthCredentialsFile(root);
+    writeOAuthTokenFile(root, {
+      refresh_token: OAUTH_REFRESH_TOKEN,
+      access_token: OAUTH_ACCESS_TOKEN,
+      expiry_date: Date.now() + 3_600_000,
+      scope: OAUTH_SCOPE,
+    });
+    const env = { ...process.env, ...oauthEnv(root) };
+    delete env.ATRA_P1_2_GMAIL_TOKEN;
+    const output = execFileSync(process.execPath, ['--experimental-strip-types', CLI_PATH, 'oauth-authorize'], { env, encoding: 'utf8' });
+    assert.deepEqual(JSON.parse(output), { status: 'READY' });
+    assert.ok(!output.includes(OAUTH_CLIENT_SECRET));
+    assert.ok(!output.includes(OAUTH_REFRESH_TOKEN));
+    assert.ok(!output.includes(OAUTH_ACCESS_TOKEN));
+  });
+});
+
+test('I10: CLI oauth-authorize reports HUMAN_GOOGLE_OAUTH_CLIENT_REQUIRED when no client is configured, without touching the network', async () => {
+  await withTmpRootAsync(async (root) => {
+    // credentials.json deliberately never written.
+    const env = { ...process.env, ...oauthEnv(root) };
+    delete env.ATRA_P1_2_GMAIL_TOKEN;
+    let output = '';
+    let status = 0;
+    try {
+      output = execFileSync(process.execPath, ['--experimental-strip-types', CLI_PATH, 'oauth-authorize'], { env, encoding: 'utf8' });
+    } catch (error) {
+      const e = error as { status?: number; stdout?: unknown };
+      status = e.status ?? 1;
+      output = String(e.stdout ?? '');
+    }
+    assert.deepEqual(JSON.parse(output), { status: 'HUMAN_GOOGLE_OAUTH_CLIENT_REQUIRED' });
+    assert.equal(status, 2);
+  });
+});
+
+test('I11: preflight reports oauth_client_available and oauth_refresh_state_available independently and truthfully', async () => {
+  await withTmpRootAsync(async (root) => {
+    writeOAuthCredentialsFile(root);
+    writeOAuthTokenFile(root, {
+      refresh_token: OAUTH_REFRESH_TOKEN,
+      access_token: OAUTH_ACCESS_TOKEN,
+      expiry_date: Date.now() + 3_600_000,
+      scope: OAUTH_SCOPE,
+    });
+
+    const runRoot = join(root, 'run3');
+    const planPath = join(root, 'plan.json');
+    writeFileSync(planPath, JSON.stringify({ hello: 'plan' }));
+    const planSha256 = sha256Hex(readFileSync(planPath));
+    const manifestPath = join(root, 'manifest.jsonl');
+    writeFileSync(
+      manifestPath,
+      [synthGithubManifestLine('P1D-0002', '2026-08-21T01:33:45Z', 2), synthGithubManifestLine('P1D-0003', '2026-08-21T01:33:46Z', 3)].join('\n'),
+    );
+    const selectionResolvedPath = join(root, 'selection-resolved.json');
+    writeFileSync(selectionResolvedPath, synthSelectionResolved([2, 3]));
+    const artifactRoot = join(root, 'artifacts');
+    writeSynthGithubArtifact(artifactRoot, 'P1D-0002', 2);
+    writeSynthGithubArtifact(artifactRoot, 'P1D-0003', 3);
+
+    const restore = mockFetchOnce(async () => new Response(JSON.stringify({}), { status: 200 }));
+    try {
+      const result = await runPreflight({
+        env: oauthEnv(root),
+        runRoot,
+        planPath,
+        expectedPlanSha256: planSha256,
+        run2ManifestPath: manifestPath,
+        run2AcquisitionWindowStartIso: '2026-08-21T01:25:19Z',
+        run2AcquisitionWindowEndIso: '2026-08-21T05:25:19Z',
+        run2SelectionResolvedPath: selectionResolvedPath,
+        run2ArtifactRoot: artifactRoot,
+        expectedGithubReuseCount: 2,
+      });
+      assert.equal(result.diagnostics.oauth_client_available, true);
+      assert.equal(result.diagnostics.oauth_refresh_state_available, true);
+      assert.equal(result.checks.gmail_auth_available, true);
+      assert.equal(result.overall_pass, true);
     } finally {
       restore();
     }
