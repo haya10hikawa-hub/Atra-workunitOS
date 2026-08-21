@@ -433,18 +433,29 @@ test('F3: auth-check with no credential fails closed without a network call', as
 // G. pre-T0 preflight — content-free PASS/FAIL over structural checks
 // ---------------------------------------------------------------------------
 
+/** Bytes a synthetic GitHub row's `content_sha256` commits to — see {@link writeSynthGithubArtifact}. */
+function synthGithubArtifactBytes(id: string) {
+  return Buffer.from(id);
+}
+
 function synthGithubManifestLine(id: string, observedAtIso: string, prNumber: number) {
   return JSON.stringify({
     dataset_record_id: id,
     provider: 'github',
     resource_class: 'github_pull_request',
-    content_sha256: sha256Hex(Buffer.from(id)),
+    content_sha256: sha256Hex(synthGithubArtifactBytes(id)),
     provider_identity_commitment_sha256: sha256Hex(Buffer.from(`identity-${id}`)),
     observed_at: observedAtIso,
     source_event_at: '2026-08-15T00:00:00Z',
     work_universe_id: 'U-COLLAB',
     raw_artifact_relative_path: `synthetic-pr-${prNumber}.json`,
   });
+}
+
+/** Persists an artifact under `artifactRoot` whose bytes hash to the row's `content_sha256`. */
+function writeSynthGithubArtifact(artifactRoot: string, id: string, prNumber: number) {
+  mkdirSync(artifactRoot, { recursive: true });
+  writeFileSync(join(artifactRoot, `synthetic-pr-${prNumber}.json`), synthGithubArtifactBytes(id));
 }
 
 /** The selection-resolution authority's `{universe: {resource_class: {selected: [...]}}}` shape. */
@@ -470,6 +481,9 @@ test('G1: preflight passes when every structural condition is satisfied', async 
     );
     const selectionResolvedPath = join(root, 'selection-resolved.json');
     writeFileSync(selectionResolvedPath, synthSelectionResolved([2, 3]));
+    const artifactRoot = join(root, 'artifacts');
+    writeSynthGithubArtifact(artifactRoot, 'P1D-0002', 2);
+    writeSynthGithubArtifact(artifactRoot, 'P1D-0003', 3);
 
     const restore = mockFetchOnce(async () => new Response(JSON.stringify({}), { status: 200 }));
     try {
@@ -482,6 +496,8 @@ test('G1: preflight passes when every structural condition is satisfied', async 
         run2AcquisitionWindowStartIso: '2026-08-21T01:25:19Z',
         run2AcquisitionWindowEndIso: '2026-08-21T05:25:19Z',
         run2SelectionResolvedPath: selectionResolvedPath,
+        run2ArtifactRoot: artifactRoot,
+        expectedGithubReuseCount: 2,
       });
       assert.equal(result.overall_pass, true);
       assert.deepEqual(result.failed_checks, []);
@@ -502,6 +518,8 @@ test('G2: preflight fails closed on a plan hash mismatch, without failing every 
     writeFileSync(manifestPath, synthGithubManifestLine('P1D-0002', '2026-08-21T01:33:45Z', 2));
     const selectionResolvedPath = join(root, 'selection-resolved.json');
     writeFileSync(selectionResolvedPath, synthSelectionResolved([2]));
+    const artifactRoot = join(root, 'artifacts');
+    writeSynthGithubArtifact(artifactRoot, 'P1D-0002', 2);
 
     const restore = mockFetchOnce(async () => new Response(JSON.stringify({}), { status: 200 }));
     try {
@@ -514,6 +532,8 @@ test('G2: preflight fails closed on a plan hash mismatch, without failing every 
         run2AcquisitionWindowStartIso: '2026-08-21T01:25:19Z',
         run2AcquisitionWindowEndIso: '2026-08-21T05:25:19Z',
         run2SelectionResolvedPath: selectionResolvedPath,
+        run2ArtifactRoot: artifactRoot,
+        expectedGithubReuseCount: 1,
       });
       assert.equal(result.overall_pass, false);
       assert.ok(result.failed_checks.includes('plan_hash_matches'));
@@ -537,6 +557,8 @@ test('G3: preflight fails closed when a Run-2 GitHub row falls outside the acqui
     writeFileSync(manifestPath, synthGithubManifestLine('P1D-0002', '2026-08-14T12:00:00Z', 2));
     const selectionResolvedPath = join(root, 'selection-resolved.json');
     writeFileSync(selectionResolvedPath, synthSelectionResolved([2]));
+    const artifactRoot = join(root, 'artifacts');
+    writeSynthGithubArtifact(artifactRoot, 'P1D-0002', 2);
 
     const restore = mockFetchOnce(async () => new Response(JSON.stringify({}), { status: 200 }));
     try {
@@ -549,6 +571,8 @@ test('G3: preflight fails closed when a Run-2 GitHub row falls outside the acqui
         run2AcquisitionWindowStartIso: '2026-08-21T01:25:19Z',
         run2AcquisitionWindowEndIso: '2026-08-21T05:25:19Z',
         run2SelectionResolvedPath: selectionResolvedPath,
+        run2ArtifactRoot: artifactRoot,
+        expectedGithubReuseCount: 1,
       });
       assert.equal(result.overall_pass, false);
       assert.ok(result.failed_checks.includes('run2_github_reuse_metadata_valid'));
@@ -570,6 +594,8 @@ test('G6: preflight fails closed when a reused GitHub row is not tied to the res
     const selectionResolvedPath = join(root, 'selection-resolved.json');
     // The row references PR #2, but the resolved selection only ever selected #3 — no provenance tie.
     writeFileSync(selectionResolvedPath, synthSelectionResolved([3]));
+    const artifactRoot = join(root, 'artifacts');
+    writeSynthGithubArtifact(artifactRoot, 'P1D-0002', 2);
 
     const restore = mockFetchOnce(async () => new Response(JSON.stringify({}), { status: 200 }));
     try {
@@ -582,9 +608,12 @@ test('G6: preflight fails closed when a reused GitHub row is not tied to the res
         run2AcquisitionWindowStartIso: '2026-08-21T01:25:19Z',
         run2AcquisitionWindowEndIso: '2026-08-21T05:25:19Z',
         run2SelectionResolvedPath: selectionResolvedPath,
+        run2ArtifactRoot: artifactRoot,
+        expectedGithubReuseCount: 1,
       });
       assert.equal(result.overall_pass, false);
       assert.ok(result.failed_checks.includes('run2_github_selection_provenance_valid'));
+      assert.ok(result.failed_checks.includes('run2_github_selection_set_equal'));
     } finally {
       restore();
     }
@@ -607,6 +636,9 @@ test('G7: preflight fails closed when reused dataset_record_id ordering has a ga
     );
     const selectionResolvedPath = join(root, 'selection-resolved.json');
     writeFileSync(selectionResolvedPath, synthSelectionResolved([2, 4]));
+    const artifactRoot = join(root, 'artifacts');
+    writeSynthGithubArtifact(artifactRoot, 'P1D-0002', 2);
+    writeSynthGithubArtifact(artifactRoot, 'P1D-0004', 4);
 
     const restore = mockFetchOnce(async () => new Response(JSON.stringify({}), { status: 200 }));
     try {
@@ -619,9 +651,14 @@ test('G7: preflight fails closed when reused dataset_record_id ordering has a ga
         run2AcquisitionWindowStartIso: '2026-08-21T01:25:19Z',
         run2AcquisitionWindowEndIso: '2026-08-21T05:25:19Z',
         run2SelectionResolvedPath: selectionResolvedPath,
+        run2ArtifactRoot: artifactRoot,
+        expectedGithubReuseCount: 2,
       });
       assert.equal(result.overall_pass, false);
-      assert.ok(result.failed_checks.includes('run2_github_record_id_sequential'));
+      assert.ok(result.failed_checks.includes('run2_dataset_record_id_sequential'));
+      // The gap is a full-manifest-scope violation only: the GitHub subset (2, 4) is still
+      // strictly increasing, so the GitHub-specific order check does not fire here.
+      assert.equal(result.checks.run2_github_record_order_valid, true);
     } finally {
       restore();
     }
@@ -638,6 +675,8 @@ test('G4: preflight reports auth_available=false without a configured credential
     writeFileSync(manifestPath, synthGithubManifestLine('P1D-0002', '2026-08-21T01:33:45Z', 2));
     const selectionResolvedPath = join(root, 'selection-resolved.json');
     writeFileSync(selectionResolvedPath, synthSelectionResolved([2]));
+    const artifactRoot = join(root, 'artifacts');
+    writeSynthGithubArtifact(artifactRoot, 'P1D-0002', 2);
 
     const result = await runPreflight({
       env: {},
@@ -648,6 +687,8 @@ test('G4: preflight reports auth_available=false without a configured credential
       run2AcquisitionWindowStartIso: '2026-08-21T01:25:19Z',
       run2AcquisitionWindowEndIso: '2026-08-21T05:25:19Z',
       run2SelectionResolvedPath: selectionResolvedPath,
+      run2ArtifactRoot: artifactRoot,
+      expectedGithubReuseCount: 1,
     });
     assert.equal(result.checks.auth_available, false);
     assert.equal(result.overall_pass, false);
@@ -667,6 +708,8 @@ test('G5: preflight fails closed when the run root already holds files', async (
     writeFileSync(manifestPath, synthGithubManifestLine('P1D-0002', '2026-08-21T01:33:45Z', 2));
     const selectionResolvedPath = join(root, 'selection-resolved.json');
     writeFileSync(selectionResolvedPath, synthSelectionResolved([2]));
+    const artifactRoot = join(root, 'artifacts');
+    writeSynthGithubArtifact(artifactRoot, 'P1D-0002', 2);
 
     const restore = mockFetchOnce(async () => new Response(JSON.stringify({}), { status: 200 }));
     try {
@@ -679,9 +722,174 @@ test('G5: preflight fails closed when the run root already holds files', async (
         run2AcquisitionWindowStartIso: '2026-08-21T01:25:19Z',
         run2AcquisitionWindowEndIso: '2026-08-21T05:25:19Z',
         run2SelectionResolvedPath: selectionResolvedPath,
+        run2ArtifactRoot: artifactRoot,
+        expectedGithubReuseCount: 1,
       });
       assert.equal(result.checks.run_root_valid, false);
       assert.equal(result.overall_pass, false);
+    } finally {
+      restore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// H. Run-3 reuse evidence closure — actual byte hash, exact cardinality,
+//    bidirectional selection-set equality over the reused Run-2 GitHub set
+// ---------------------------------------------------------------------------
+
+test('H1: preflight fails closed when a reused artifact on disk no longer matches its manifest hash', async () => {
+  await withTmpRootAsync(async (root) => {
+    const runRoot = join(root, 'run3');
+    const planPath = join(root, 'plan.json');
+    writeFileSync(planPath, '{}');
+    const planSha256 = sha256Hex(readFileSync(planPath));
+
+    const manifestPath = join(root, 'manifest.jsonl');
+    writeFileSync(manifestPath, synthGithubManifestLine('P1D-0002', '2026-08-21T01:33:45Z', 2));
+    const selectionResolvedPath = join(root, 'selection-resolved.json');
+    writeFileSync(selectionResolvedPath, synthSelectionResolved([2]));
+    const artifactRoot = join(root, 'artifacts');
+    mkdirSync(artifactRoot, { recursive: true });
+    // Bytes on disk diverge from the manifest's committed content_sha256.
+    writeFileSync(join(artifactRoot, 'synthetic-pr-2.json'), Buffer.from('drifted-bytes'));
+
+    const restore = mockFetchOnce(async () => new Response(JSON.stringify({}), { status: 200 }));
+    try {
+      const result = await runPreflight({
+        env: { [CREDENTIAL_ENV]: TOKEN },
+        runRoot,
+        planPath,
+        expectedPlanSha256: planSha256,
+        run2ManifestPath: manifestPath,
+        run2AcquisitionWindowStartIso: '2026-08-21T01:25:19Z',
+        run2AcquisitionWindowEndIso: '2026-08-21T05:25:19Z',
+        run2SelectionResolvedPath: selectionResolvedPath,
+        run2ArtifactRoot: artifactRoot,
+        expectedGithubReuseCount: 1,
+      });
+      assert.equal(result.overall_pass, false);
+      assert.ok(result.failed_checks.includes('run2_github_artifact_hash_valid'));
+      // The file exists — only its bytes are wrong — so existence is unaffected.
+      assert.equal(result.checks.run2_github_artifacts_exist, true);
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('H2: preflight fails closed when a selected GitHub artifact is missing from the manifest', async () => {
+  await withTmpRootAsync(async (root) => {
+    const runRoot = join(root, 'run3');
+    const planPath = join(root, 'plan.json');
+    writeFileSync(planPath, '{}');
+    const planSha256 = sha256Hex(readFileSync(planPath));
+
+    const manifestPath = join(root, 'manifest.jsonl');
+    writeFileSync(manifestPath, synthGithubManifestLine('P1D-0002', '2026-08-21T01:33:45Z', 2));
+    const selectionResolvedPath = join(root, 'selection-resolved.json');
+    // Selection authority selected #2 AND #3, but the manifest only reused #2.
+    writeFileSync(selectionResolvedPath, synthSelectionResolved([2, 3]));
+    const artifactRoot = join(root, 'artifacts');
+    writeSynthGithubArtifact(artifactRoot, 'P1D-0002', 2);
+
+    const restore = mockFetchOnce(async () => new Response(JSON.stringify({}), { status: 200 }));
+    try {
+      const result = await runPreflight({
+        env: { [CREDENTIAL_ENV]: TOKEN },
+        runRoot,
+        planPath,
+        expectedPlanSha256: planSha256,
+        run2ManifestPath: manifestPath,
+        run2AcquisitionWindowStartIso: '2026-08-21T01:25:19Z',
+        run2AcquisitionWindowEndIso: '2026-08-21T05:25:19Z',
+        run2SelectionResolvedPath: selectionResolvedPath,
+        run2ArtifactRoot: artifactRoot,
+        expectedGithubReuseCount: 1,
+      });
+      assert.equal(result.overall_pass, false);
+      assert.ok(result.failed_checks.includes('run2_github_selection_set_equal'));
+      // Every manifest row still traces to *a* selection entry, so the
+      // one-directional provenance check alone would not have caught this.
+      assert.equal(result.checks.run2_github_selection_provenance_valid, true);
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('H3: preflight fails closed when the manifest holds one fewer GitHub row than the pinned reuse count', async () => {
+  await withTmpRootAsync(async (root) => {
+    const runRoot = join(root, 'run3');
+    const planPath = join(root, 'plan.json');
+    writeFileSync(planPath, '{}');
+    const planSha256 = sha256Hex(readFileSync(planPath));
+
+    const manifestPath = join(root, 'manifest.jsonl');
+    // Only 1 row, but the reuse contract pins exactly 2 for this test.
+    writeFileSync(manifestPath, synthGithubManifestLine('P1D-0002', '2026-08-21T01:33:45Z', 2));
+    const selectionResolvedPath = join(root, 'selection-resolved.json');
+    writeFileSync(selectionResolvedPath, synthSelectionResolved([2]));
+    const artifactRoot = join(root, 'artifacts');
+    writeSynthGithubArtifact(artifactRoot, 'P1D-0002', 2);
+
+    const restore = mockFetchOnce(async () => new Response(JSON.stringify({}), { status: 200 }));
+    try {
+      const result = await runPreflight({
+        env: { [CREDENTIAL_ENV]: TOKEN },
+        runRoot,
+        planPath,
+        expectedPlanSha256: planSha256,
+        run2ManifestPath: manifestPath,
+        run2AcquisitionWindowStartIso: '2026-08-21T01:25:19Z',
+        run2AcquisitionWindowEndIso: '2026-08-21T05:25:19Z',
+        run2SelectionResolvedPath: selectionResolvedPath,
+        run2ArtifactRoot: artifactRoot,
+        expectedGithubReuseCount: 2,
+      });
+      assert.equal(result.overall_pass, false);
+      assert.ok(result.failed_checks.includes('run2_github_count_exact'));
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('H4: preflight fails closed when a duplicate row represents the same selected artifact twice', async () => {
+  await withTmpRootAsync(async (root) => {
+    const runRoot = join(root, 'run3');
+    const planPath = join(root, 'plan.json');
+    writeFileSync(planPath, '{}');
+    const planSha256 = sha256Hex(readFileSync(planPath));
+
+    const manifestPath = join(root, 'manifest.jsonl');
+    // Two distinct dataset_record_ids, same (universe, resource_class, PR number) identity.
+    writeFileSync(
+      manifestPath,
+      [synthGithubManifestLine('P1D-0002', '2026-08-21T01:33:45Z', 2), synthGithubManifestLine('P1D-0003', '2026-08-21T01:33:46Z', 2)].join('\n'),
+    );
+    const selectionResolvedPath = join(root, 'selection-resolved.json');
+    writeFileSync(selectionResolvedPath, synthSelectionResolved([2]));
+    const artifactRoot = join(root, 'artifacts');
+    writeSynthGithubArtifact(artifactRoot, 'P1D-0002', 2);
+
+    const restore = mockFetchOnce(async () => new Response(JSON.stringify({}), { status: 200 }));
+    try {
+      const result = await runPreflight({
+        env: { [CREDENTIAL_ENV]: TOKEN },
+        runRoot,
+        planPath,
+        expectedPlanSha256: planSha256,
+        run2ManifestPath: manifestPath,
+        run2AcquisitionWindowStartIso: '2026-08-21T01:25:19Z',
+        run2AcquisitionWindowEndIso: '2026-08-21T05:25:19Z',
+        run2SelectionResolvedPath: selectionResolvedPath,
+        run2ArtifactRoot: artifactRoot,
+        expectedGithubReuseCount: 2,
+      });
+      assert.equal(result.overall_pass, false);
+      assert.ok(result.failed_checks.includes('run2_github_count_exact'));
+      assert.ok(result.failed_checks.includes('run2_github_selection_set_equal'));
     } finally {
       restore();
     }

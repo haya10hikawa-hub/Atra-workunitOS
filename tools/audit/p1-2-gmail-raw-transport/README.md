@@ -38,6 +38,16 @@ node tools/audit/p1-2-gmail-raw-transport/cli.mjs acquire \
   --message-id <gmail message id> \
   --root /secure/local/p1-2-dataset/sources/gmail \
   --dest /secure/local/p1-2-dataset/sources/gmail/<message-id>.eml
+
+node tools/audit/p1-2-gmail-raw-transport/cli.mjs preflight \
+  --run-root /secure/local/p1-2-dataset/v1-run3/sources/gmail \
+  --plan /secure/local/p1-2-dataset/RUN3_PREREGISTRATION.md \
+  --plan-sha256 <hex> \
+  --run2-manifest /secure/local/p1-2-dataset/v1-run2/manifest.private.jsonl \
+  --run2-window-start 2026-08-21T01:25:19Z \
+  --run2-window-end 2026-08-21T05:25:19Z \
+  --run2-selection-resolved /secure/local/p1-2-dataset/v1-run2/selection-resolved.private.json \
+  --run2-artifact-root /secure/local/p1-2-dataset/v1-run2/sources
 ```
 
 `auth-check` calls `users/me/profile` and reports only `{available, reason_code}` —
@@ -98,18 +108,38 @@ real network call:
   credential is configured
 - **G** the pre-T0 preflight is content-free PASS/FAIL over structural checks,
   including that every reused Run-2 GitHub row traces to the resolved selection
-  authority and that `dataset_record_id` ordering is exactly sequential — not just
-  present-and-unique
+  authority and that the full manifest's `dataset_record_id` ordering is exactly
+  sequential — not just present-and-unique
+- **H** the reused Run-2 GitHub set is byte-verified, not just metadata-verified: a
+  reused artifact whose on-disk bytes no longer match its manifest `content_sha256`
+  fails closed (hashing happens inside a local function only — bytes are never
+  returned or logged); the pinned `EXPECTED_RUN2_GITHUB_REUSE_COUNT` cardinality is
+  exact, not "at least"; the manifest's reused-identity set and the resolved
+  selection authority's selected-identity set must match in both directions, not
+  just manifest-row-traces-to-selection; a duplicate row representing the same
+  selected artifact twice is refused
 
-29/29 pass. `byteEqual` is a direct binary comparison of provider vs. persisted
+33/33 pass. `byteEqual` is a direct binary comparison of provider vs. persisted
 bytes, not a digest comparison — B4 proves this with a forced digest collision.
 `assertInsideRoot` resolves both the root and the destination's parent through
 `realpathSync` before any fetch, so a symlink cannot lexically pass containment while
-resolving outside the root — C4 proves this. Three hand-written mutations were
-replayed to confirm the suite actually exercises these properties rather than passing
-vacuously: forcing `byteEqual` back to digest equality (B4 fails, as required),
-removing the realpath containment check (C4 fails, as required), and accepting
-unselected/non-sequential Run-2 GitHub reuse metadata (G6/G7 fail, as required).
+resolving outside the root — C4 proves this. `resolveRun2ArtifactRealPath` in
+`preflight.mjs` applies the same realpath-containment pattern to reads of already-
+persisted Run-2 artifacts. Six hand-written mutations were replayed across two
+review passes to confirm the suite actually exercises these properties rather than
+passing vacuously: forcing `byteEqual` back to digest equality (B4 fails, as
+required), removing the realpath containment check (C4 fails, as required),
+accepting unselected/non-sequential Run-2 GitHub reuse metadata (G6/G7 fail, as
+required), disabling the actual-artifact hash comparison (H1 fails, as required),
+dropping the duplicate-identity guard from the exact-count check (H4 fails, as
+required), and loosening the exact-count comparison to accept a subset (H3 fails,
+as required).
+
+`run2_github_count_exact` pins reuse to exactly `EXPECTED_RUN2_GITHUB_REUSE_COUNT`
+(34, see `RUN3_PREREGISTRATION.md` §2) GitHub rows with distinct
+`(work_universe_id, resource_class, artifact number)` identities —
+`expectedGithubReuseCount` in `runPreflight` overrides this for tests against
+smaller synthetic fixtures; the real CLI always uses the pinned constant.
 
 ## Not built
 
