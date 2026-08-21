@@ -166,6 +166,23 @@ test('A5: base64url decode round-trips exactly, no padding required', () => {
   assert.equal(Buffer.compare(original, decoded), 0);
 });
 
+test('A6: noncanonical length-modulo-one value AAAAA is rejected', () => {
+  assert.throws(() => decodeBase64Url('AAAAA'), (error) =>
+    error instanceof GmailTransportError && error.code === 'gmail_raw_field_malformed');
+});
+
+test('A7: noncanonical trailing-bit value AB is rejected', () => {
+  assert.throws(() => decodeBase64Url('AB'), (error) =>
+    error instanceof GmailTransportError && error.code === 'gmail_raw_field_malformed');
+});
+
+test('A8: representative canonical base64url values round-trip byte-exact', () => {
+  for (const bytes of [Buffer.from([0]), Buffer.from([0, 255]), Buffer.from([0, 1, 2]), Buffer.from(Array.from({ length: 32 }, (_, i) => i))]) {
+    const decoded = decodeBase64Url(bytes.toString('base64url'));
+    assert.equal(Buffer.compare(decoded, bytes), 0);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // B. the exact Run-2 B6 failure class: length-equal, byte-unequal corruption
 // ---------------------------------------------------------------------------
@@ -417,6 +434,22 @@ test('E2: a response missing the raw field fails closed', async () => {
         acquireGmailRawMessage({ messageId: 'm1', destPath: join(root, 'x.eml'), root, env: { [CREDENTIAL_ENV]: TOKEN } }),
         (error) => error instanceof GmailTransportError && error.code === 'gmail_raw_response_unrecognized',
       );
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('E3: a noncanonical RAW field fails before persistence', async () => {
+  await withTmpRootAsync(async (root) => {
+    const dest = join(root, 'noncanonical.eml');
+    const restore = mockFetchOnce(async () => fakeGmailResponse('AAAAA'));
+    try {
+      await assert.rejects(
+        acquireGmailRawMessage({ messageId: 'm1', destPath: dest, root, env: { [CREDENTIAL_ENV]: TOKEN } }),
+        (error) => error instanceof GmailTransportError && error.code === 'gmail_raw_field_malformed',
+      );
+      assert.equal(existsSync(dest), false);
     } finally {
       restore();
     }

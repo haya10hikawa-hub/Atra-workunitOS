@@ -81,7 +81,9 @@ export function decodeBase64Url(value) {
   }
   if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new GmailTransportError('gmail_raw_field_malformed');
   const bytes = Buffer.from(value, 'base64url');
-  if (bytes.length === 0) throw new GmailTransportError('gmail_raw_field_malformed');
+  if (bytes.length === 0 || bytes.toString('base64url') !== value) {
+    throw new GmailTransportError('gmail_raw_field_malformed');
+  }
   return bytes;
 }
 
