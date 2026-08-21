@@ -301,6 +301,69 @@ test("application modules do not import React, components, or API routes", async
   await assertNoForbiddenImports(["app/lib/application"], "application", violatesApplication)
 })
 
+// ─── WU-06 final route delegation: tools-route layering ──────────────────────
+//
+// The tools route (app/api/workunit/tools/route.ts) no longer directly invokes
+// the LLM ingest pipeline or the Runtime Authorization gate; that business
+// orchestration moved to app/lib/application/workunitTools/, and the concrete
+// LLM provider / Runtime Authorization adapters it needs are wired by
+// app/lib/composition/workunitTools.ts. These guards pin that shape: routes may
+// not call the business/security-critical functions directly, the new
+// Application module gains no concrete outer dependency, and the intended
+// legal edges (API -> Composition -> Application -> Domain, Composition ->
+// Security/Runtime/LLM) are each demonstrated present.
+
+const TOOLS_ROUTE_FORBIDDEN_CALLS = [
+  "processWorkSignal(", "createExternalSignal(", "authorizeRuntimeCommand(",
+  "resolveRuntimeAuthorizationEvidenceResolver(",
+]
+
+test("WU-06: the tools route no longer directly invokes the LLM ingest pipeline or the runtime authorization gate", async () => {
+  // Scoped to the tools route itself, not all of app/api: the dry-run execution
+  // route legitimately calls resolveRuntimeAuthorizationEvidenceResolver directly
+  // and is out of scope for this WorkUnit.
+  const source = await readFile(path.join(rootDir, "app/api/workunit/tools/route.ts"), "utf8")
+  const violations = TOOLS_ROUTE_FORBIDDEN_CALLS.filter((call) => source.includes(call))
+  assert.deepEqual(violations, [], `tools/route.ts must not directly invoke business/security-critical functions:\n${violations.join("\n")}`)
+})
+
+// Application must not gain a VALUE dependency on security/**, runtime/**, a
+// persistence or infrastructure implementation, or a concrete llm/ pipeline
+// module. Scoped to the new workunitTools use-case module rather than widening
+// the repo-wide `violatesApplication` policy, which stays about UI/route layers.
+function violatesWorkunitToolsApplicationTarget(edge: ModuleEdge): boolean {
+  return violatesApplication(edge)
+    || edgeKindClass(edge.kind) === "value" && hasForbiddenResolvedPath(edge.resolvedTarget, [
+      "/app/lib/security/", "/app/lib/runtime/", "/app/lib/persistence/",
+      "/app/lib/infrastructure/", "/app/lib/llm/", "/app/lib/composition/",
+    ])
+}
+
+test("WU-06: the tools-route Application use case gains no concrete security, runtime, persistence, infrastructure, composition, or llm dependency", async () => {
+  await assertNoForbiddenImports(
+    ["app/lib/application/workunitTools"], "workunitTools-application", violatesWorkunitToolsApplicationTarget,
+  )
+})
+
+test("WU-06: the intended tools-route edges (API -> Composition -> Application -> Domain, Composition -> Security/Runtime/LLM) are present", async () => {
+  const edges = await scanModuleGraph(rootDir, ["app/api/workunit/tools", "app/lib/composition", "app/lib/application/workunitTools"])
+  const resolvesTo = (file: string, target: string) =>
+    edges.some((edge) => edge.file === file && edge.resolvedTarget === target)
+
+  assert.ok(resolvesTo("app/api/workunit/tools/route.ts", "app/lib/composition/workunitTools.ts"),
+    "API -> Composition edge must exist")
+  assert.ok(resolvesTo("app/lib/composition/workunitTools.ts", "app/lib/application/workunitTools/toolOperationUseCases.ts"),
+    "Composition -> Application edge must exist")
+  assert.ok(resolvesTo("app/lib/composition/workunitTools.ts", "app/lib/security/runtimeAuthorizationGate.ts"),
+    "Composition -> Security edge must exist")
+  assert.ok(resolvesTo("app/lib/composition/workunitTools.ts", "app/lib/llm/processWorkSignal.ts"),
+    "Composition -> LLM edge must exist")
+  assert.ok(resolvesTo("app/lib/composition/workunitTools.ts", "app/lib/runtime/requestRuntimeConfig.ts"),
+    "Composition -> Runtime edge must exist")
+  assert.ok(resolvesTo("app/lib/application/workunitTools/toolOperationUseCases.ts", "app/lib/domain/types.ts"),
+    "Application -> Domain edge must exist")
+})
+
 test("components do not import D1 implementations, raw external clients, or server-only repository resolvers", async () => {
   await assertNoForbiddenImports(["app/components"], "components", violatesComponents)
 })
@@ -612,8 +675,11 @@ test("compatibility tenant module keeps its consumers and its full export surfac
     .filter((edge) => edge.resolvedTarget === COMPAT_TENANT)
   const files = [...new Set(edges.map((edge) => edge.file))]
 
-  assert.equal(files.length, 89, "compatibility importer file count drifted")
-  assert.equal(edges.length, 91, "compatibility importer edge count drifted")
+  // WU-06 final route delegation added two new type-only consumers (the tools
+  // Application use case and its composition root), following the same
+  // compat-module TenantId pattern sessionResolver.ts already uses.
+  assert.equal(files.length, 91, "compatibility importer file count drifted")
+  assert.equal(edges.length, 93, "compatibility importer edge count drifted")
   assert.deepEqual(files.filter((file) => file.startsWith("app/lib/domain/")), [],
     "no domain file may appear among the compatibility consumers")
   assert.deepEqual(

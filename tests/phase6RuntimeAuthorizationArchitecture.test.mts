@@ -254,15 +254,34 @@ test("the pure index does not export a branded-receipt constructor", async () =>
 
 // ─── MB3: durable, awaited audit persistence in the route ───────
 
-test("the tools route runtime-authorization audit sink awaits durable persistence", () => {
+// WU-06 final route delegation: the route still constructs the redacted,
+// durable-persistence audit sink (a genuinely HTTP-facing delivery concern) and
+// threads it through the composition root, but no longer calls
+// `authorizeRuntimeCommand` itself — that call moved to
+// `app/lib/composition/workunitTools.ts`, which wraps the gate behind the
+// capability contract the Application use case declares. The two halves of this
+// guard are asserted on the module that actually owns each half now.
+test("the tools route constructs a durable-persistence runtime-authorization audit sink", () => {
   const src = read("app/api/workunit/tools/route.ts")
   const sinkStart = src.indexOf("const auditSink")
-  const sinkEnd = src.indexOf("const result = await authorizeRuntimeCommand", sinkStart)
+  const sinkEnd = src.indexOf("const outcome = await prepareAndAuthorizeExternalOperation", sinkStart)
   assert.ok(sinkStart > 0 && sinkEnd > sinkStart, "runtime-authorization audit sink exists")
   const sink = src.slice(sinkStart, sinkEnd)
   assert.ok(/async flush\s*\(/.test(sink), "sink must use an async batch flush")
   assert.ok(sink.includes("await persistAuditEvent"), "sink must AWAIT durable persistence")
   assert.ok(!/void persistAuditEvent/.test(sink), "sink must not fire-and-forget durable persistence")
+  // The route must not call the gate directly (WU-06 final route delegation).
+  assert.equal(src.includes("authorizeRuntimeCommand("), false, "the route must not call authorizeRuntimeCommand directly")
+})
+
+test("the tools-route composition root awaits the runtime authorization gate with the caller-supplied audit sink", () => {
+  const src = read("app/lib/composition/workunitTools.ts")
+  const callIdx = src.indexOf("const result = await authorizeRuntimeCommand")
+  assert.ok(callIdx > 0, "composition root must call authorizeRuntimeCommand")
+  const callSiteEnd = src.indexOf("})", callIdx)
+  const call = src.slice(callIdx, callSiteEnd)
+  assert.ok(call.includes("auditSink"), "the gate call must receive the caller-supplied audit sink")
+  assert.ok(call.includes("env: projectRuntimeAuthorizationEnv(runtime.security)"), "kill-switch env must be the request-scoped projection")
 })
 
 test("the runtime-authorization audit sink is flush-based, not emit-per-event", () => {
