@@ -1108,17 +1108,20 @@ test('I5b: runFirstRunConsent completes the real local-loopback server round tri
     const env = oauthEnv(root);
     const newExpiry = Date.now() + 3_600_000;
     let exchangedCode: string | null = null;
+    let exchangedVerifier: string | null = null;
 
     const result = await runFirstRunConsent(env, {
       // The token exchange itself is mocked (no real Google call); the HTTP
       // server, the redirect URL, and the callback round trip below are real.
-      exchangeCode: async ({ code }) => {
+      exchangeCode: async ({ code, codeVerifier }) => {
         exchangedCode = code;
+        exchangedVerifier = codeVerifier;
         return { refresh_token: OAUTH_REFRESH_TOKEN, access_token: OAUTH_ACCESS_TOKEN, expiry_date: newExpiry };
       },
       // Stands in for opening a real browser: parses the real redirect_uri
-      // out of the real consent URL and fires the callback a human's
-      // "Allow" click would produce, against the real ephemeral server.
+      // and state out of the real consent URL and fires the callback a
+      // human's "Allow" click would produce, against the real ephemeral
+      // server — including the state param a real Google redirect echoes.
       openBrowser: (url) => {
         const parsed = new URL(url);
         const redirectUri = parsed.searchParams.get('redirect_uri');
@@ -1126,13 +1129,16 @@ test('I5b: runFirstRunConsent completes the real local-loopback server round tri
         // Scope must be exactly gmail.readonly — never widened, never a second scope.
         assert.equal(parsed.searchParams.get('scope'), OAUTH_SCOPE);
         assert.equal(parsed.searchParams.get('access_type'), 'offline');
-        fetch(`${redirectUri}?code=synthetic-auth-code`).catch(() => {});
+        const state = parsed.searchParams.get('state');
+        assert.ok(typeof state === 'string' && state.length > 0);
+        fetch(`${redirectUri}?code=synthetic-auth-code&state=${encodeURIComponent(state as string)}`).catch(() => {});
         return true;
       },
     });
 
     assert.deepEqual(result, { status: 'READY' });
     assert.equal(exchangedCode, 'synthetic-auth-code');
+    assert.ok(typeof exchangedVerifier === 'string' && (exchangedVerifier as string).length > 0);
 
     const persisted = readTokenState(env);
     assert.equal(persisted?.refresh_token, OAUTH_REFRESH_TOKEN);
@@ -1275,5 +1281,274 @@ test('I11: preflight reports oauth_client_available and oauth_refresh_state_avai
     } finally {
       restore();
     }
+  });
+});
+
+// J. OAuth authorization-request/callback binding — per-attempt state and
+// PKCE S256, verified strictly before any code exchange.
+
+function synthCodeVerifierResult() {
+  return { codeVerifier: 'synthetic-code-verifier-000000000000000000000000000', codeChallenge: 'synthetic-code-challenge-hash' };
+}
+
+/**
+ * Fires a consent attempt, captures the real auth URL the server built, then
+ * immediately closes the attempt out with a deliberately-wrong-state
+ * callback (fast, deterministic rejection) rather than leaving the
+ * ephemeral server's 5-minute timer as the only thing that can end it.
+ */
+async function captureAuthUrl(env: Record<string, string>): Promise<URL> {
+  let capturedUrl: URL | null = null;
+  await assert.rejects(
+    runFirstRunConsent(env, {
+      generateCodeVerifier: async () => synthCodeVerifierResult(),
+      exchangeCode: async () => ({ refresh_token: OAUTH_REFRESH_TOKEN, access_token: OAUTH_ACCESS_TOKEN, expiry_date: Date.now() + 3_600_000 }),
+      openBrowser: (url: string) => {
+        capturedUrl = new URL(url);
+        const redirectUri = capturedUrl.searchParams.get('redirect_uri');
+        fetch(`${redirectUri}?code=synthetic-auth-code&state=deliberately-wrong-state`).catch(() => {});
+        return true;
+      },
+    }),
+    (error: unknown) => error instanceof GmailOAuthError && error.code === 'gmail_oauth_state_invalid',
+  );
+  assert.ok(capturedUrl !== null);
+  return capturedUrl as URL;
+}
+
+test('J-A: the authorization URL carries a non-empty state parameter', async () => {
+  await withTmpRootAsync(async (root) => {
+    writeOAuthCredentialsFile(root);
+    const env = oauthEnv(root);
+    const url = await captureAuthUrl(env);
+    const state = url.searchParams.get('state');
+    assert.ok(typeof state === 'string' && state.length > 0);
+  });
+});
+
+test('J-B: two independent consent attempts produce different states', async () => {
+  await withTmpRootAsync(async (root) => {
+    writeOAuthCredentialsFile(root);
+    const env = oauthEnv(root);
+    const urlA = await captureAuthUrl(env);
+    const urlB = await captureAuthUrl(env);
+    assert.notEqual(urlA.searchParams.get('state'), urlB.searchParams.get('state'));
+  });
+});
+
+test('J-C: a callback carrying the matching state is permitted through to code exchange', async () => {
+  await withTmpRootAsync(async (root) => {
+    writeOAuthCredentialsFile(root);
+    const env = oauthEnv(root);
+    let exchangeCalled = false;
+
+    const result = await runFirstRunConsent(env, {
+      generateCodeVerifier: async () => synthCodeVerifierResult(),
+      exchangeCode: async () => {
+        exchangeCalled = true;
+        return { refresh_token: OAUTH_REFRESH_TOKEN, access_token: OAUTH_ACCESS_TOKEN, expiry_date: Date.now() + 3_600_000 };
+      },
+      openBrowser: (url) => {
+        const parsed = new URL(url);
+        const redirectUri = parsed.searchParams.get('redirect_uri');
+        const state = parsed.searchParams.get('state') as string;
+        fetch(`${redirectUri}?code=synthetic-auth-code&state=${encodeURIComponent(state)}`).catch(() => {});
+        return true;
+      },
+    });
+
+    assert.deepEqual(result, { status: 'READY' });
+    assert.equal(exchangeCalled, true);
+  });
+});
+
+test('J-D: a callback with no state parameter fails closed without exchanging the code or persisting a token', async () => {
+  await withTmpRootAsync(async (root) => {
+    writeOAuthCredentialsFile(root);
+    const env = oauthEnv(root);
+    let exchangeCalled = false;
+
+    await assert.rejects(
+      runFirstRunConsent(env, {
+        generateCodeVerifier: async () => synthCodeVerifierResult(),
+        exchangeCode: async () => {
+          exchangeCalled = true;
+          return { refresh_token: OAUTH_REFRESH_TOKEN, access_token: OAUTH_ACCESS_TOKEN, expiry_date: Date.now() + 3_600_000 };
+        },
+        openBrowser: (url) => {
+          const parsed = new URL(url);
+          const redirectUri = parsed.searchParams.get('redirect_uri');
+          fetch(`${redirectUri}?code=synthetic-auth-code`).catch(() => {});
+          return true;
+        },
+      }),
+      (error: unknown) => error instanceof GmailOAuthError && error.code === 'gmail_oauth_state_invalid',
+    );
+
+    assert.equal(exchangeCalled, false);
+    assert.equal(readTokenState(env), null);
+  });
+});
+
+test('J-E: a callback with a mismatched state fails closed without exchanging the code or persisting a token', async () => {
+  await withTmpRootAsync(async (root) => {
+    writeOAuthCredentialsFile(root);
+    const env = oauthEnv(root);
+    let exchangeCalled = false;
+
+    await assert.rejects(
+      runFirstRunConsent(env, {
+        generateCodeVerifier: async () => synthCodeVerifierResult(),
+        exchangeCode: async () => {
+          exchangeCalled = true;
+          return { refresh_token: OAUTH_REFRESH_TOKEN, access_token: OAUTH_ACCESS_TOKEN, expiry_date: Date.now() + 3_600_000 };
+        },
+        openBrowser: (url) => {
+          const parsed = new URL(url);
+          const redirectUri = parsed.searchParams.get('redirect_uri');
+          fetch(`${redirectUri}?code=synthetic-auth-code&state=attacker-supplied-state`).catch(() => {});
+          return true;
+        },
+      }),
+      (error: unknown) => error instanceof GmailOAuthError && error.code === 'gmail_oauth_state_invalid',
+    );
+
+    assert.equal(exchangeCalled, false);
+    assert.equal(readTokenState(env), null);
+  });
+});
+
+test('J-F: the authorization URL carries code_challenge and code_challenge_method=S256', async () => {
+  await withTmpRootAsync(async (root) => {
+    writeOAuthCredentialsFile(root);
+    const env = oauthEnv(root);
+    const url = await captureAuthUrl(env);
+    assert.equal(url.searchParams.get('code_challenge'), synthCodeVerifierResult().codeChallenge);
+    assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
+  });
+});
+
+test('J-G: the code exchange receives the same codeVerifier generated for this consent attempt', async () => {
+  await withTmpRootAsync(async (root) => {
+    writeOAuthCredentialsFile(root);
+    const env = oauthEnv(root);
+    let receivedVerifier: string | null = null;
+
+    await runFirstRunConsent(env, {
+      generateCodeVerifier: async () => synthCodeVerifierResult(),
+      exchangeCode: async ({ codeVerifier }) => {
+        receivedVerifier = codeVerifier;
+        return { refresh_token: OAUTH_REFRESH_TOKEN, access_token: OAUTH_ACCESS_TOKEN, expiry_date: Date.now() + 3_600_000 };
+      },
+      openBrowser: (url) => {
+        const parsed = new URL(url);
+        const redirectUri = parsed.searchParams.get('redirect_uri');
+        const state = parsed.searchParams.get('state') as string;
+        fetch(`${redirectUri}?code=synthetic-auth-code&state=${encodeURIComponent(state)}`).catch(() => {});
+        return true;
+      },
+    });
+
+    assert.equal(receivedVerifier, synthCodeVerifierResult().codeVerifier);
+  });
+});
+
+test('J-H: a wrong or missing PKCE verifier causes the (synthetic) exchange to fail closed, with no token persisted', async () => {
+  await withTmpRootAsync(async (root) => {
+    writeOAuthCredentialsFile(root);
+    const env = oauthEnv(root);
+
+    // Stands in for Google's own PKCE enforcement: a real token endpoint
+    // rejects a code exchange whose verifier doesn't match the challenge
+    // sent to /authorize. This double reproduces that failure shape — it
+    // never inspects codeVerifier itself (that comparison is Google's, not
+    // this module's), only that a rejection from the exchange step
+    // propagates as a stable, closed failure with nothing persisted.
+    await assert.rejects(
+      runFirstRunConsent(env, {
+        generateCodeVerifier: async () => synthCodeVerifierResult(),
+        exchangeCode: async () => {
+          throw new Error('invalid_grant: PKCE verification failed');
+        },
+        openBrowser: (url) => {
+          const parsed = new URL(url);
+          const redirectUri = parsed.searchParams.get('redirect_uri');
+          const state = parsed.searchParams.get('state') as string;
+          // No codeVerifier is echoed back over HTTP in the real flow — this
+          // double simulates the verifier having been lost/corrupted in transit.
+          fetch(`${redirectUri}?code=synthetic-auth-code&state=${encodeURIComponent(state)}`).catch(() => {});
+          return true;
+        },
+      }),
+      (error: unknown) => error instanceof GmailOAuthError && error.code === 'gmail_oauth_consent_exchange_failed',
+    );
+
+    assert.equal(readTokenState(env), null);
+  });
+});
+
+test('J-I: neither the state nor the codeVerifier is ever written to stdout or stderr', async () => {
+  await withTmpRootAsync(async (root) => {
+    writeOAuthCredentialsFile(root);
+    const env = oauthEnv(root);
+    const written: string[] = [];
+    const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+    const originalStderrWrite = process.stderr.write.bind(process.stderr);
+    process.stdout.write = ((chunk: unknown, ...rest: unknown[]) => {
+      written.push(String(chunk));
+      return originalStdoutWrite(chunk as never, ...(rest as []));
+    }) as typeof process.stdout.write;
+    process.stderr.write = ((chunk: unknown, ...rest: unknown[]) => {
+      written.push(String(chunk));
+      return originalStderrWrite(chunk as never, ...(rest as []));
+    }) as typeof process.stderr.write;
+
+    let capturedState: string | null = null;
+    try {
+      await runFirstRunConsent(env, {
+        generateCodeVerifier: async () => synthCodeVerifierResult(),
+        exchangeCode: async () => ({ refresh_token: OAUTH_REFRESH_TOKEN, access_token: OAUTH_ACCESS_TOKEN, expiry_date: Date.now() + 3_600_000 }),
+        openBrowser: (url) => {
+          const parsed = new URL(url);
+          const redirectUri = parsed.searchParams.get('redirect_uri');
+          capturedState = parsed.searchParams.get('state');
+          fetch(`${redirectUri}?code=synthetic-auth-code&state=${encodeURIComponent(capturedState as string)}`).catch(() => {});
+          return true;
+        },
+      });
+    } finally {
+      process.stdout.write = originalStdoutWrite;
+      process.stderr.write = originalStderrWrite;
+    }
+
+    const output = written.join('');
+    const state = capturedState as string | null;
+    assert.ok(state !== null && state.length > 0);
+    assert.ok(!output.includes(state as string));
+    assert.ok(!output.includes(synthCodeVerifierResult().codeVerifier));
+  });
+});
+
+test('J-J: no token state is persisted when state validation fails', async () => {
+  await withTmpRootAsync(async (root) => {
+    writeOAuthCredentialsFile(root);
+    const env = oauthEnv(root);
+    assert.equal(readTokenState(env), null);
+
+    await assert.rejects(
+      runFirstRunConsent(env, {
+        generateCodeVerifier: async () => synthCodeVerifierResult(),
+        exchangeCode: async () => ({ refresh_token: OAUTH_REFRESH_TOKEN, access_token: OAUTH_ACCESS_TOKEN, expiry_date: Date.now() + 3_600_000 }),
+        openBrowser: (url) => {
+          const parsed = new URL(url);
+          const redirectUri = parsed.searchParams.get('redirect_uri');
+          fetch(`${redirectUri}?code=synthetic-auth-code&state=wrong-state-value`).catch(() => {});
+          return true;
+        },
+      }),
+      (error: unknown) => error instanceof GmailOAuthError && error.code === 'gmail_oauth_state_invalid',
+    );
+
+    assert.equal(readTokenState(env), null);
   });
 });

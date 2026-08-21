@@ -59,15 +59,30 @@ export declare function resolveOAuthAccessToken(
   deps?: OAuthRefreshDeps,
 ): Promise<string>;
 
+export interface CodeVerifierResult {
+  codeVerifier: string;
+  codeChallenge: string;
+}
+
 export interface ConsentClientLike {
-  generateAuthUrl(opts: { access_type: string; scope: string[]; prompt: string }): string;
-  getToken(code: string): Promise<{ tokens: Record<string, unknown> }>;
+  generateAuthUrl(opts: {
+    access_type: string;
+    scope: string[];
+    prompt: string;
+    state?: string;
+    code_challenge?: string;
+    code_challenge_method?: string;
+  }): string;
+  getToken(opts: { code: string; codeVerifier?: string | null }): Promise<{ tokens: Record<string, unknown> }>;
+  generateCodeVerifierAsync(): Promise<CodeVerifierResult>;
 }
 
 export interface FirstRunConsentDeps {
   createClient?: (input: { clientId: string; clientSecret: string; redirectUri?: string }) => ConsentClientLike;
   openBrowser?: (url: string) => boolean;
-  exchangeCode?: (input: { client: ConsentClientLike; code: string }) => Promise<Record<string, unknown>>;
+  exchangeCode?: (input: { client: ConsentClientLike; code: string; codeVerifier: string | null }) => Promise<Record<string, unknown>>;
+  generateState?: () => string;
+  generateCodeVerifier?: () => Promise<CodeVerifierResult>;
 }
 
 export declare function runFirstRunConsent(

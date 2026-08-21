@@ -22,6 +22,15 @@
  *        where the cached access token is expired or missing
  *     -> `resolveOAuthAccessToken` returns a usable bearer token
  *
+ * CALLBACK BINDING: each `runFirstRunConsent` attempt generates a fresh,
+ * process-local, unpredictable `state` value and a PKCE (S256) verifier
+ * pair, embeds both in the authorization URL, and requires the exact same
+ * `state` back on `/oauth2callback` before it will touch the authorization
+ * code at all — a missing, malformed, or mismatched state fails closed
+ * (`gmail_oauth_state_invalid`) with no code exchange and no `token.json`
+ * write. Neither the state nor the PKCE verifier is ever persisted past the
+ * attempt's lifetime or printed to any output.
+ *
  * SECRET HANDLING: `credentials.json` and `token.json` live outside the repo
  * (private, per-operator paths — see {@link OAUTH_CREDENTIALS_PATH_ENV} and
  * {@link OAUTH_TOKEN_PATH_ENV}), are never git-tracked, and no function in
@@ -240,12 +249,27 @@ export async function resolveOAuthAccessToken(env, deps = {}) {
   return refreshAccessToken(env, deps);
 }
 
-function buildAuthUrl(client) {
+function buildAuthUrl(client, { state, codeChallenge }) {
   return client.generateAuthUrl({
     access_type: 'offline',
     scope: [OAUTH_SCOPE],
     prompt: 'consent',
+    state,
+    code_challenge: codeChallenge,
+    code_challenge_method: 'S256',
   });
+}
+
+/**
+ * Constant-time-ish equality: only meaningful once both inputs are known to
+ * be equal-length strings (checked by the caller first), so this never
+ * short-circuits on a length mismatch — only on content.
+ */
+function timingSafeEqualStrings(a, b) {
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
 }
 
 /** Best-effort only. A failure here just means the operator opens `auth_url` by hand. */
@@ -280,12 +304,24 @@ function openInBrowser(url) {
  * real callers use the real implementations (real server, real browser
  * spawn, real `client.getToken`).
  */
-export async function runFirstRunConsent(env, { createClient = defaultCreateClient, openBrowser = openInBrowser, exchangeCode } = {}) {
+export async function runFirstRunConsent(
+  env,
+  { createClient = defaultCreateClient, openBrowser = openInBrowser, exchangeCode, generateState, generateCodeVerifier } = {},
+) {
   const { clientId, clientSecret } = loadClientCredentials(env);
+
+  // Fresh, unpredictable, process-local, one-shot per consent attempt. Never
+  // persisted as a long-lived secret — it lives only in this closure and is
+  // discarded the instant this promise settles.
+  const expectedState = generateState ? generateState() : crypto.randomBytes(32).toString('hex');
+  if (typeof expectedState !== 'string' || expectedState.length === 0) {
+    throw new GmailOAuthError('gmail_oauth_state_generation_failed');
+  }
 
   return new Promise((settleResolve, settleReject) => {
     let settled = false;
     let authUrl = null;
+    let codeVerifier = null;
 
     const finish = (fn, value) => {
       if (settled) return;
@@ -309,8 +345,22 @@ export async function runFirstRunConsent(env, { createClient = defaultCreateClie
       }
       const code = url.searchParams.get('code');
       const error = url.searchParams.get('error');
+      const returnedState = url.searchParams.get('state');
       res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
       res.end(error ? 'Authorization was not granted. You may close this window.' : 'Authorization received. You may close this window.');
+
+      // State is verified before anything else in this handler touches the
+      // authorization code — a missing, malformed, or mismatched state must
+      // never reach token exchange or persistence.
+      if (
+        typeof returnedState !== 'string' ||
+        returnedState.length === 0 ||
+        returnedState.length !== expectedState.length ||
+        !timingSafeEqualStrings(returnedState, expectedState)
+      ) {
+        finish(settleReject, new GmailOAuthError('gmail_oauth_state_invalid'));
+        return;
+      }
 
       if (error || typeof code !== 'string' || code.length === 0) {
         finish(settleReject, new GmailOAuthError('gmail_oauth_consent_denied'));
@@ -321,7 +371,9 @@ export async function runFirstRunConsent(env, { createClient = defaultCreateClie
       try {
         const redirectUri = `http://127.0.0.1:${server.address().port}${REDIRECT_PATH}`;
         const client = createClient({ clientId, clientSecret, redirectUri });
-        exchange = exchangeCode ? exchangeCode({ client, code }) : client.getToken(code).then((response) => response.tokens);
+        exchange = exchangeCode
+          ? exchangeCode({ client, code, codeVerifier })
+          : client.getToken({ code, codeVerifier }).then((response) => response.tokens);
       } catch {
         // A synchronous throw from an injected test double, or from the
         // real client constructor, must still settle the promise — never
@@ -358,18 +410,34 @@ export async function runFirstRunConsent(env, { createClient = defaultCreateClie
     server.on('error', () => finish(settleReject, new GmailOAuthError('gmail_oauth_consent_server_failed')));
 
     server.listen(0, '127.0.0.1', () => {
-      try {
-        const port = server.address().port;
-        const redirectUri = `http://127.0.0.1:${port}${REDIRECT_PATH}`;
-        const client = createClient({ clientId, clientSecret, redirectUri });
-        authUrl = buildAuthUrl(client);
-        openBrowser(authUrl);
-      } catch {
-        // Same reasoning as the request-handler try/catch above: a
-        // synchronous throw here (real or injected) must still settle the
-        // promise rather than hang until the timeout.
-        finish(settleReject, new GmailOAuthError('gmail_oauth_consent_server_failed'));
-      }
+      (async () => {
+        try {
+          const port = server.address().port;
+          const redirectUri = `http://127.0.0.1:${port}${REDIRECT_PATH}`;
+          const client = createClient({ clientId, clientSecret, redirectUri });
+          const verifierResult = generateCodeVerifier
+            ? await generateCodeVerifier()
+            : await client.generateCodeVerifierAsync();
+          if (
+            !verifierResult ||
+            typeof verifierResult.codeVerifier !== 'string' ||
+            verifierResult.codeVerifier.length === 0 ||
+            typeof verifierResult.codeChallenge !== 'string' ||
+            verifierResult.codeChallenge.length === 0
+          ) {
+            finish(settleReject, new GmailOAuthError('gmail_oauth_pkce_generation_failed'));
+            return;
+          }
+          codeVerifier = verifierResult.codeVerifier;
+          authUrl = buildAuthUrl(client, { state: expectedState, codeChallenge: verifierResult.codeChallenge });
+          openBrowser(authUrl);
+        } catch {
+          // Same reasoning as the request-handler try/catch above: a
+          // synchronous throw here (real or injected) must still settle the
+          // promise rather than hang until the timeout.
+          finish(settleReject, new GmailOAuthError('gmail_oauth_consent_server_failed'));
+        }
+      })();
     });
   });
 }
