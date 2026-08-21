@@ -169,6 +169,52 @@ test('A5: base64url decode round-trips exactly, no padding required', () => {
   assert.equal(Buffer.compare(original, decoded), 0);
 });
 
+test('A6: a canonical base64url encoding of an ordinary text payload decodes and passes the round-trip check', () => {
+  const original = Buffer.from('a perfectly ordinary text payload, nothing unusual here', 'utf8');
+  const decoded = decodeBase64Url(base64UrlEncode(original));
+  assert.equal(Buffer.compare(original, decoded), 0);
+});
+
+test('A7: a canonical base64url encoding of arbitrary binary bytes decodes and passes the round-trip check', () => {
+  const original = Buffer.from(Array.from({ length: 513 }, (_, i) => (i * 91 + 3) % 256));
+  const decoded = decodeBase64Url(base64UrlEncode(original));
+  assert.equal(Buffer.compare(original, decoded), 0);
+});
+
+test('A8: "AB" is a non-canonical base64url string (non-zero padding bits) and is rejected', () => {
+  // Sanity: prove this really is non-canonical before asserting the rejection
+  // — this must not be an assumption about base64 bit layout.
+  assert.notEqual(Buffer.from('AB', 'base64url').toString('base64url'), 'AB');
+  assert.throws(
+    () => decodeBase64Url('AB'),
+    (error) => error instanceof GmailTransportError && error.code === 'gmail_raw_field_non_canonical',
+  );
+});
+
+test('A9: "AAAAA" is a non-canonical base64url string (implies fewer real bits than the length claims) and is rejected', () => {
+  assert.notEqual(Buffer.from('AAAAA', 'base64url').toString('base64url'), 'AAAAA');
+  assert.throws(
+    () => decodeBase64Url('AAAAA'),
+    (error) => error instanceof GmailTransportError && error.code === 'gmail_raw_field_non_canonical',
+  );
+});
+
+test('A10: a non-canonical raw field never reaches persistence — acquisition fails closed and the destination is never created', async () => {
+  await withTmpRootAsync(async (root) => {
+    const restore = mockFetchOnce(async () => fakeGmailResponse('AB'));
+    try {
+      const dest = join(root, 'never-written.eml');
+      await assert.rejects(
+        acquireGmailRawMessage({ messageId: 'm1', destPath: dest, root, env: { [CREDENTIAL_ENV]: TOKEN } }),
+        (error) => error instanceof GmailTransportError && error.code === 'gmail_raw_field_non_canonical',
+      );
+      assert.equal(existsSync(dest), false);
+    } finally {
+      restore();
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // B. the exact Run-2 B6 failure class: length-equal, byte-unequal corruption
 // ---------------------------------------------------------------------------
@@ -253,18 +299,93 @@ async function withTmpRootAsync<T>(fn: (root: string) => Promise<T>): Promise<T>
 // C. never overwrite; never escape the authorized root
 // ---------------------------------------------------------------------------
 
-test('C1: acquiring into an existing destination is refused, not overwritten', async () => {
+test('C1: acquiring into an existing destination is refused, not overwritten, and no fetch is ever made', async () => {
   await withTmpRootAsync(async (root) => {
     const dest = join(root, 'already-there.eml');
     writeFileSync(dest, 'pre-existing');
-    const raw = base64UrlEncode(Buffer.from('new bytes', 'utf8'));
-    const restore = mockFetchOnce(async () => fakeGmailResponse(raw));
+    let fetchCalled = false;
+    const restore = mockFetchOnce(async () => {
+      fetchCalled = true;
+      return fakeGmailResponse(base64UrlEncode(Buffer.from('new bytes', 'utf8')));
+    });
     try {
       await assert.rejects(
         acquireGmailRawMessage({ messageId: 'm1', destPath: dest, root, env: { [CREDENTIAL_ENV]: TOKEN } }),
         (error) => error instanceof GmailTransportError && error.code === 'gmail_raw_destination_exists',
       );
       assert.equal(readFileSync(dest, 'utf8'), 'pre-existing');
+      // Occupancy is checked before any provider call — the pre-existing
+      // file must be refused without ever paying for a live fetch.
+      assert.equal(fetchCalled, false);
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('C1b: acquiring into a destination occupied by a symlink is refused, zero fetch calls', async () => {
+  await withTmpRootAsync(async (root) => {
+    const linkTarget = join(root, 'link-target.txt');
+    writeFileSync(linkTarget, 'target-contents');
+    const dest = join(root, 'symlinked-dest.eml');
+    symlinkSync(linkTarget, dest);
+    let fetchCalled = false;
+    const restore = mockFetchOnce(async () => {
+      fetchCalled = true;
+      return fakeGmailResponse(base64UrlEncode(Buffer.from('new bytes', 'utf8')));
+    });
+    try {
+      await assert.rejects(
+        acquireGmailRawMessage({ messageId: 'm1', destPath: dest, root, env: { [CREDENTIAL_ENV]: TOKEN } }),
+        (error) => error instanceof GmailTransportError && error.code === 'gmail_raw_destination_exists',
+      );
+      assert.equal(fetchCalled, false);
+      assert.equal(readFileSync(linkTarget, 'utf8'), 'target-contents');
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('C1c: acquiring into a destination occupied by an existing directory is refused, zero fetch calls', async () => {
+  await withTmpRootAsync(async (root) => {
+    const dest = join(root, 'is-a-directory.eml');
+    mkdirSync(dest);
+    let fetchCalled = false;
+    const restore = mockFetchOnce(async () => {
+      fetchCalled = true;
+      return fakeGmailResponse(base64UrlEncode(Buffer.from('new bytes', 'utf8')));
+    });
+    try {
+      await assert.rejects(
+        acquireGmailRawMessage({ messageId: 'm1', destPath: dest, root, env: { [CREDENTIAL_ENV]: TOKEN } }),
+        (error) => error instanceof GmailTransportError && error.code === 'gmail_raw_destination_exists',
+      );
+      assert.equal(fetchCalled, false);
+      assert.equal(existsSync(dest), true);
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('C1d: a TOCTOU race — destination created between the pre-check and the write — still fails closed via the wx guard', async () => {
+  await withTmpRootAsync(async (root) => {
+    const dest = join(root, 'raced-dest.eml');
+    const raw = base64UrlEncode(Buffer.from('attacker-or-racer-bytes', 'utf8'));
+    // The pre-check sees the destination as vacant; the race is simulated by
+    // planting the file during the (mocked) network round trip, i.e. after
+    // the pre-check ran and before `writeBytesDurable`'s `wx` open.
+    const restore = mockFetchOnce(async () => {
+      writeFileSync(dest, 'raced-in-during-fetch');
+      return fakeGmailResponse(raw);
+    });
+    try {
+      await assert.rejects(
+        acquireGmailRawMessage({ messageId: 'm1', destPath: dest, root, env: { [CREDENTIAL_ENV]: TOKEN } }),
+        (error) => error instanceof GmailTransportError && error.code === 'gmail_raw_destination_exists',
+      );
+      assert.equal(readFileSync(dest, 'utf8'), 'raced-in-during-fetch', 'the racer-written content must survive untouched');
     } finally {
       restore();
     }
@@ -510,6 +631,10 @@ function synthSelectionResolved(selectedPrNumbers: number[]) {
 test('G1: preflight passes when every structural condition is satisfied', async () => {
   await withTmpRootAsync(async (root) => {
     const runRoot = join(root, 'run3');
+    // Preflight is read-only and never creates the run root itself (blocker
+    // C) — an authorized bootstrap step is assumed to have already
+    // provisioned it before preflight runs.
+    mkdirSync(runRoot, { recursive: true });
     const planPath = join(root, 'plan.json');
     writeFileSync(planPath, JSON.stringify({ hello: 'plan' }));
     const planSha256 = sha256Hex(readFileSync(planPath));
@@ -551,6 +676,8 @@ test('G1: preflight passes when every structural condition is satisfied', async 
 test('G2: preflight fails closed on a plan hash mismatch, without failing every other check', async () => {
   await withTmpRootAsync(async (root) => {
     const runRoot = join(root, 'run3');
+    // Pre-provisioned, same rationale as G1 — preflight must not create it.
+    mkdirSync(runRoot, { recursive: true });
     const planPath = join(root, 'plan.json');
     writeFileSync(planPath, JSON.stringify({ hello: 'plan' }));
 
@@ -769,6 +896,47 @@ test('G5: preflight fails closed when the run root already holds files', async (
       });
       assert.equal(result.checks.run_root_valid, false);
       assert.equal(result.overall_pass, false);
+    } finally {
+      restore();
+    }
+  });
+});
+
+test('G8: preflight fails closed when the run root does not exist yet, and never creates it', async () => {
+  await withTmpRootAsync(async (root) => {
+    const runRoot = join(root, 'run3-never-created');
+
+    const planPath = join(root, 'plan.json');
+    writeFileSync(planPath, '{}');
+    const planSha256 = sha256Hex(readFileSync(planPath));
+    const manifestPath = join(root, 'manifest.jsonl');
+    writeFileSync(manifestPath, synthGithubManifestLine('P1D-0002', '2026-08-21T01:33:45Z', 2));
+    const selectionResolvedPath = join(root, 'selection-resolved.json');
+    writeFileSync(selectionResolvedPath, synthSelectionResolved([2]));
+    const artifactRoot = join(root, 'artifacts');
+    writeSynthGithubArtifact(artifactRoot, 'P1D-0002', 2);
+
+    const restore = mockFetchOnce(async () => new Response(JSON.stringify({}), { status: 200 }));
+    try {
+      const result = await runPreflight({
+        env: { [CREDENTIAL_ENV]: TOKEN },
+        runRoot,
+        planPath,
+        expectedPlanSha256: planSha256,
+        run2ManifestPath: manifestPath,
+        run2AcquisitionWindowStartIso: '2026-08-21T01:25:19Z',
+        run2AcquisitionWindowEndIso: '2026-08-21T05:25:19Z',
+        run2SelectionResolvedPath: selectionResolvedPath,
+        run2ArtifactRoot: artifactRoot,
+        expectedGithubReuseCount: 1,
+      });
+      assert.equal(result.checks.destination_writable, false);
+      assert.equal(result.checks.disk_space_sufficient, false);
+      assert.equal(result.checks.run_root_valid, false);
+      assert.equal(result.overall_pass, false);
+      // Read-only by construction: a missing run root must never be created
+      // as a side effect of running preflight.
+      assert.equal(existsSync(runRoot), false);
     } finally {
       restore();
     }
@@ -1246,6 +1414,8 @@ test('I11: preflight reports oauth_client_available and oauth_refresh_state_avai
     });
 
     const runRoot = join(root, 'run3');
+    // Pre-provisioned — preflight is read-only and must not create it.
+    mkdirSync(runRoot, { recursive: true });
     const planPath = join(root, 'plan.json');
     writeFileSync(planPath, JSON.stringify({ hello: 'plan' }));
     const planSha256 = sha256Hex(readFileSync(planPath));

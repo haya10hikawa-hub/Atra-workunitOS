@@ -159,12 +159,18 @@ export async function enumerateGmailMetadata({
   const candidates = [];
   const seen = new Set();
   for (const messageId of messageIds) {
-    // The list endpoint can legitimately repeat an id across pages under
-    // concurrent mailbox mutation; the enumerator itself de-duplicates by
-    // id rather than letting a repeat reach `selection.mjs` (which fails
-    // closed on a duplicate *eligible* identity, but only after eligibility
-    // filtering — de-duplicating the raw id stream here is strictly safer).
-    if (seen.has(messageId)) continue;
+    // The list endpoint can repeat an id — within one page or across pages —
+    // under concurrent mailbox mutation. That is exactly the situation that
+    // must FAIL, not be silently absorbed: a silent dedup here would let a
+    // duplicate provider identity reach `selection.mjs` as an invisibly
+    // reweighted universe (one physical message effectively counted once for
+    // eligibility purposes but a duplicate id could still race a legitimate
+    // second enumeration pass, or mask a provider bug). This module fails
+    // closed the instant a repeat id is seen — before a second metadata call
+    // is ever issued for it — rather than deduplicating and continuing.
+    if (seen.has(messageId)) {
+      throw new MetadataEnumeratorError('P1_2_RUN3_GMAIL_DUPLICATE_PROVIDER_IDENTITY');
+    }
     seen.add(messageId);
     candidates.push(await getMetadata({ token, messageId, fetchImpl }));
   }

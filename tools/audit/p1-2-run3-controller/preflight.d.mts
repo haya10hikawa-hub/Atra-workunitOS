@@ -19,12 +19,15 @@ export declare function runRun3Preflight(input: {
   env: Record<string, string | undefined>;
   statePath: string;
   planBuffer: Buffer;
-  planBoundaryMarker: string;
-  expectedPlanSha256?: string;
+  sidecarBuffer: Buffer;
   run2ManifestPath: string;
   run2ArtifactRoot: string;
   run2SelectionResolvedPath: string;
   expectedGithubReuseCount?: number;
+  /** Internal test seam only — never supplied by a production caller. */
+  planAuthorityVerifier?: (input: { planBuffer: Buffer; sidecarBuffer: Buffer }) => Readonly<{
+    PLAN_AUTHORITY_MATCH: boolean;
+  }>;
 }): Promise<
   Readonly<{
     overall_pass: boolean;

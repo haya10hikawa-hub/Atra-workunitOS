@@ -31,7 +31,7 @@ import {
 } from '../p1-2-gmail-raw-transport/preflight.mjs';
 import { Run3AcquisitionController } from './controller.mjs';
 import { enumerateGmailMetadata } from './metadataEnumerator.mjs';
-import { verifyPlanAuthority } from './planAuthority.mjs';
+import { verifySealedPlanAuthority } from './planAuthority.mjs';
 
 export const CHECK_NAMES = Object.freeze([
   'runner_installed',
@@ -78,15 +78,31 @@ function tryCheckValue(fn) {
 }
 
 /**
- * The controller's private JSON state root must be creatable/writable, and
- * — if a state file already exists there from a prior run — it must be
- * parseable. A corrupted state file must fail closed *here*, at preflight,
+ * The controller's private JSON state root must ALREADY exist, be a
+ * directory, and be private (no group/other access) — preflight only
+ * observes this, it never creates or repairs it. An absent or
+ * wrong-permissioned root is a preflight FAILURE, not something for this
+ * read-only gate to fix by creating it: provisioning that directory is the
+ * job of an explicit, authorized bootstrap step (or the controller's own
+ * `ControllerStateStore`, which runs only after preflight has passed and PM
+ * authorization has been recorded), never of a "just check things" gate.
+ *
+ * If a state file already exists there from a prior run, it must be
+ * parseable — a corrupted state file must fail closed *here*, at preflight,
  * rather than surfacing later as a confusing construction-time crash inside
  * `Run3AcquisitionController`.
  */
 function checkPrivateStateRootValid(statePath) {
   const dir = path.dirname(statePath);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  let stat;
+  try {
+    stat = fs.statSync(dir);
+  } catch {
+    return false; // absent root: FAIL, never create it
+  }
+  if (!stat.isDirectory()) return false;
+  if ((stat.mode & 0o077) !== 0) return false; // must not be group/other accessible
+
   if (fs.existsSync(statePath)) {
     const raw = fs.readFileSync(statePath, 'utf8');
     if (raw.length > 0) JSON.parse(raw);
@@ -99,24 +115,32 @@ function checkPrivateStateRootValid(statePath) {
  *   env: Record<string, string | undefined>,
  *   statePath: string,
  *   planBuffer: Buffer,
- *   planBoundaryMarker: string,
- *   expectedPlanSha256?: string,
+ *   sidecarBuffer: Buffer,
  *   run2ManifestPath: string,
  *   run2ArtifactRoot: string,
  *   run2SelectionResolvedPath: string,
  *   expectedGithubReuseCount?: number,
+ *   planAuthorityVerifier?: typeof verifySealedPlanAuthority,
  * }} input
+ *
+ * `planAuthorityVerifier` is an internal test seam only (defaults to the
+ * real, pinned-constant-bound `verifySealedPlanAuthority`) — it lets tests
+ * exercise the full preflight composition without needing a preimage of the
+ * real ratified plan's SHA-256. No production caller ever supplies it, and
+ * doing so does not add a caller-suppliable "expected hash" — the injected
+ * function still receives only `{planBuffer, sidecarBuffer}` from this
+ * module and decides authority on its own terms.
  */
 export async function runRun3Preflight({
   env,
   statePath,
   planBuffer,
-  planBoundaryMarker,
-  expectedPlanSha256,
+  sidecarBuffer,
   run2ManifestPath,
   run2ArtifactRoot,
   run2SelectionResolvedPath,
   expectedGithubReuseCount = EXPECTED_RUN2_GITHUB_REUSE_COUNT,
+  planAuthorityVerifier = verifySealedPlanAuthority,
 }) {
   const results = {};
 
@@ -130,9 +154,7 @@ export async function runRun3Preflight({
   results.controller_available = tryCheck(() => typeof Run3AcquisitionController === 'function');
   results.metadata_enumerator_available = tryCheck(() => typeof enumerateGmailMetadata === 'function');
   results.private_state_root_valid = tryCheck(() => checkPrivateStateRootValid(statePath));
-  results.plan_authority_valid = tryCheck(
-    () => verifyPlanAuthority({ buffer: planBuffer, boundaryMarker: planBoundaryMarker, expectedSha256: expectedPlanSha256 }).PLAN_AUTHORITY_MATCH,
-  );
+  results.plan_authority_valid = tryCheck(() => planAuthorityVerifier({ planBuffer, sidecarBuffer }).PLAN_AUTHORITY_MATCH);
   results.run2_github_reuse_count_exact = tryCheck(() => checkRun2GithubCountExact(run2ManifestPath, expectedGithubReuseCount));
 
   const artifactEvidence = tryCheckValue(() => checkRun2GithubArtifactsMatchManifest(run2ManifestPath, run2ArtifactRoot));

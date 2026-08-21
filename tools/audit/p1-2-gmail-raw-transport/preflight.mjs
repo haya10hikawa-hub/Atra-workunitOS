@@ -92,8 +92,25 @@ function oauthDiagnostics(env) {
   });
 }
 
+/**
+ * The run root must ALREADY exist as a directory — preflight only observes
+ * it, it never creates it. Provisioning the run root is an explicit,
+ * authorized bootstrap step; a read-only gate that "fixes" a missing root by
+ * creating it is no longer read-only, and an absent root is exactly the kind
+ * of condition that must fail the gate rather than be silently repaired.
+ */
+function requireRunRootExists(runRoot) {
+  let stat;
+  try {
+    stat = fs.statSync(runRoot);
+  } catch {
+    return false;
+  }
+  return stat.isDirectory();
+}
+
 function checkDestinationWritableAndReadback(runRoot) {
-  fs.mkdirSync(runRoot, { recursive: true });
+  if (!requireRunRootExists(runRoot)) return false;
   const probeBytes = crypto.randomBytes(4096);
   const probeEncoded = probeBytes.toString('base64url');
   const decoded = decodeBase64Url(probeEncoded);
@@ -109,14 +126,14 @@ function checkDestinationWritableAndReadback(runRoot) {
 }
 
 function checkDiskSpace(runRoot) {
-  fs.mkdirSync(runRoot, { recursive: true });
+  if (!requireRunRootExists(runRoot)) return false;
   const stats = fs.statfsSync(runRoot);
   const free = Number(stats.bavail) * Number(stats.bsize);
   return Number.isFinite(free) && free >= MIN_FREE_BYTES;
 }
 
 function checkRunRootValid(runRoot) {
-  fs.mkdirSync(runRoot, { recursive: true });
+  if (!requireRunRootExists(runRoot)) return false;
   const entries = fs.readdirSync(runRoot).filter((name) => !name.startsWith('.preflight-probe-'));
   return entries.length === 0;
 }

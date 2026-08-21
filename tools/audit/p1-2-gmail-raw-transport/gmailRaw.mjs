@@ -107,6 +107,16 @@ export function decodeBase64Url(value) {
   if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new GmailTransportError('gmail_raw_field_malformed');
   const bytes = Buffer.from(value, 'base64url');
   if (bytes.length === 0) throw new GmailTransportError('gmail_raw_field_malformed');
+  // Canonicality check: base64url has representations that are not a valid
+  // encoder's output (e.g. non-zero padding bits, or a character count that
+  // implies fewer real bits than the string carries) — `Buffer.from` decodes
+  // these "successfully" but silently, which is exactly the kind of implicit
+  // normalization this transport must never accept. Re-encoding the decoded
+  // bytes and requiring an exact match with the input is the only way to
+  // prove the input was the canonical encoding of those bytes, not merely *a*
+  // decodable string.
+  const reencoded = bytes.toString('base64url');
+  if (reencoded !== value) throw new GmailTransportError('gmail_raw_field_non_canonical');
   return bytes;
 }
 
@@ -228,6 +238,34 @@ function assertInsideRoot(destPath, root) {
 }
 
 /**
+ * The destination's final path component must not already be occupied by
+ * anything — a regular file, a symlink (even a dangling one), a directory,
+ * or any other node — before any credential is resolved or any provider
+ * request is made. This is checked with `lstat` (never following a
+ * symlink) so a symlink planted at the destination is itself detected as
+ * "occupied", rather than this check silently following it and reporting
+ * on whatever it points to.
+ *
+ * This is a pre-check, not a replacement for `writeBytesDurable`'s `wx`
+ * open: a race can still create the destination between this check and the
+ * write, and `wx` is what catches that race. This function exists so the
+ * common, non-racy case (the destination is already, visibly occupied)
+ * fails BEFORE any network call — never after paying the cost of a live
+ * fetch only to discover the write was always going to be refused.
+ */
+function assertDestinationVacant(resolvedDest) {
+  try {
+    fs.lstatSync(resolvedDest);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return; // vacant — nothing at this path
+    throw new GmailTransportError('gmail_raw_destination_exists');
+  }
+  // lstat succeeded: something — file, symlink, directory, or other node —
+  // already occupies the final path component.
+  throw new GmailTransportError('gmail_raw_destination_exists');
+}
+
+/**
  * The only network call in this module.
  *
  * @returns {Promise<string>} the undecoded `raw` field, still base64url
@@ -301,6 +339,7 @@ export async function acquireGmailRawMessage({ messageId, destPath, root, env })
     throw new GmailTransportError('gmail_raw_message_id_invalid');
   }
   const resolvedDest = assertInsideRoot(destPath, root);
+  assertDestinationVacant(resolvedDest);
   const token = await resolveGmailBearerToken(env);
 
   const rawField = await fetchRawField(messageId, token);
