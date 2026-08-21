@@ -584,3 +584,36 @@ test("D9: the freeze stage flag matches the tree", () => {
       : "the seal is committed, so DATASET_FROZEN must be flipped to true in the freeze commit",
   )
 })
+
+test("D10: the protocol forbids reusing source bytes from a prior run", async () => {
+  const doc = await read(PROTOCOL_DOC)
+
+  // Both providers must be named. Run-2 left GitHub artifacts staged and Gmail
+  // unacquired, so a prohibition naming only one leaves the other implicitly
+  // available — which is the shortcut this clause exists to close.
+  assert.match(doc, /RUN2_GITHUB_BYTE_REUSE\s+FORBIDDEN/, "GitHub byte reuse must be forbidden by name")
+  assert.match(doc, /RUN2_GMAIL_BYTE_REUSE\s+FORBIDDEN/, "Gmail byte reuse must be forbidden by name")
+  assert.match(
+    doc,
+    /[Bb]ytes from a prior run may not be reused/,
+    "the prohibition must be stated in prose, not only as a scalar",
+  )
+})
+
+test("D11: the Run-3 preflight takes no prior-run input", async () => {
+  // A preflight that required a Run-2 artifact to pass would make the
+  // forbidden thing a precondition of starting.
+  const preflight = await read("tools/audit/p1-2-gmail-raw-transport/preflight.mjs")
+  const checkNames = /const CHECK_NAMES = Object\.freeze\(\[([\s\S]*?)\]\)/.exec(preflight)
+  assert.ok(checkNames, "the preflight must declare its CHECK_NAMES table")
+  assert.doesNotMatch(
+    checkNames[1],
+    /run2|reuse|selection_provenance|record_id/i,
+    "no preflight check may depend on a prior-run artifact",
+  )
+
+  const cli = await read("tools/audit/p1-2-gmail-raw-transport/cli.mjs")
+  const flagMap = /const flagMap = \{([\s\S]*?)\}/.exec(cli)
+  assert.ok(flagMap, "the CLI must declare its preflight flag map")
+  assert.doesNotMatch(flagMap[1], /run2/i, "the CLI must expose no --run2-* preflight flag")
+})

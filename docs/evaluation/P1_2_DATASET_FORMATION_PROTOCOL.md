@@ -176,6 +176,33 @@ dataset-shaped path is tracked.
 the digest's subject is the byte stream as acquired, exactly as `P1-1` established for retained
 captures.
 
+**Bytes from a prior run may not be reused.** Every source record in this dataset version is
+acquired inside this run's own acquisition window, from the provider, by this run's transport. No
+artifact, manifest row or content digest carried over from an earlier acquisition attempt may stand
+in for one:
+
+```text
+RUN2_GITHUB_BYTE_REUSE       FORBIDDEN
+RUN2_GMAIL_BYTE_REUSE        FORBIDDEN
+```
+
+This is not a tidiness rule. Run-2 terminated bound-expired at 35/60 with its GitHub artifacts
+already staged, which makes carrying them forward the cheapest available shortcut and therefore the
+one most likely to be taken. It is forbidden for two independent reasons:
+
+- **The bytes are not trustworthy.** Run-2's canary established that an AI re-emitting a payload
+  through its own context can corrupt a single octet while preserving length, and that a digest
+  computed over the retyped bytes certifies the corruption as authentic. A digest inherited from
+  Run-2 attests only that Run-2's bytes hash to Run-2's digest — it cannot distinguish a faithful
+  capture from a corrupted one.
+- **The window would be a fiction.** Acquisition bounds in section 4 are what make the corpus
+  non-adaptively selected. Rows admitted from a previous window were selected under a different
+  (and already expired) search, so mixing them in silently voids the bound this instrument's
+  validity rests on.
+
+A preflight that *required* a Run-2 artifact to pass would make the forbidden thing a precondition
+of starting; the Run-3 preflight therefore takes no prior-run input at all.
+
 ## 7. Opaque dataset identifiers
 
 Every dataset source receives an evaluation-only opaque id:
