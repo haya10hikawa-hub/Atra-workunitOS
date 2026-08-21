@@ -11,15 +11,20 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SAMPLE_SIZE, SelectionError, resolveGmailSelection } from '../tools/audit/p1-2-run3-controller/selection.mjs';
+import { SAMPLE_SIZE, SelectionError, V1_WINDOW_START_MS, V1_WINDOW_END_MS, resolveGmailSelection } from '../tools/audit/p1-2-run3-controller/selection.mjs';
 import { ControllerError, STATES, VoidTerminalError, Run3AcquisitionController } from '../tools/audit/p1-2-run3-controller/controller.mjs';
 import { ControllerStateStore } from '../tools/audit/p1-2-run3-controller/stateStore.mjs';
 
-const WINDOW = { windowStartMs: Date.parse('2026-08-14T00:00:00.000Z'), windowEndMs: Date.parse('2026-08-20T23:59:59.999Z') };
+function hex64(seed: string) {
+  return createHash('sha256').update(seed, 'utf8').digest('hex');
+}
+
+const WINDOW = { windowStartMs: V1_WINDOW_START_MS, windowEndMs: V1_WINDOW_END_MS };
 const IN_WINDOW_MS = Date.parse('2026-08-17T12:00:00.000Z');
 
 const CONFIG = Object.freeze({
@@ -76,12 +81,16 @@ function tmpStatePath() {
   return join(dir, 'state.private.json');
 }
 
-function syntheticAcquire({ byteEqual = true, messageIdOverride = null }: { byteEqual?: boolean; messageIdOverride?: string | null } = {}) {
+function syntheticAcquire({
+  byteEqual = true,
+  messageIdOverride = null,
+  digestMismatch = false,
+}: { byteEqual?: boolean; messageIdOverride?: string | null; digestMismatch?: boolean } = {}) {
   return async (identity: { message_id: string }, _destination?: string) => ({
     message_id: messageIdOverride ?? identity.message_id,
     byte_length: 1234,
-    provider_sha256: `provider-${identity.message_id}`,
-    persisted_sha256: byteEqual ? `provider-${identity.message_id}` : `persisted-${identity.message_id}`,
+    provider_sha256: hex64(`provider-${identity.message_id}`),
+    persisted_sha256: byteEqual && !digestMismatch ? hex64(`provider-${identity.message_id}`) : hex64(`persisted-${identity.message_id}`),
     byte_equal: byteEqual,
   });
 }
@@ -507,8 +516,8 @@ test('controller: R. no semantic fields or RAW content in persisted controller s
     const forbiddenAcquire = async (identity: { message_id: string }) => ({
       message_id: identity.message_id,
       byte_length: 10,
-      provider_sha256: 'hash',
-      persisted_sha256: 'hash',
+      provider_sha256: hex64('forbidden'),
+      persisted_sha256: hex64('forbidden'),
       byte_equal: true,
       // A misbehaving/legacy adapter might return extra fields; the
       // controller must never persist them.
@@ -644,6 +653,199 @@ test('controller: destination collision fails closed before any provider call', 
     };
     await assert.rejects(() => controller.acquireNext(remaining[0].message_id, countingAcquire, collidingDestinationFor), ControllerError);
     assert.equal(calls, 0);
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Final integrity closure (§11 A-I of the closure directive)
+// ---------------------------------------------------------------------------
+
+test('closure: A. restart with acquisition_in_flight -> VOID, zero provider calls', async () => {
+  const statePath = tmpStatePath();
+  try {
+    const clock = makeClock(IN_WINDOW_MS);
+    const store1 = new ControllerStateStore(statePath);
+    const controller1 = new Run3AcquisitionController(CONFIG, store1, clock);
+    controller1.authorizePM(validAuthRecord());
+    controller1.resolveSelection(makeCandidates(30), WINDOW);
+    controller1.recordT0();
+
+    // Simulate a process crash exactly between "persist in-flight marker"
+    // and "call acquireRaw": acquireRaw hangs forever and the process is
+    // killed before it resolves or rejects. We can't literally kill this
+    // process mid-`await`, so instead we assert the marker was durably
+    // persisted before the call by reconstructing a fresh controller from
+    // disk at that exact moment (a never-resolving promise stands in for
+    // "the process died here").
+    let acquireCalls = 0;
+    const neverResolves = async (_identity: { message_id: string }, _destination: string): Promise<never> => {
+      acquireCalls += 1;
+      return new Promise<never>(() => {}); // never settles: models the crash window
+    };
+    // Fire-and-forget: we don't await this call, we only care that it
+    // persisted the in-flight marker before hanging.
+    void controller1.runCanary(neverResolves, destinationFor);
+    // Give the persisted-before-call write a turn of the microtask queue.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const persistedDuringCrash = new ControllerStateStore(statePath).load() as { acquisitionInFlight: unknown };
+    assert.ok(persistedDuringCrash.acquisitionInFlight, 'in-flight marker must be durably persisted before acquireRaw is called');
+
+    const store2 = new ControllerStateStore(statePath);
+    const controller2 = new Run3AcquisitionController(CONFIG, store2, clock);
+    assert.equal(controller2.getState().state, STATES.VOID);
+    assert.equal(controller2.getState().voidReason, 'P1_2_RUN3_ACQUISITION_INTERRUPTED_AMBIGUOUS');
+    assert.equal(controller2.getState().acquisitionInFlight, null);
+    assert.equal(acquireCalls, 1, 'the hung original call is not a second call; reconstruction must never call acquireRaw again');
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+test('closure: B. byte_equal true + digest mismatch -> VOID', async () => {
+  const statePath = tmpStatePath();
+  try {
+    const clock = makeClock(IN_WINDOW_MS);
+    const controller = new Run3AcquisitionController(CONFIG, new ControllerStateStore(statePath), clock);
+    controller.authorizePM(validAuthRecord());
+    controller.resolveSelection(makeCandidates(30), WINDOW);
+    controller.recordT0();
+    await assert.rejects(() => controller.runCanary(syntheticAcquire({ byteEqual: true, digestMismatch: true }), destinationFor), VoidTerminalError);
+    assert.equal(controller.getState().state, STATES.VOID);
+    assert.equal(controller.getState().voidReason, 'P1_2_RUN3_CANARY_BYTE_FIDELITY_FAILURE');
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+test('closure: C. canary crosses deadline during acquireRaw -> VOID', async () => {
+  const statePath = tmpStatePath();
+  try {
+    const clock = makeClock(IN_WINDOW_MS);
+    const controller = new Run3AcquisitionController(CONFIG, new ControllerStateStore(statePath), clock);
+    controller.authorizePM(validAuthRecord());
+    controller.resolveSelection(makeCandidates(30), WINDOW);
+    controller.recordT0();
+    const acquireThatCrossesDeadline = async (identity: { message_id: string }) => {
+      clock.advance(4 * 60 * 60 * 1000 + 1);
+      return {
+        message_id: identity.message_id,
+        byte_length: 10,
+        provider_sha256: hex64(identity.message_id),
+        persisted_sha256: hex64(identity.message_id),
+        byte_equal: true,
+      };
+    };
+    await assert.rejects(() => controller.runCanary(acquireThatCrossesDeadline, destinationFor), VoidTerminalError);
+    assert.equal(controller.getState().state, STATES.VOID);
+    assert.equal(controller.getState().voidReason, 'P1_2_RUN3_DEADLINE_EXCEEDED');
+    assert.equal(controller.getState().completed.length, 0);
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+test('closure: D. remaining item crosses deadline during acquireRaw -> VOID', async () => {
+  const statePath = tmpStatePath();
+  try {
+    const clock = makeClock(IN_WINDOW_MS);
+    const controller = await setUpThroughCanaryPassed(clock, statePath);
+    const remainingId = controller.getState().selection!.remaining[0].message_id;
+    const completedBefore = controller.getState().completed.length;
+    const acquireThatCrossesDeadline = async (identity: { message_id: string }) => {
+      clock.advance(4 * 60 * 60 * 1000 + 1);
+      return {
+        message_id: identity.message_id,
+        byte_length: 10,
+        provider_sha256: hex64(identity.message_id),
+        persisted_sha256: hex64(identity.message_id),
+        byte_equal: true,
+      };
+    };
+    await assert.rejects(() => controller.acquireNext(remainingId, acquireThatCrossesDeadline, destinationFor), VoidTerminalError);
+    assert.equal(controller.getState().state, STATES.VOID);
+    assert.equal(controller.getState().voidReason, 'P1_2_RUN3_DEADLINE_EXCEEDED');
+    assert.equal(controller.getState().completed.length, completedBefore);
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+test('closure: E. wrong observation start -> rejected', () => {
+  const statePath = tmpStatePath();
+  try {
+    const clock = makeClock(IN_WINDOW_MS);
+    const controller = new Run3AcquisitionController(CONFIG, new ControllerStateStore(statePath), clock);
+    controller.authorizePM(validAuthRecord());
+    const wrongWindow = { windowStartMs: V1_WINDOW_START_MS + 1, windowEndMs: V1_WINDOW_END_MS };
+    assert.throws(() => controller.resolveSelection(makeCandidates(30), wrongWindow), (err: unknown) => err instanceof ControllerError && err.code === 'P1_2_RUN3_OBSERVATION_WINDOW_MISMATCH');
+    assert.equal(controller.getState().state, STATES.PM_AUTHORIZED);
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+test('closure: F. wrong observation end -> rejected', () => {
+  const statePath = tmpStatePath();
+  try {
+    const clock = makeClock(IN_WINDOW_MS);
+    const controller = new Run3AcquisitionController(CONFIG, new ControllerStateStore(statePath), clock);
+    controller.authorizePM(validAuthRecord());
+    const wrongWindow = { windowStartMs: V1_WINDOW_START_MS, windowEndMs: V1_WINDOW_END_MS - 1 };
+    assert.throws(() => controller.resolveSelection(makeCandidates(30), wrongWindow), (err: unknown) => err instanceof ControllerError && err.code === 'P1_2_RUN3_OBSERVATION_WINDOW_MISMATCH');
+    assert.equal(controller.getState().state, STATES.PM_AUTHORIZED);
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+test('closure: G. duplicate eligible message id -> rejected', () => {
+  const candidates = [...makeCandidates(30), candidate('msg-0005')]; // msg-0005 already exists in makeCandidates(30)
+  assert.throws(() => resolveGmailSelection(candidates, WINDOW), (err: unknown) => err instanceof SelectionError && err.code === 'P1_2_RUN3_GMAIL_DUPLICATE_ELIGIBLE_IDENTITY');
+});
+
+test('closure: G2. duplicate eligible message id rejected through the controller path', () => {
+  const statePath = tmpStatePath();
+  try {
+    const clock = makeClock(IN_WINDOW_MS);
+    const controller = new Run3AcquisitionController(CONFIG, new ControllerStateStore(statePath), clock);
+    controller.authorizePM(validAuthRecord());
+    const candidates = [...makeCandidates(30), candidate('msg-0005')];
+    assert.throws(() => controller.resolveSelection(candidates, WINDOW), (err: unknown) => err instanceof SelectionError && err.code === 'P1_2_RUN3_GMAIL_DUPLICATE_ELIGIBLE_IDENTITY');
+    assert.equal(controller.getState().state, STATES.PM_AUTHORIZED);
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+test('closure: H. state file POSIX mode = 0600', () => {
+  const statePath = tmpStatePath();
+  try {
+    const clock = makeClock(IN_WINDOW_MS);
+    const controller = new Run3AcquisitionController(CONFIG, new ControllerStateStore(statePath), clock);
+    controller.authorizePM(validAuthRecord());
+    const mode = statSync(statePath).mode & 0o777;
+    assert.equal(mode.toString(8), '600');
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+test('closure: I. restart with different plan/config -> rejected', () => {
+  const statePath = tmpStatePath();
+  try {
+    const clock = makeClock(IN_WINDOW_MS);
+    const store1 = new ControllerStateStore(statePath);
+    const controller1 = new Run3AcquisitionController(CONFIG, store1, clock);
+    controller1.authorizePM(validAuthRecord());
+
+    const DIFFERENT_CONFIG = { ...CONFIG, planSha256: 'a-different-plan-hash' };
+    const store2 = new ControllerStateStore(statePath);
+    const controller2 = new Run3AcquisitionController(DIFFERENT_CONFIG, store2, clock);
+    assert.equal(controller2.getState().state, STATES.VOID);
+    assert.equal(controller2.getState().voidReason, 'P1_2_RUN3_RESTART_CONFIG_MISMATCH');
   } finally {
     rmSync(statePath, { force: true });
   }

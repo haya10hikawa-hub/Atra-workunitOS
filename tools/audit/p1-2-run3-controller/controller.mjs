@@ -26,9 +26,17 @@
  * enumeration and deterministic selection are not content-bearing
  * acquisition and do not themselves start T0, but T0 cannot be recorded
  * until a selection commitment exists.
+ *
+ * Every content-bearing acquisition (`runCanary`, `acquireNext`) durably
+ * persists an `acquisitionInFlight` marker *before* calling the injected
+ * `acquireRaw` capability, and clears it only after the result has been
+ * validated and registered. If the process restarts while that marker is
+ * still present, the outcome of the in-flight call is unprovable — the
+ * controller fails closed to VOID on restore rather than ever calling
+ * `acquireRaw` again for it.
  */
 
-import { resolveGmailSelection, selectionCommitment } from './selection.mjs';
+import { V1_WINDOW_START_MS, V1_WINDOW_END_MS, resolveGmailSelection, selectionCommitment } from './selection.mjs';
 
 export const STATES = Object.freeze({
   PRE_T0: 'PRE_T0',
@@ -45,6 +53,16 @@ export const STATES = Object.freeze({
 
 const ACQUISITION_DURATION_MS = 4 * 60 * 60 * 1000;
 const TOTAL_GMAIL = 26;
+const HEX_64 = /^[0-9a-fA-F]{64}$/;
+
+const PM_AUTH_FIELDS = Object.freeze([
+  ['run_id', 'runId'],
+  ['plan_sha256', 'planSha256'],
+  ['expected_github_reuse', 'expectedGithubReuse'],
+  ['expected_gmail_new', 'expectedGmailNew'],
+  ['expected_total', 'expectedTotal'],
+  ['acquisition_duration_hours', 'acquisitionDurationHours'],
+]);
 
 export class ControllerError extends Error {
   constructor(code) {
@@ -60,19 +78,31 @@ export class VoidTerminalError extends ControllerError {
   }
 }
 
-function requiredResultFields(result) {
-  return (
+/**
+ * Full acceptance contract for a completed acquisition. Byte equality
+ * remains the primary fidelity authority (unchanged from the Gmail RAW
+ * transport); the digest fields are additional evidence layered on top, not
+ * a replacement — a `byte_equal: true` result whose provider/persisted
+ * digests disagree is still rejected.
+ */
+function isValidEvidence(result, expectedMessageId) {
+  return Boolean(
     result &&
-    typeof result.message_id === 'string' &&
-    result.message_id.length > 0 &&
-    Number.isInteger(result.byte_length) &&
-    result.byte_length > 0 &&
-    typeof result.provider_sha256 === 'string' &&
-    result.provider_sha256.length > 0 &&
-    typeof result.persisted_sha256 === 'string' &&
-    result.persisted_sha256.length > 0 &&
-    typeof result.byte_equal === 'boolean'
+      typeof result.message_id === 'string' &&
+      result.message_id === expectedMessageId &&
+      Number.isInteger(result.byte_length) &&
+      result.byte_length > 0 &&
+      result.byte_equal === true &&
+      typeof result.provider_sha256 === 'string' &&
+      HEX_64.test(result.provider_sha256) &&
+      typeof result.persisted_sha256 === 'string' &&
+      HEX_64.test(result.persisted_sha256) &&
+      result.provider_sha256 === result.persisted_sha256,
   );
+}
+
+function pmAuthMatchesConfig(authRecord, config) {
+  return PM_AUTH_FIELDS.every(([recordKey, configKey]) => authRecord[recordKey] === config[configKey]);
 }
 
 export class Run3AcquisitionController {
@@ -99,6 +129,7 @@ export class Run3AcquisitionController {
       this.destinationsUsed = [];
       this.voidReason = null;
       this.validation = null;
+      this.acquisitionInFlight = null;
     }
   }
 
@@ -112,6 +143,23 @@ export class Run3AcquisitionController {
     this.destinationsUsed = persisted.destinationsUsed ?? [];
     this.voidReason = persisted.voidReason ?? null;
     this.validation = persisted.validation ?? null;
+    this.acquisitionInFlight = persisted.acquisitionInFlight ?? null;
+
+    // A persisted Run-3 state may only continue under the exact plan/config
+    // it was authorized under. Never continue a restored run under a
+    // different plan.
+    if (this.pmAuthorization && !pmAuthMatchesConfig(this.pmAuthorization, this.config)) {
+      this._void('P1_2_RUN3_RESTART_CONFIG_MISMATCH');
+    }
+
+    // A durable in-flight marker with no matching completion means the
+    // process died between "about to call acquireRaw" and "registered the
+    // outcome". That outcome is no longer provable either way, so this
+    // fails closed rather than ever calling acquireRaw again for it.
+    if (this.acquisitionInFlight) {
+      this.acquisitionInFlight = null;
+      this._void('P1_2_RUN3_ACQUISITION_INTERRUPTED_AMBIGUOUS');
+    }
   }
 
   _persist() {
@@ -125,6 +173,7 @@ export class Run3AcquisitionController {
       destinationsUsed: this.destinationsUsed,
       voidReason: this.voidReason,
       validation: this.validation,
+      acquisitionInFlight: this.acquisitionInFlight,
     });
   }
 
@@ -132,6 +181,7 @@ export class Run3AcquisitionController {
     if (this.state === STATES.VOID) return;
     this.state = STATES.VOID;
     this.voidReason = reason;
+    this.acquisitionInFlight = null;
     this._persist();
   }
 
@@ -163,6 +213,7 @@ export class Run3AcquisitionController {
       completed: [...this.completed],
       voidReason: this.voidReason,
       validation: this.validation,
+      acquisitionInFlight: this.acquisitionInFlight,
     });
   }
 
@@ -171,17 +222,7 @@ export class Run3AcquisitionController {
    */
   authorizePM(authRecord) {
     this._guardState(STATES.PRE_T0);
-    const c = this.config;
-    const matches =
-      authRecord &&
-      authRecord.run_id === c.runId &&
-      authRecord.plan_sha256 === c.planSha256 &&
-      authRecord.expected_github_reuse === c.expectedGithubReuse &&
-      authRecord.expected_gmail_new === c.expectedGmailNew &&
-      authRecord.expected_total === c.expectedTotal &&
-      authRecord.acquisition_duration_hours === c.acquisitionDurationHours;
-
-    if (!matches) {
+    if (!authRecord || !pmAuthMatchesConfig(authRecord, this.config)) {
       throw new ControllerError('P1_2_RUN3_PM_AUTHORIZATION_INVALID');
     }
 
@@ -196,9 +237,19 @@ export class Run3AcquisitionController {
    */
   resolveSelection(candidates, window) {
     this._guardState(STATES.PM_AUTHORIZED);
-    // Throws SelectionError (e.g. eligible universe too small) without
-    // mutating state — this is a pre-T0 setup failure, not an
-    // experiment-integrity violation, so it is not terminal.
+
+    // The production/controller path is bound exactly to the V1 rule's
+    // fixed observation window. A caller-supplied window that doesn't match
+    // it byte-for-byte (not even by 1ms) must never silently operate under
+    // the P1_2_RUN3_GMAIL_METADATA_SELECTION_V1 rule id.
+    if (!window || window.windowStartMs !== V1_WINDOW_START_MS || window.windowEndMs !== V1_WINDOW_END_MS) {
+      throw new ControllerError('P1_2_RUN3_OBSERVATION_WINDOW_MISMATCH');
+    }
+
+    // Throws SelectionError (e.g. eligible universe too small, or a
+    // duplicate eligible identity) without mutating state — this is a
+    // pre-T0 setup failure, not an experiment-integrity violation, so it is
+    // not terminal.
     const resolution = resolveGmailSelection(candidates, window);
     const commitment = selectionCommitment(resolution);
 
@@ -252,6 +303,9 @@ export class Run3AcquisitionController {
       throw new ControllerError('P1_2_RUN3_DESTINATION_ALREADY_EXISTS');
     }
 
+    this.acquisitionInFlight = { kind: 'CANARY', message_id: canary.message_id, destination, started_at: this.clock.now() };
+    this._persist();
+
     let result;
     try {
       result = await acquireRaw(canary, destination);
@@ -260,8 +314,12 @@ export class Run3AcquisitionController {
       throw new VoidTerminalError(this.voidReason);
     }
 
-    if (!requiredResultFields(result) || result.message_id !== canary.message_id || result.byte_equal !== true) {
+    if (!isValidEvidence(result, canary.message_id)) {
       this._void('P1_2_RUN3_CANARY_BYTE_FIDELITY_FAILURE');
+      throw new VoidTerminalError(this.voidReason);
+    }
+    if (this._pastDeadline()) {
+      this._void('P1_2_RUN3_DEADLINE_EXCEEDED');
       throw new VoidTerminalError(this.voidReason);
     }
 
@@ -274,6 +332,7 @@ export class Run3AcquisitionController {
       completed_at: this.clock.now(),
     });
     this.destinationsUsed.push(destination);
+    this.acquisitionInFlight = null;
     this.state = STATES.CANARY_PASSED;
     this._persist();
   }
@@ -308,6 +367,9 @@ export class Run3AcquisitionController {
       throw new ControllerError('P1_2_RUN3_DESTINATION_ALREADY_EXISTS');
     }
 
+    this.acquisitionInFlight = { kind: 'GMAIL', message_id: identity.message_id, destination, started_at: this.clock.now() };
+    this._persist();
+
     let result;
     try {
       result = await acquireRaw(identity, destination);
@@ -316,8 +378,12 @@ export class Run3AcquisitionController {
       throw new VoidTerminalError(this.voidReason);
     }
 
-    if (!requiredResultFields(result) || result.message_id !== identity.message_id || result.byte_equal !== true) {
+    if (!isValidEvidence(result, identity.message_id)) {
       this._void('P1_2_RUN3_GMAIL_BYTE_FIDELITY_FAILURE');
+      throw new VoidTerminalError(this.voidReason);
+    }
+    if (this._pastDeadline()) {
+      this._void('P1_2_RUN3_DEADLINE_EXCEEDED');
       throw new VoidTerminalError(this.voidReason);
     }
 
@@ -330,6 +396,7 @@ export class Run3AcquisitionController {
       completed_at: this.clock.now(),
     });
     this.destinationsUsed.push(destination);
+    this.acquisitionInFlight = null;
     this.state = this.completed.length === TOTAL_GMAIL ? STATES.ACQUISITION_COMPLETE : STATES.GMAIL_ACQUIRING;
     this._persist();
   }

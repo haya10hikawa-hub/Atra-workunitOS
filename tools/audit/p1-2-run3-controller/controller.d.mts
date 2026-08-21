@@ -54,6 +54,13 @@ export type ValidationSummary = Readonly<{
   total_expected: number;
 }>;
 
+export type AcquisitionInFlightMarker = Readonly<{
+  kind: 'CANARY' | 'GMAIL';
+  message_id: string;
+  destination: string;
+  started_at: number;
+}>;
+
 export type ControllerStateSnapshot = Readonly<{
   state: string;
   pmAuthorization: PMAuthorizationRecord | null;
@@ -63,6 +70,7 @@ export type ControllerStateSnapshot = Readonly<{
   completed: ReadonlyArray<CompletedAcquisitionRecord>;
   voidReason: string | null;
   validation: ValidationSummary | null;
+  acquisitionInFlight: AcquisitionInFlightMarker | null;
 }>;
 
 export declare class Run3AcquisitionController {

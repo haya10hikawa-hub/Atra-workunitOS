@@ -1,5 +1,7 @@
 export declare const RULE_ID: string;
 export declare const SAMPLE_SIZE: number;
+export declare const V1_WINDOW_START_MS: number;
+export declare const V1_WINDOW_END_MS: number;
 
 export declare class SelectionError extends Error {
   readonly code: string;

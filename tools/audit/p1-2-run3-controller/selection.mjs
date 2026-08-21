@@ -13,6 +13,13 @@ import { createHash } from 'node:crypto';
 export const RULE_ID = 'P1_2_RUN3_GMAIL_METADATA_SELECTION_V1';
 export const SAMPLE_SIZE = 26;
 
+// Fixed observation window for RULE_ID. The production/controller path binds
+// to these constants exactly (see controller.mjs `resolveSelection`); this
+// module stays a pure function of whatever window it is given so it remains
+// directly unit-testable with synthetic windows.
+export const V1_WINDOW_START_MS = Date.parse('2026-08-14T00:00:00.000Z');
+export const V1_WINDOW_END_MS = Date.parse('2026-08-20T23:59:59.999Z');
+
 export class SelectionError extends Error {
   constructor(code) {
     super(code);
@@ -58,6 +65,18 @@ export function resolveGmailSelection(candidates, window) {
       internalDate: c.internalDate,
       selection_score: selectionScore(c.message_id),
     }));
+
+  // Duplicate eligible message_id would silently bias the deterministic
+  // sample (e.g. pagination/enumeration duplication). Fail closed rather
+  // than deduplicating, since deduplication would change the enumerated
+  // universe without any evidence of which occurrence was authoritative.
+  const seen = new Set();
+  for (const c of eligible) {
+    if (seen.has(c.message_id)) {
+      throw new SelectionError('P1_2_RUN3_GMAIL_DUPLICATE_ELIGIBLE_IDENTITY');
+    }
+    seen.add(c.message_id);
+  }
 
   if (eligible.length < SAMPLE_SIZE) {
     throw new SelectionError('P1_2_RUN3_GMAIL_ELIGIBLE_UNIVERSE_TOO_SMALL');
