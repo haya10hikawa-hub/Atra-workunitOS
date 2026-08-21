@@ -1,7 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { existsSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, readFileSync, rmSync, statSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -136,6 +136,8 @@ test("SIGINT during Wrangler dev: dev group + descendant + root removed, non-zer
     root = rootLine[1]
     const devLine = (await h.waitLine(/^CHILD wrangler-dev (\d+)$/, 20_000)) as RegExpMatchArray | null
     assert.ok(devLine, "wrangler-dev child spawned")
+    assert.equal(existsSync(resolve(root, "worker.js")) && statSync(resolve(root, "worker.js")).isFile(), true, "fake worker exists")
+    assert.equal(existsSync(resolve(root, "assets")) && statSync(resolve(root, "assets")).isDirectory(), true, "fake assets exist")
     devPid = Number(devLine[1])
     // the fake dev server records its descendant pid in the snapshot cwd
     await waitFor(() => existsSync(resolve(root!, "desc.pid")), 10_000)

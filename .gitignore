@@ -61,3 +61,14 @@ next-env.d.ts
 # values) and local D1 evidence artifacts. Generated only; never committed.
 /bootstrap.control*.sql
 /.d1-evidence/
+
+# P1-2 frozen evaluation dataset (WorkUnit: frozen two-provider dataset v1).
+# Raw human conversational evidence — Gmail message octets above all — is acquired by a
+# human, never by an assistant, and is never committed. The canonical private root lives
+# OUTSIDE every git working tree (see docs/evaluation/P1_2_DATASET_FORMATION_PROTOCOL.md);
+# these rules are a defense-in-depth trap for the case where a dataset is staged in-tree
+# anyway. Only the content-free seal under docs/evaluation/ and tests/fixtures/p1-2/ is
+# repository-controlled.
+/.local/
+*.private.json
+*.private.jsonl

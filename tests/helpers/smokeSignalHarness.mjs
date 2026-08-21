@@ -17,6 +17,7 @@
 import { dirname, resolve, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { spawn } from "node:child_process"
+import { mkdirSync, writeFileSync } from "node:fs"
 import { runHermeticSmoke } from "../../scripts/lib/localJwtSmokeRunner.mjs"
 import { generateLocalJwt, verifyLocalJwt } from "../../scripts/lib/localJwt.mjs"
 
@@ -52,14 +53,20 @@ const common = {
   queryD1: async () => [{ identity_match: 1, user_email_match: 1, active_membership: 1, active_tenant: 1 }],
 }
 
-const fakeBuild = async ({ root }) => ({
-  snapshotDir: root,
-  workerPath: join(root, "worker.js"),
-  assetsPath: join(root, "assets"),
-  // A real, existing wrangler config so the runner can read + rewrite it.
-  wranglerJsonPath: resolve(repoRoot, "wrangler.json"),
-  builtHead: "harnesshead",
-})
+const fakeBuild = async ({ root }) => {
+  const workerPath = join(root, "worker.js")
+  const assetsPath = join(root, "assets")
+  writeFileSync(workerPath, "export default {}\n")
+  mkdirSync(assetsPath)
+  return {
+    snapshotDir: root,
+    workerPath,
+    assetsPath,
+    // A real, existing wrangler config so the runner can read + rewrite it.
+    wranglerJsonPath: resolve(repoRoot, "wrangler.json"),
+    builtHead: "harnesshead",
+  }
+}
 
 let result
 if (mode === "root-init") {
