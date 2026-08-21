@@ -483,4 +483,18 @@ export async function runPreflight({
   });
 }
 
-export { CHECK_NAMES, EXPECTED_RUN2_GITHUB_REUSE_COUNT };
+export {
+  CHECK_NAMES,
+  EXPECTED_RUN2_GITHUB_REUSE_COUNT,
+  // Exported for reuse by the Run-3 final-integration preflight
+  // (tools/audit/p1-2-run3-controller/preflight.mjs), which needs the same
+  // structural GitHub-reuse checks without re-running the whole Gmail-run
+  // preflight (destination writability, disk space, naive plan hash, …)
+  // that this module's own `runPreflight` also performs.
+  readGithubManifestRows,
+  githubRowIdentityKey,
+  checkRun2GithubCountExact,
+  checkRun2GithubArtifactsMatchManifest,
+  checkRun2GithubSelectionProvenance,
+  checkRun2GithubSelectionSetEqual,
+};
