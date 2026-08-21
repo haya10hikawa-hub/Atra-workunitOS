@@ -30,7 +30,7 @@
     {
       "key": "app/api/workunit/tools/route.ts#GET",
       "handlerHash": "48b66dba3d79dd03d62a6f69775e747f3e2c3ba77039a334420226596fb9b766",
-      "routeHash": "a3f84e72a6ebd39f5d58176fb60f0da987eeb0d809149de537f08ec663b63e4b"
+      "routeHash": "cb939394e0942e898ce438a222cc53de44fe1afaf77cda01c15d3087fc4f81e8"
     }
   ],
   "reviewedStateChangingSafeHandlers": []

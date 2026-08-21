@@ -236,7 +236,10 @@ export async function POST(request: Request): Promise<NextResponse> {
         eventTimestamp: validated.event.timestamp,
         metadata: validated.event as unknown as Record<string, unknown>,
       },
-      buildIngestCapabilities(runtime),
+      // Threaded through to the Application layer as a lifecycle callback: it
+      // decides WHEN "processing started" fires (before processSignal, even
+      // ahead of an unexpected throw); this route only supplies the audit call.
+      buildIngestCapabilities(runtime, () => audit("llm_processing_started", requestId)),
     )
 
     if (outcome.kind === "no_provider_blocked") {
@@ -247,13 +250,11 @@ export async function POST(request: Request): Promise<NextResponse> {
       // Fall through to legacy backend
       audit("llm_processing_blocked", requestId, { reason: "no_llm_provider_fallback_to_legacy" })
     } else if (outcome.kind === "llm_error") {
-      audit("llm_processing_started", requestId)
       // Map LLM pipeline errors to safe API errors
       const mapped = mapLlmError(outcome.error)
       audit(mapped.auditKind, requestId, { operation: "ingest", reason: outcome.error })
       return errorResponse(requestId, mapped.code, mapped.status)
     } else {
-      audit("llm_processing_started", requestId)
       audit("llm_processing_completed", requestId, { operation: "ingest" })
 
       return json({

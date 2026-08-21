@@ -42,15 +42,21 @@ import type {
  * Select the LLM provider (never chosen by the Application layer) and project it
  * onto the narrow ingest-orchestration capability contract. `providerAvailable`
  * and `allowLegacyFallback` are both derived from the request-scoped LLM runtime
- * config projection — never ambient `process.env`.
+ * config projection — never ambient `process.env`. `onProcessingStarted` is the
+ * route's audit callback: this module only threads it through, it does not
+ * decide when the Application layer invokes it.
  */
-export function buildIngestCapabilities(runtime: ValidatedRequestRuntimeConfig): IngestOrchestrationCapabilities {
+export function buildIngestCapabilities(
+  runtime: ValidatedRequestRuntimeConfig,
+  onProcessingStarted: () => void,
+): IngestOrchestrationCapabilities {
   const llmEnv = projectLlmEnv(runtime.llm)
   const providerResult = resolveLlmProvider(llmEnv)
   const config = resolveLlmProviderConfig(llmEnv)
   return {
     providerAvailable: providerResult !== null,
     allowLegacyFallback: config.allowLegacyFallback,
+    onProcessingStarted,
     processSignal(signal, tenantId) {
       if (!providerResult) throw new Error("processSignal invoked without an available LLM provider")
       return processWorkSignal(providerResult.provider, signal, tenantId, { createdBy: "ai" })

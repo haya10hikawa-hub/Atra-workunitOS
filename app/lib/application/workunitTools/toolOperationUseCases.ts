@@ -49,6 +49,13 @@ export type IngestOrchestrationCapabilities = {
   /** Whether the composition root resolved a runnable LLM provider for this request. */
   readonly providerAvailable: boolean
   readonly allowLegacyFallback: boolean
+  /**
+   * Lifecycle callback: invoked once providerAvailable is known true, before
+   * processSignal is invoked. This is what lets Delivery's "processing started"
+   * audit fire ahead of the pipeline call — including ahead of an unexpected
+   * throw from processSignal — without Delivery deciding *when* it fires.
+   */
+  onProcessingStarted(): void
   processSignal(signal: ExternalSignal, tenantId: TenantId): Promise<ProcessSignalResult>
 }
 
@@ -82,6 +89,10 @@ export async function runIngestOrchestration(
   if (!capabilities.providerAvailable) {
     return capabilities.allowLegacyFallback ? { kind: "no_provider_fallback" } : { kind: "no_provider_blocked" }
   }
+
+  // Fires before ExternalSignal formation and before processSignal is invoked,
+  // so it is emitted even if either of those unexpectedly throws.
+  capabilities.onProcessingStarted()
 
   const externalId = input.eventId ?? input.id
   const source = (input.source === "github" ? "github" : input.source) as Parameters<typeof createExternalSignal>[0]["sourceType"]
