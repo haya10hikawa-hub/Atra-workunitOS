@@ -9,8 +9,23 @@ This is the Run-3 experiment-integrity control plane: the sequencing/fidelity st
 machine (`controller.mjs`), the metadata-only Gmail enumerator and deterministic
 selection rule feeding it (`metadataEnumerator.mjs`, `selection.mjs`), the narrow
 `acquireRaw` bridge to the byte-preserving Gmail RAW transport (`rawAdapter.mjs`), the
-content-free sealed plan-authority verifier (`planAuthority.mjs`), and the pre-T0
-preflight that composes all of the above (`preflight.mjs`).
+content-free sealed plan-authority verifier (`planAuthority.mjs`), the pre-T0
+preflight that composes all of the above (`preflight.mjs`), and the sealed operator
+entrypoint that composes them into a durable metadata selection
+(`selectOperator.mjs`).
+
+## Operator sequence
+
+There are exactly two operator-facing Run-3 pre-T0 commands, in this order:
+
+1. `run3-preflight` — read-only gate. Changes nothing.
+2. `run3-select` — **only after explicit Human PM authorization**. Performs live
+   Gmail METADATA-ONLY enumeration and writes durable Run-3 state.
+
+`run3-select` stops at `METADATA_SELECTION_RESOLVED`. It does **not** record T0, does
+**not** fetch RAW message bytes, and does **not** run the canary. Neither command may
+be executed merely because it exists: the existence of `run3-select` is not authority
+to run it, and running it is a real, recorded experiment action.
 
 ## The canonical Run-3 pre-T0 preflight command
 
@@ -74,6 +89,133 @@ Output is PASS/FAIL, check names, and booleans only — never plan contents, Gma
 identities, subjects, sender/recipient, snippets, RAW bytes, or any OAuth/refresh/
 client secret.
 
+## The canonical Run-3 metadata-selection command
+
+```bash
+node tools/audit/p1-2-run3-controller/cli.mjs run3-select \
+  --run-id <run-id> \
+  --authorize-pm
+```
+
+This is the **only** operator-facing command that moves a Run-3 controller from
+`PRE_T0` to `METADATA_SELECTION_RESOLVED`. Before it existed, the underlying
+mechanisms were all merged and reviewed but nothing composed them, so the only way to
+resolve a selection was an ad-hoc script — an unreviewed second implementation of
+Run-3 authority. That gap was the `P1_2_RUN3_NO_CANONICAL_SELECTION_ENTRYPOINT` stop.
+
+### What it does, in order
+
+```
+validate --run-id
+  -> validate the canonical private state root (exists / directory / 0700)
+  -> build the protocol config from PINNED CONSTANTS
+  -> build the PM authorization record from PINNED CONSTANTS
+  -> ControllerStateStore
+  -> classify persisted state (fail-closed, BEFORE any controller exists)
+  -> Run3AcquisitionController
+  -> authorizePM                     (fresh runs only)
+  -> enumerateGmailMetadata          (live, METADATA-ONLY)
+  -> controller.resolveSelection     (fixed V1 observation window)
+  -> print a content-free projection
+  -> STOP
+```
+
+The CLI is composition only. It re-implements no scoring, sorting, eligibility rule,
+sample size, canary designation, commitment construction, OAuth, pagination, or state
+serialization — every one of those stays in the already-reviewed module that owns it.
+
+### Live Gmail access
+
+`run3-select` performs **live Gmail METADATA-ONLY enumeration**: `messages.list` with
+`includeSpamTrash=true` and full pagination, then `{id, internalDate}` per message.
+It never requests `format=raw`, never fetches message bodies, headers, subjects,
+snippets, or attachments, and never records T0.
+
+### Authority is pinned; only `--run-id` is free
+
+Every protocol value comes from `protocolConstants.mjs` and the V1 window constants in
+`selection.mjs`. `--run-id` is the sole caller-supplied value, and protocol authority
+is never derived from it — it is a bounded, non-secret label
+(`[A-Za-z0-9._-]`, 1–64 chars; no path separators, whitespace, or control characters).
+
+There is no flag — and no equivalent spelling of one — for the plan hash, the GitHub
+reuse count, the Gmail count, the total, the duration, the observation window, the
+selection rule, the sample size, the state-machine state, the Gmail query, the page
+size, or the state path. Unknown arguments fail closed; recognised authority-override
+attempts are refused with `argument_forbidden_authority_override`.
+
+`--authorize-pm` is a valueless acknowledgement of explicit operator intent. It grants
+nothing and redefines nothing; it exists so a state-mutating, Gmail-contacting command
+cannot fire from an incomplete or copy-pasted invocation. Its absence fails closed
+before the state root is read and before Gmail is contacted. **It is not a substitute
+for Human PM authorization, which remains required out of band.**
+
+### State authority
+
+`run3-select` is bound to the single canonical state file:
+
+```
+~/atra-private/p1-2-dataset/v1-run3/controller-state/state.private.json
+```
+
+Unlike the read-only preflight, this path is **not** flag- or env-overridable: a
+mutating command must never be able to spawn a second Run-3 state authority. Tests
+reach the composition through `runRun3Select`'s explicit `statePath` parameter with
+temporary directories instead.
+
+The state root must **already** exist as a real directory with mode `0700`.
+`run3-select` never creates it and never chmods it — provisioning is a separately
+authorized bootstrap step. A symlink is refused even when its target would qualify.
+An absent or wrong-permissioned root fails closed *before* Gmail is contacted.
+
+### Restart and recovery contract
+
+`authorizePM()` persists `PM_AUTHORIZED` before live enumeration begins, so a failed
+enumeration legitimately leaves the run at `PM_AUTHORIZED`. That is a supported,
+explicitly tested state, not a corruption:
+
+| persisted state | behaviour |
+| --- | --- |
+| none, or fresh `PRE_T0` | authorize, enumerate, resolve |
+| `PM_AUTHORIZED` (record matches this run) | **resume**: do *not* re-authorize; enumerate and resolve |
+| `METADATA_SELECTION_RESOLVED` | re-report the existing commitment; **no** Gmail access, **no** write |
+| any acquisition / T0 / `VOID` / in-flight / unrecognised state | fail closed |
+
+Resume is safe at `PM_AUTHORIZED` and only there: no selection was ever committed and
+T0 has not started, so re-enumerating cannot invalidate anything that already exists.
+There is no reset, no deletion, no reselection, and no overwrite anywhere on this path.
+
+Persisted state is classified from a plain `ControllerStateStore.load()` **before** a
+controller is constructed. This ordering is load-bearing: the controller fails closed
+on restore by transitioning to `VOID` *and persisting it* when the restored
+authorization does not match its config, and `VOID` is terminal — so constructing
+first would let a single mistyped `--run-id` permanently void a live authorized run.
+Classifying first turns that typo into a stable `state_authorization_mismatch` error
+with the run left byte-identical.
+
+### Content-free output
+
+Success prints exactly these fields and nothing else:
+
+```json
+{
+  "status": "P1_2_RUN3_METADATA_SELECTION_RESOLVED",
+  "state": "METADATA_SELECTION_RESOLVED",
+  "rule_id": "P1_2_RUN3_GMAIL_METADATA_SELECTION_V1",
+  "eligible_count": 0,
+  "selected_count": 26,
+  "canary_count": 1,
+  "remaining_count": 25,
+  "selection_commitment": "<64 hex>"
+}
+```
+
+`controller.getState()` is never serialized to stdout: its `selection` carries the
+private Gmail message identities (selected set, canary, remaining set), which stay in
+the private state file. Failures print a bare stable `error_code` — never a provider
+body, message id, path, OAuth detail, or stack trace; anything unrecognised collapses
+to `internal_error`.
+
 ## The ratified Run-3 protocol contract
 
 `protocolConstants.mjs` is the single source of truth both the preflight path and the
@@ -99,6 +241,8 @@ PM-authorization check (`authorizePM`) only proves a record is self-consistent w
 
 ## Validation
 
-`tests/p1_2Run3AcquisitionController.test.mts` and
-`tests/p1_2Run3FinalIntegration.test.mts` — synthetic fixtures and mocked `fetch`
-only, no real network call, no real OAuth token, no real Gmail message id.
+`tests/p1_2Run3AcquisitionController.test.mts`,
+`tests/p1_2Run3FinalIntegration.test.mts`, `tests/p1_2Run3PreflightCli.test.mts`, and
+`tests/p1_2Run3SelectionOperator.test.mts` — synthetic fixtures and mocked/injected
+`fetch` only, no real network call, no real OAuth token, no real Gmail message id, and
+no write outside a per-test temporary directory.
