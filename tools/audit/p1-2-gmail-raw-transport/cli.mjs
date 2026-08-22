@@ -25,6 +25,21 @@
  * Prints only content-free results: message id, byte length, two hex
  * digests, a boolean, or a stable status/reason code. Never a token, a
  * client secret, or message bytes.
+ *
+ * NOT the Run-3 pre-T0 preflight gate. This CLI has no `preflight` command:
+ * the canonical Run-3 pre-T0 preflight lives at
+ * `tools/audit/p1-2-run3-controller/cli.mjs run3-preflight` and is sealed to
+ * the ratified plan hash with no caller-suppliable override. An earlier
+ * version of this CLI exposed a `preflight` command that accepted an
+ * operator-supplied `--plan-sha256` value and self-certified against it —
+ * that command has been removed outright (not renamed or repurposed) because
+ * its only use was as the Run-3 gate, and a self-certifying gate is worse
+ * than no gate. `runPreflight` (`preflight.mjs`), the function it used to
+ * call, is unaffected: it stays exactly as-is and is still tested directly
+ * (`tests/p1_2GmailRawTransport.test.mts`) and still reused as the shared
+ * Run-2 GitHub-reuse evidence checks inside `runRun3Preflight`
+ * (`../p1-2-run3-controller/preflight.mjs`) — only its CLI exposure as an
+ * operator-facing plan-authority gate is gone.
  */
 
 import process from 'node:process';
@@ -34,51 +49,16 @@ import { fileURLToPath } from 'node:url';
 import { checkGmailAuth } from './authPreflight.mjs';
 import { GmailTransportError, acquireGmailRawMessage } from './gmailRaw.mjs';
 import { GmailOAuthError, isOAuthClientConfigured, resolveOAuthAccessToken, runFirstRunConsent } from './oauthCredential.mjs';
-import { runPreflight } from './preflight.mjs';
 
 const USAGE = [
   'usage:',
   '  cli.mjs auth-check',
   '  cli.mjs oauth-authorize',
   '  cli.mjs acquire --message-id <id> --root <dir> --dest <path>',
-  '  cli.mjs preflight --run-root <dir> --plan <path> --plan-sha256 <hex> \\',
-  '    --run2-manifest <path> --run2-window-start <iso> --run2-window-end <iso> \\',
-  '    --run2-selection-resolved <path> --run2-artifact-root <dir>',
+  '',
+  '  Run-3 pre-T0 preflight is NOT here — see',
+  '  tools/audit/p1-2-run3-controller/cli.mjs run3-preflight',
 ].join('\n');
-
-function parsePreflightArgs(argv) {
-  const options = {
-    runRoot: null,
-    planPath: null,
-    planSha256: null,
-    run2Manifest: null,
-    run2WindowStart: null,
-    run2WindowEnd: null,
-    run2SelectionResolved: null,
-    run2ArtifactRoot: null,
-  };
-  const flagMap = {
-    '--run-root': 'runRoot',
-    '--plan': 'planPath',
-    '--plan-sha256': 'planSha256',
-    '--run2-manifest': 'run2Manifest',
-    '--run2-window-start': 'run2WindowStart',
-    '--run2-window-end': 'run2WindowEnd',
-    '--run2-selection-resolved': 'run2SelectionResolved',
-    '--run2-artifact-root': 'run2ArtifactRoot',
-  };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    const value = argv[i + 1];
-    if (value === undefined || value.startsWith('--')) return { invalid: 'argument_invalid' };
-    i += 1;
-    const key = flagMap[arg];
-    if (key === undefined) return { invalid: 'argument_unknown' };
-    options[key] = value;
-  }
-  if (Object.values(options).some((value) => value === null)) return { invalid: 'argument_invalid' };
-  return options;
-}
 
 function parseAcquireArgs(argv) {
   const options = { messageId: null, root: null, dest: null };
@@ -162,27 +142,6 @@ export async function main(argv, env) {
       process.stdout.write(`${JSON.stringify({ error_code: code }, null, 2)}\n`);
       return 2;
     }
-  }
-
-  if (command === 'preflight') {
-    const options = parsePreflightArgs(rest);
-    if (options.invalid) {
-      process.stdout.write(`${JSON.stringify({ error_code: options.invalid }, null, 2)}\n`);
-      return 2;
-    }
-    const result = await runPreflight({
-      env,
-      runRoot: options.runRoot,
-      planPath: options.planPath,
-      expectedPlanSha256: options.planSha256,
-      run2ManifestPath: options.run2Manifest,
-      run2AcquisitionWindowStartIso: options.run2WindowStart,
-      run2AcquisitionWindowEndIso: options.run2WindowEnd,
-      run2SelectionResolvedPath: options.run2SelectionResolved,
-      run2ArtifactRoot: options.run2ArtifactRoot,
-    });
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-    return result.overall_pass ? 0 : 2;
   }
 
   process.stdout.write(`${USAGE}\n`);

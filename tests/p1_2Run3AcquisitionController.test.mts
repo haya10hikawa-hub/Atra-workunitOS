@@ -19,6 +19,13 @@ import { join } from 'node:path';
 import { SAMPLE_SIZE, SelectionError, V1_WINDOW_START_MS, V1_WINDOW_END_MS, resolveGmailSelection } from '../tools/audit/p1-2-run3-controller/selection.mjs';
 import { ControllerError, STATES, VoidTerminalError, Run3AcquisitionController } from '../tools/audit/p1-2-run3-controller/controller.mjs';
 import { ControllerStateStore } from '../tools/audit/p1-2-run3-controller/stateStore.mjs';
+import {
+  ACQUISITION_DURATION_HOURS,
+  EXPECTED_GITHUB_REUSE,
+  EXPECTED_GMAIL_NEW,
+  EXPECTED_TOTAL,
+  PLAN_AUTHORITY_SHA256,
+} from '../tools/audit/p1-2-run3-controller/protocolConstants.mjs';
 
 function hex64(seed: string) {
   return createHash('sha256').update(seed, 'utf8').digest('hex');
@@ -29,11 +36,11 @@ const IN_WINDOW_MS = Date.parse('2026-08-17T12:00:00.000Z');
 
 const CONFIG = Object.freeze({
   runId: 'run3-test',
-  planSha256: 'plan-sha-test',
-  expectedGithubReuse: 34,
-  expectedGmailNew: 26,
-  expectedTotal: 60,
-  acquisitionDurationHours: 4,
+  planSha256: PLAN_AUTHORITY_SHA256,
+  expectedGithubReuse: EXPECTED_GITHUB_REUSE,
+  expectedGmailNew: EXPECTED_GMAIL_NEW,
+  expectedTotal: EXPECTED_TOTAL,
+  acquisitionDurationHours: ACQUISITION_DURATION_HOURS,
 });
 
 function validAuthRecord(overrides = {}) {
@@ -841,11 +848,156 @@ test('closure: I. restart with different plan/config -> rejected', () => {
     const controller1 = new Run3AcquisitionController(CONFIG, store1, clock);
     controller1.authorizePM(validAuthRecord());
 
-    const DIFFERENT_CONFIG = { ...CONFIG, planSha256: 'a-different-plan-hash' };
+    // `runId` is the one field the protocol contract leaves free (every
+    // other field is now pinned to the ratified constants, so it is no
+    // longer possible to construct a second *protocol-valid* config that
+    // differs from CONFIG in any of those pinned fields — see the C1-C9
+    // protocol-pinning tests below for that). Restarting under a config
+    // whose runId differs from what the persisted PM-authorization record
+    // actually recorded must still VOID via the restart-binding check.
+    const DIFFERENT_CONFIG = { ...CONFIG, runId: 'run3-test-a-different-run' };
     const store2 = new ControllerStateStore(statePath);
     const controller2 = new Run3AcquisitionController(DIFFERENT_CONFIG, store2, clock);
     assert.equal(controller2.getState().state, STATES.VOID);
     assert.equal(controller2.getState().voidReason, 'P1_2_RUN3_RESTART_CONFIG_MISMATCH');
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Controller protocol-contract pinning (closes
+// P1_2_RUN3_UNSEALED_PLAN_AUTHORITY_ON_OPERATOR_PATH, controller half): a
+// controller `config` must match the ratified Run-3 protocol constants
+// (plan hash, GitHub reuse, Gmail new, total, acquisition duration) BEFORE
+// any PM-authorization record is ever consulted. A matching PM-authorization
+// record must never be able to rescue an off-contract config.
+// ---------------------------------------------------------------------------
+
+test('protocol C1: the exact ratified contract construction passes', () => {
+  const statePath = tmpStatePath();
+  try {
+    const clock = makeClock(IN_WINDOW_MS);
+    assert.doesNotThrow(() => new Run3AcquisitionController(CONFIG, new ControllerStateStore(statePath), clock));
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+test('protocol C2: a wrong plan SHA-256 is rejected before PM authorization is ever consulted', () => {
+  const statePath = tmpStatePath();
+  try {
+    const clock = makeClock(IN_WINDOW_MS);
+    const badConfig = { ...CONFIG, planSha256: 'a'.repeat(64) };
+    assert.throws(
+      () => new Run3AcquisitionController(badConfig, new ControllerStateStore(statePath), clock),
+      (error: unknown) => error instanceof ControllerError && error.code === 'P1_2_RUN3_CONFIG_PROTOCOL_MISMATCH:planSha256',
+    );
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+test('protocol C3: a GitHub reuse count of 33 or 35 is rejected', () => {
+  for (const expectedGithubReuse of [33, 35]) {
+    const statePath = tmpStatePath();
+    try {
+      const clock = makeClock(IN_WINDOW_MS);
+      const badConfig = { ...CONFIG, expectedGithubReuse };
+      assert.throws(
+        () => new Run3AcquisitionController(badConfig, new ControllerStateStore(statePath), clock),
+        (error: unknown) => error instanceof ControllerError && error.code === 'P1_2_RUN3_CONFIG_PROTOCOL_MISMATCH:expectedGithubReuse',
+      );
+    } finally {
+      rmSync(statePath, { force: true });
+    }
+  }
+});
+
+test('protocol C4: a Gmail-new count other than 26 is rejected', () => {
+  const statePath = tmpStatePath();
+  try {
+    const clock = makeClock(IN_WINDOW_MS);
+    const badConfig = { ...CONFIG, expectedGmailNew: 25 };
+    assert.throws(
+      () => new Run3AcquisitionController(badConfig, new ControllerStateStore(statePath), clock),
+      (error: unknown) => error instanceof ControllerError && error.code === 'P1_2_RUN3_CONFIG_PROTOCOL_MISMATCH:expectedGmailNew',
+    );
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+test('protocol C5: a total other than 60 is rejected', () => {
+  const statePath = tmpStatePath();
+  try {
+    const clock = makeClock(IN_WINDOW_MS);
+    const badConfig = { ...CONFIG, expectedTotal: 59 };
+    assert.throws(
+      () => new Run3AcquisitionController(badConfig, new ControllerStateStore(statePath), clock),
+      (error: unknown) => error instanceof ControllerError && error.code === 'P1_2_RUN3_CONFIG_PROTOCOL_MISMATCH:expectedTotal',
+    );
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+test('protocol C6: an acquisition duration other than 4 hours is rejected', () => {
+  const statePath = tmpStatePath();
+  try {
+    const clock = makeClock(IN_WINDOW_MS);
+    const badConfig = { ...CONFIG, acquisitionDurationHours: 5 };
+    assert.throws(
+      () => new Run3AcquisitionController(badConfig, new ControllerStateStore(statePath), clock),
+      (error: unknown) => error instanceof ControllerError && error.code === 'P1_2_RUN3_CONFIG_PROTOCOL_MISMATCH:acquisitionDurationHours',
+    );
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+test('protocol C7: a PM-authorization record that internally matches an off-contract config cannot rescue it', () => {
+  const statePath = tmpStatePath();
+  try {
+    const clock = makeClock(IN_WINDOW_MS);
+    const badConfig = { ...CONFIG, expectedTotal: 61, expectedGmailNew: 27 };
+    // This "authorization" record is internally self-consistent with
+    // badConfig (pmAuthMatchesConfig would accept it) — proving that the
+    // gate here is genuinely the protocol-constant check, not merely
+    // PM-authorization matching, which this record would otherwise satisfy.
+    const selfConsistentAuthRecord = {
+      run_id: badConfig.runId,
+      plan_sha256: badConfig.planSha256,
+      expected_github_reuse: badConfig.expectedGithubReuse,
+      expected_gmail_new: badConfig.expectedGmailNew,
+      expected_total: badConfig.expectedTotal,
+      acquisition_duration_hours: badConfig.acquisitionDurationHours,
+    };
+    let controller: Run3AcquisitionController | null = null;
+    assert.throws(
+      () => {
+        controller = new Run3AcquisitionController(badConfig, new ControllerStateStore(statePath), clock);
+      },
+      (error: unknown) => error instanceof ControllerError && error.code === 'P1_2_RUN3_CONFIG_PROTOCOL_MISMATCH:expectedGmailNew',
+    );
+    assert.equal(controller, null, 'construction must never succeed, so authorizePM can never even be reached');
+    // Never reachable — documented, not executed, since `controller` stayed null:
+    // controller.authorizePM(selfConsistentAuthRecord)
+    assert.ok(selfConsistentAuthRecord.expected_total === 61, 'sanity: the record really was self-consistent with the rejected config');
+  } finally {
+    rmSync(statePath, { force: true });
+  }
+});
+
+test('protocol C8: a protocol-valid config with a mismatching PM-authorization record still fails (prior behavior preserved)', () => {
+  const statePath = tmpStatePath();
+  try {
+    const clock = makeClock(IN_WINDOW_MS);
+    const controller = new Run3AcquisitionController(CONFIG, new ControllerStateStore(statePath), clock);
+    assert.throws(
+      () => controller.authorizePM(validAuthRecord({ expected_total: 999 })),
+      (error: unknown) => error instanceof ControllerError && error.code === 'P1_2_RUN3_PM_AUTHORIZATION_INVALID',
+    );
   } finally {
     rmSync(statePath, { force: true });
   }

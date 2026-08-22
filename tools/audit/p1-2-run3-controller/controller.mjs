@@ -37,6 +37,13 @@
  */
 
 import { V1_WINDOW_START_MS, V1_WINDOW_END_MS, resolveGmailSelection, selectionCommitment } from './selection.mjs';
+import {
+  ACQUISITION_DURATION_HOURS,
+  EXPECTED_GITHUB_REUSE,
+  EXPECTED_GMAIL_NEW,
+  EXPECTED_TOTAL,
+  PLAN_AUTHORITY_SHA256,
+} from './protocolConstants.mjs';
 
 export const STATES = Object.freeze({
   PRE_T0: 'PRE_T0',
@@ -51,8 +58,8 @@ export const STATES = Object.freeze({
   VOID: 'VOID',
 });
 
-const ACQUISITION_DURATION_MS = 4 * 60 * 60 * 1000;
-const TOTAL_GMAIL = 26;
+const ACQUISITION_DURATION_MS = ACQUISITION_DURATION_HOURS * 60 * 60 * 1000;
+const TOTAL_GMAIL = EXPECTED_GMAIL_NEW;
 const HEX_64 = /^[0-9a-fA-F]{64}$/;
 
 const PM_AUTH_FIELDS = Object.freeze([
@@ -64,10 +71,45 @@ const PM_AUTH_FIELDS = Object.freeze([
   ['acquisition_duration_hours', 'acquisitionDurationHours'],
 ]);
 
+/**
+ * The exact fields (and pinned values) a controller `config` must match
+ * before construction may proceed at all — independent of, and prior to,
+ * any PM-authorization record. `runId` is deliberately absent: it is the
+ * one run-specific/free field the protocol contract does not pin.
+ */
+const PROTOCOL_CONFIG_FIELDS = Object.freeze([
+  ['planSha256', PLAN_AUTHORITY_SHA256],
+  ['expectedGithubReuse', EXPECTED_GITHUB_REUSE],
+  ['expectedGmailNew', EXPECTED_GMAIL_NEW],
+  ['expectedTotal', EXPECTED_TOTAL],
+  ['acquisitionDurationHours', ACQUISITION_DURATION_HOURS],
+]);
+
 export class ControllerError extends Error {
   constructor(code) {
     super(code);
     this.code = code;
+  }
+}
+
+/**
+ * Rejects a controller `config` that does not match the ratified Run-3
+ * protocol contract, BEFORE any PM-authorization record is ever consulted.
+ * This is deliberately unconditional — it runs on every construction,
+ * persisted-state-restore or not — so a config that is wrong for the
+ * protocol can never be rescued by a PM-authorization record that happens
+ * to match that same wrong config (`pmAuthMatchesConfig` only proves
+ * internal self-consistency between a record and a config; it says nothing
+ * about whether the config itself is the one the protocol ratified).
+ */
+function assertProtocolConfig(config) {
+  if (!config || typeof config !== 'object') {
+    throw new ControllerError('P1_2_RUN3_CONFIG_PROTOCOL_MISMATCH:config');
+  }
+  for (const [key, expected] of PROTOCOL_CONFIG_FIELDS) {
+    if (config[key] !== expected) {
+      throw new ControllerError(`P1_2_RUN3_CONFIG_PROTOCOL_MISMATCH:${key}`);
+    }
   }
 }
 
@@ -112,6 +154,13 @@ export class Run3AcquisitionController {
    * @param {{now: () => number}} clock
    */
   constructor(config, stateStore, clock) {
+    // Validate the config against the ratified protocol contract BEFORE
+    // anything else — before touching the state store, before restoring
+    // persisted state, and before any PM-authorization record is read. A
+    // config that fails this can never reach a point where a matching
+    // PM-authorization record (real or persisted) could rescue it.
+    assertProtocolConfig(config);
+
     this.config = config;
     this.stateStore = stateStore;
     this.clock = clock;

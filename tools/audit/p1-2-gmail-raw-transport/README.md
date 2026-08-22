@@ -64,17 +64,23 @@ node tools/audit/p1-2-gmail-raw-transport/cli.mjs acquire \
   --message-id <gmail message id> \
   --root /secure/local/p1-2-dataset/sources/gmail \
   --dest /secure/local/p1-2-dataset/sources/gmail/<message-id>.eml
-
-node tools/audit/p1-2-gmail-raw-transport/cli.mjs preflight \
-  --run-root /secure/local/p1-2-dataset/v1-run3/sources/gmail \
-  --plan /secure/local/p1-2-dataset/RUN3_PREREGISTRATION.md \
-  --plan-sha256 <hex> \
-  --run2-manifest /secure/local/p1-2-dataset/v1-run2/manifest.private.jsonl \
-  --run2-window-start 2026-08-21T01:25:19Z \
-  --run2-window-end 2026-08-21T05:25:19Z \
-  --run2-selection-resolved /secure/local/p1-2-dataset/v1-run2/selection-resolved.private.json \
-  --run2-artifact-root /secure/local/p1-2-dataset/v1-run2/sources
 ```
+
+This CLI has no `preflight` command. The Run-3 pre-T0 preflight — the
+content-free PASS/FAIL gate that must hold before T0 may be recorded — is a
+separate, canonical command:
+
+```bash
+node tools/audit/p1-2-run3-controller/cli.mjs run3-preflight \
+  --run2-manifest /secure/local/p1-2-dataset/v1-run2/manifest.private.jsonl \
+  --run2-artifact-root /secure/local/p1-2-dataset/v1-run2/sources \
+  --run2-selection-resolved /secure/local/p1-2-dataset/v1-run2/selection-resolved.private.json
+```
+
+See `../p1-2-run3-controller/README.md` for the full contract. It has no
+`--plan-sha256` (or equivalent) flag: the plan document and its sidecar are
+located by a fixed convention, and the hash that counts as authoritative is a
+pinned constant in `planAuthority.mjs`, never an operator-suppliable value.
 
 `auth-check` calls `users/me/profile` and reports only `{available, reason_code}` —
 never the mailbox address or counts the endpoint returns. `acquire` refuses to
@@ -203,7 +209,12 @@ token (I3 fails, as required).
 (34, see `RUN3_PREREGISTRATION.md` §2) GitHub rows with distinct
 `(work_universe_id, resource_class, artifact number)` identities —
 `expectedGithubReuseCount` in `runPreflight` overrides this for tests against
-smaller synthetic fixtures; the real CLI always uses the pinned constant.
+smaller synthetic fixtures; every operator-facing path (the canonical
+`p1-2-run3-controller/cli.mjs run3-preflight`) always uses the pinned
+constant, re-exported as `EXPECTED_GITHUB_REUSE` from
+`../p1-2-run3-controller/protocolConstants.mjs`. `runPreflight` itself is no
+longer wired to any CLI command in this directory — see the note at the top
+of `cli.mjs`.
 
 ## Not built
 
