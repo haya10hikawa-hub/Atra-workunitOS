@@ -296,7 +296,8 @@ export function toStableErrorCode(error) {
 /**
  * Canonical `run3-select` production flow.
  *
- *   validate run-id
+ *   require explicit PM acknowledgement
+ *     -> validate run-id
  *     -> validate canonical private state root
  *     -> pinned protocol config + pinned PM authorization record
  *     -> ControllerStateStore
@@ -309,10 +310,20 @@ export function toStableErrorCode(error) {
  *     -> content-free projection
  *     -> STOP at METADATA_SELECTION_RESOLVED
  *
+ * `pmAcknowledged` MUST be `true`. This duplicates the CLI's `--authorize-pm`
+ * check on purpose: the acknowledgement is a precondition of the STATE
+ * MUTATION, not of argument parsing, so it belongs on the layer that
+ * actually mutates. A single check living only in the parser would mean any
+ * other caller — a future command, a script, or a parser regression —
+ * reaches `authorizePM` and writes durable Run-3 state with no operator
+ * intent recorded anywhere. Checked before the state root is read and before
+ * Gmail is contacted.
+ *
  * @param {{
  *   env: Record<string, string | undefined>,
  *   statePath: string,
  *   runId: string,
+ *   pmAcknowledged: boolean,
  *   enumerate?: typeof enumerateGmailMetadata,
  *   stateStoreFactory?: (filePath: string) => ControllerStateStore,
  *   controllerFactory?: (config: object, stateStore: object, clock: {now: () => number}) => Run3AcquisitionController,
@@ -329,11 +340,16 @@ export async function runRun3Select({
   env,
   statePath,
   runId,
+  pmAcknowledged,
   enumerate = enumerateGmailMetadata,
   stateStoreFactory = (filePath) => new ControllerStateStore(filePath),
   controllerFactory = (config, stateStore, clock) => new Run3AcquisitionController(config, stateStore, clock),
   clock = { now: () => Date.now() },
 }) {
+  // Explicit operator intent, before anything else. Strict `!== true` so a
+  // truthy-but-unintended value can never satisfy it.
+  if (pmAcknowledged !== true) throw new SelectOperatorError('pm_authorization_required');
+
   const validatedRunId = validateRunId(runId);
 
   // Before Gmail is contacted and before anything can be persisted.

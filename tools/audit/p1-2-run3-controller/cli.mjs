@@ -281,7 +281,7 @@ export async function main(argv, env) {
     // No enumerator, controller, state-store, or clock override is passed:
     // this always runs the real, pinned components.
     try {
-      const result = await runRun3Select({ env, statePath: DEFAULT_STATE_PATH, runId: options.runId });
+      const result = await runRun3Select({ env, statePath: DEFAULT_STATE_PATH, runId: options.runId, pmAcknowledged: options.authorizePm });
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
       return 0;
     } catch (error) {

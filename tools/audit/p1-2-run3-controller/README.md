@@ -106,7 +106,8 @@ Run-3 authority. That gap was the `P1_2_RUN3_NO_CANONICAL_SELECTION_ENTRYPOINT` 
 ### What it does, in order
 
 ```
-validate --run-id
+require explicit PM acknowledgement
+  -> validate --run-id
   -> validate the canonical private state root (exists / directory / 0700)
   -> build the protocol config from PINNED CONSTANTS
   -> build the PM authorization record from PINNED CONSTANTS
@@ -149,6 +150,16 @@ nothing and redefines nothing; it exists so a state-mutating, Gmail-contacting c
 cannot fire from an incomplete or copy-pasted invocation. Its absence fails closed
 before the state root is read and before Gmail is contacted. **It is not a substitute
 for Human PM authorization, which remains required out of band.**
+
+The acknowledgement is enforced **twice**, deliberately: once in the argument parser
+(`--authorize-pm`) and once in the composition itself (`runRun3Select`'s required
+`pmAcknowledged === true`). This is not redundancy for its own sake. The
+acknowledgement is a precondition of the *state mutation*, not of *argument parsing*,
+so it belongs on the layer that actually mutates — a check living only in the parser
+means any other caller, or a parser regression, reaches `authorizePM` and writes
+durable Run-3 state with no operator intent recorded anywhere. This WorkUnit's
+mutation testing demonstrated exactly that failure: deleting the single parser line
+was sufficient to drive a write to the real canonical state path.
 
 ### State authority
 

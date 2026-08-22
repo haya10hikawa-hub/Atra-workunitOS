@@ -59,6 +59,7 @@ export declare function runRun3Select(input: {
   env: Record<string, string | undefined>;
   statePath: string;
   runId: string;
+  pmAcknowledged: boolean;
   enumerate?: typeof enumerateGmailMetadata;
   stateStoreFactory?: (filePath: string) => object;
   controllerFactory?: (config: PinnedRun3Config, stateStore: object, clock: { now: () => number }) => object;

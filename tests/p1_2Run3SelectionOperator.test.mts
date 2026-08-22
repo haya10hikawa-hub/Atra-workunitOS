@@ -341,6 +341,51 @@ test('A9: run3-preflight is unchanged and run3-select did not become the fallbac
   assert.match(usage.out, /run3-select --run-id <run-id> --authorize-pm/);
 });
 
+test('A10: the PM acknowledgement is enforced by the COMPOSITION, not only the parser', async () => {
+  // Regression guard for a real defect this WorkUnit's mutation testing
+  // exposed: with the check living only in `parseRun3SelectArgs`, removing
+  // that one line let `run3-select` reach `authorizePM` and write durable
+  // state on the canonical path with no operator intent anywhere. The
+  // acknowledgement is a precondition of the MUTATION, so it is enforced on
+  // the layer that mutates — before the state root is read, before Gmail.
+  await withStateRoot(0o700, async (statePath) => {
+    const enumerator = forbiddenEnumerator();
+    for (const value of [undefined, false, null, 0, '', 'true', 1]) {
+      const input: Record<string, unknown> = { env: {}, statePath, runId: RUN_ID, enumerate: enumerator.enumerate };
+      if (value !== undefined) input.pmAcknowledged = value;
+      await expectCode(runRun3Select(input as never), 'pm_authorization_required');
+    }
+    assert.equal(enumerator.calls.length, 0);
+  });
+
+  // It must also fail before the state-root gate, so an absent root cannot
+  // mask a missing acknowledgement.
+  const root = mkdtempSync(join(tmpdir(), 'p1-2-run3-select-noack-'));
+  try {
+    await expectCode(
+      runRun3Select({
+        env: {},
+        statePath: join(root, 'controller-state', 'state.private.json'),
+        runId: RUN_ID,
+        enumerate: forbiddenEnumerator().enumerate,
+      } as never),
+      'pm_authorization_required',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('A11: no state file is ever created when the acknowledgement is missing', async () => {
+  await withStateRoot(0o700, async (statePath) => {
+    await expectCode(
+      runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: forbiddenEnumerator().enumerate } as never),
+      'pm_authorization_required',
+    );
+    assert.throws(() => readFileSync(statePath, 'utf8'), 'no durable state may be written without explicit PM intent');
+  });
+});
+
 /* ================================================================== *
  * B. PROTOCOL BINDING
  * ================================================================== */
@@ -349,7 +394,7 @@ test('B1: pinned protocol values reach the controller; run-id is the only free f
   await withStateRoot(0o700, async (statePath) => {
     const spy = spyControllerFactory();
     const enumerator = fakeEnumerator(syntheticCandidates(30));
-    await runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: enumerator.enumerate, controllerFactory: spy.factory });
+    await runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate, controllerFactory: spy.factory });
 
     assert.equal(spy.configs.length, 1);
     assert.deepEqual(spy.configs[0], {
@@ -373,7 +418,7 @@ test('B1: pinned protocol values reach the controller; run-id is the only free f
 test('B2: the persisted PM authorization record is built from pinned constants only', async () => {
   await withStateRoot(0o700, async (statePath) => {
     const enumerator = fakeEnumerator(syntheticCandidates(30));
-    await runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: enumerator.enumerate });
+    await runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate });
     assert.deepEqual(readState(statePath).pmAuthorization, {
       run_id: RUN_ID,
       plan_sha256: PLAN_AUTHORITY_SHA256,
@@ -395,6 +440,7 @@ test('B3: extra caller-supplied protocol keys cannot override the pinned config'
       env: {},
       statePath,
       runId: RUN_ID,
+      pmAcknowledged: true,
       enumerate: enumerator.enumerate,
       controllerFactory: spy.factory,
       planSha256: 'f'.repeat(64),
@@ -421,7 +467,7 @@ test('B3: extra caller-supplied protocol keys cannot override the pinned config'
 test('B4: the enumerator receives no query, page-size, or window override', async () => {
   await withStateRoot(0o700, async (statePath) => {
     const enumerator = fakeEnumerator(syntheticCandidates(30));
-    await runRun3Select({ env: { SOME_ENV: 'x' }, statePath, runId: RUN_ID, enumerate: enumerator.enumerate });
+    await runRun3Select({ env: { SOME_ENV: 'x' }, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate });
     assert.equal(enumerator.calls.length, 1);
     // `env` is the ONLY key handed to the enumerator: its own defaults ARE
     // the ratified universe (includeSpamTrash, full pagination, V1 window).
@@ -440,7 +486,7 @@ test('B5: the fixed V1 observation window decides eligibility', async () => {
       { message_id: 'out-after', internalDate: String(V1_WINDOW_END_MS + 1) },
     ];
     const enumerator = fakeEnumerator([...inWindow, ...outOfWindow]);
-    const result = await runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: enumerator.enumerate });
+    const result = await runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate });
     assert.equal(result.eligible_count, 26);
   });
 });
@@ -458,6 +504,7 @@ test('C1: absent state root fails closed before enumeration', async () => {
         env: {},
         statePath: join(root, 'controller-state', 'state.private.json'),
         runId: RUN_ID,
+        pmAcknowledged: true,
         enumerate: enumerator.enumerate,
       }),
       'state_root_absent',
@@ -471,7 +518,7 @@ test('C1: absent state root fails closed before enumeration', async () => {
 test('C2: a 0755 state root fails closed before enumeration', async () => {
   await withStateRoot(0o755, async (statePath) => {
     const enumerator = forbiddenEnumerator();
-    await expectCode(runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: enumerator.enumerate }), 'state_root_not_private');
+    await expectCode(runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate }), 'state_root_not_private');
     assert.equal(enumerator.calls.length, 0);
   });
 });
@@ -480,7 +527,7 @@ test('C3: any group- or other-accessible state root fails closed', async () => {
   for (const mode of [0o750, 0o705, 0o770, 0o777, 0o701]) {
     await withStateRoot(mode, async (statePath) => {
       const enumerator = forbiddenEnumerator();
-      await expectCode(runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: enumerator.enumerate }), 'state_root_not_private');
+      await expectCode(runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate }), 'state_root_not_private');
       assert.equal(enumerator.calls.length, 0);
     });
   }
@@ -497,7 +544,7 @@ test('C4: a symlinked state root is refused even when its target would qualify',
 
     const enumerator = forbiddenEnumerator();
     await expectCode(
-      runRun3Select({ env: {}, statePath: join(linkDir, 'state.private.json'), runId: RUN_ID, enumerate: enumerator.enumerate }),
+      runRun3Select({ env: {}, statePath: join(linkDir, 'state.private.json'), runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate }),
       'state_root_not_directory',
     );
     assert.equal(enumerator.calls.length, 0);
@@ -513,7 +560,7 @@ test('C5: a non-directory state root is refused', async () => {
     writeFileSync(asFile, 'not a directory', { mode: 0o600 });
     const enumerator = forbiddenEnumerator();
     await expectCode(
-      runRun3Select({ env: {}, statePath: join(asFile, 'state.private.json'), runId: RUN_ID, enumerate: enumerator.enumerate }),
+      runRun3Select({ env: {}, statePath: join(asFile, 'state.private.json'), runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate }),
       'state_root_not_directory',
     );
     assert.equal(enumerator.calls.length, 0);
@@ -527,7 +574,7 @@ test('C6: a valid 0700 root is allowed, and the command never creates or chmods 
     const dir = dirname(statePath);
     const before = statSync(dir).mode;
     const enumerator = fakeEnumerator(syntheticCandidates(30));
-    const result = await runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: enumerator.enumerate });
+    const result = await runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate });
     assert.equal(result.status, STATUS_RESOLVED);
     assert.equal(statSync(dir).mode, before);
     // The private state file itself must be owner-only.
@@ -554,7 +601,7 @@ test('D1: successful output carries exactly the allowed content-free fields', as
   await withStateRoot(0o700, async (statePath) => {
     const candidates = syntheticCandidates(40, 'privacy-id-');
     const enumerator = fakeEnumerator(candidates);
-    const result = await runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: enumerator.enumerate });
+    const result = await runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate });
 
     assert.deepEqual(Object.keys(result).sort(), [...ALLOWED_RESULT_KEYS].sort());
     const serialized = JSON.stringify(result);
@@ -571,7 +618,7 @@ test('D1: successful output carries exactly the allowed content-free fields', as
 test('D2: the private selection stays in the private state file and never in the result', async () => {
   await withStateRoot(0o700, async (statePath) => {
     const enumerator = fakeEnumerator(syntheticCandidates(30, 'private-id-'));
-    const result = await runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: enumerator.enumerate });
+    const result = await runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate });
 
     // The projection is a real narrowing: identities DO exist on disk...
     assert.ok(readFileSync(statePath, 'utf8').includes('private-id-'), 'state file should hold the private selection');
@@ -591,7 +638,7 @@ test('D3: an enumeration failure surfaces only a stable code, not provider detai
       throw error;
     };
     await expectCode(
-      runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: leaky as unknown as Enumerate }),
+      runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: leaky as unknown as Enumerate }),
       'gmail_metadata_unauthorized',
     );
   });
@@ -613,7 +660,7 @@ test('D4: an unknown failure collapses to internal_error, never a path or provid
 test('E1: a >=26 synthetic universe resolves to 26 selected / 1 canary / 25 remaining', async () => {
   await withStateRoot(0o700, async (statePath) => {
     const enumerator = fakeEnumerator(syntheticCandidates(40));
-    const result = await runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: enumerator.enumerate });
+    const result = await runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate });
     assert.equal(result.eligible_count, 40);
     assert.equal(result.selected_count, 26);
     assert.equal(result.canary_count, 1);
@@ -627,7 +674,7 @@ test('E2: a <26 eligible universe fails closed without resolving', async () => {
   await withStateRoot(0o700, async (statePath) => {
     const enumerator = fakeEnumerator(syntheticCandidates(25));
     await expectCode(
-      runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: enumerator.enumerate }),
+      runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate }),
       'P1_2_RUN3_GMAIL_ELIGIBLE_UNIVERSE_TOO_SMALL',
     );
     // The run stays recoverable at PM_AUTHORIZED — no selection was committed.
@@ -643,7 +690,7 @@ test('E3: a duplicate provider identity fails closed', async () => {
     candidates[10] = { ...candidates[3] };
     const enumerator = fakeEnumerator(candidates);
     await expectCode(
-      runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: enumerator.enumerate }),
+      runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate }),
       'P1_2_RUN3_GMAIL_DUPLICATE_ELIGIBLE_IDENTITY',
     );
     assert.equal(readState(statePath).state, STATES.PM_AUTHORIZED);
@@ -658,7 +705,7 @@ test('E4: input order does not alter the selection commitment', async () => {
   for (const ordering of orderings) {
     const commitment = await withStateRoot(0o700, async (statePath) => {
       const enumerator = fakeEnumerator(ordering);
-      const result = await runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: enumerator.enumerate });
+      const result = await runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate });
       return result.selection_commitment;
     });
     commitments.push(commitment);
@@ -677,13 +724,14 @@ test('F1: a resolved run re-reports without enumerating Gmail again', async () =
       env: {},
       statePath,
       runId: RUN_ID,
+      pmAcknowledged: true,
       enumerate: fakeEnumerator(syntheticCandidates(40)).enumerate,
     });
     assert.equal(first.status, STATUS_RESOLVED);
 
     const before = readFileSync(statePath, 'utf8');
     const enumerator = forbiddenEnumerator();
-    const second = await runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: enumerator.enumerate });
+    const second = await runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate });
 
     assert.equal(enumerator.calls.length, 0, 'must not re-enumerate a resolved run');
     assert.equal(second.status, STATUS_ALREADY_RESOLVED);
@@ -704,7 +752,7 @@ test('F2: PM_AUTHORIZED after a failed enumeration resumes without re-authorizin
     // First attempt: authorizePM persists, then enumeration fails. This is
     // the legitimate intermediate state the recovery contract must cover.
     await expectCode(
-      runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: throwingEnumerator('gmail_metadata_network_error') }),
+      runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: throwingEnumerator('gmail_metadata_network_error') }),
       'gmail_metadata_network_error',
     );
     const stranded = readState(statePath);
@@ -718,6 +766,7 @@ test('F2: PM_AUTHORIZED after a failed enumeration resumes without re-authorizin
       env: {},
       statePath,
       runId: RUN_ID,
+      pmAcknowledged: true,
       enumerate: fakeEnumerator(syntheticCandidates(40)).enumerate,
       controllerFactory: spy.factory,
     });
@@ -736,7 +785,7 @@ test('F3: a wrong run-id against an existing authorization fails closed WITHOUT 
 
     const enumerator = forbiddenEnumerator();
     await expectCode(
-      runRun3Select({ env: {}, statePath, runId: 'a-different-run-id', enumerate: enumerator.enumerate }),
+      runRun3Select({ env: {}, statePath, runId: 'a-different-run-id', pmAcknowledged: true, enumerate: enumerator.enumerate }),
       'state_authorization_mismatch',
     );
     assert.equal(enumerator.calls.length, 0);
@@ -749,12 +798,12 @@ test('F3: a wrong run-id against an existing authorization fails closed WITHOUT 
 
 test('F4: a resolved run under a different run-id fails closed and is not overwritten', async () => {
   await withStateRoot(0o700, async (statePath) => {
-    await runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: fakeEnumerator(syntheticCandidates(40)).enumerate });
+    await runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: fakeEnumerator(syntheticCandidates(40)).enumerate });
     const before = readFileSync(statePath, 'utf8');
 
     const enumerator = forbiddenEnumerator();
     await expectCode(
-      runRun3Select({ env: {}, statePath, runId: 'other-run', enumerate: enumerator.enumerate }),
+      runRun3Select({ env: {}, statePath, runId: 'other-run', pmAcknowledged: true, enumerate: enumerator.enumerate }),
       'state_authorization_mismatch',
     );
     assert.equal(enumerator.calls.length, 0);
@@ -779,7 +828,7 @@ test('F5: acquisition / T0 / VOID / unknown states all fail closed and are never
       seedState(statePath, { ...pmAuthorizedRecord(RUN_ID), state });
       const before = readFileSync(statePath, 'utf8');
       const enumerator = forbiddenEnumerator();
-      await expectCode(runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: enumerator.enumerate }), 'state_not_resumable');
+      await expectCode(runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate }), 'state_not_resumable');
       assert.equal(enumerator.calls.length, 0, `${state} must not enumerate`);
       assert.equal(readFileSync(statePath, 'utf8'), before, `${state} must not be rewritten`);
     });
@@ -794,7 +843,7 @@ test('F6: a durable in-flight acquisition marker fails closed before the control
     });
     const before = readFileSync(statePath, 'utf8');
     const enumerator = forbiddenEnumerator();
-    await expectCode(runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: enumerator.enumerate }), 'state_not_resumable');
+    await expectCode(runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate }), 'state_not_resumable');
     assert.equal(enumerator.calls.length, 0);
     assert.equal(readFileSync(statePath, 'utf8'), before);
   });
@@ -805,7 +854,7 @@ test('F7: a corrupt or structurally unrecognized state record is never overwritt
     writeFileSync(statePath, '{ not json', { mode: 0o600 });
     const before = readFileSync(statePath, 'utf8');
     const enumerator = forbiddenEnumerator();
-    await expectCode(runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: enumerator.enumerate }), 'state_unreadable');
+    await expectCode(runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate }), 'state_unreadable');
     assert.equal(enumerator.calls.length, 0);
     assert.equal(readFileSync(statePath, 'utf8'), before);
   });
@@ -814,7 +863,7 @@ test('F7: a corrupt or structurally unrecognized state record is never overwritt
     // A PRE_T0 record carrying an authorization is a shape the controller never writes.
     seedState(statePath, { ...pmAuthorizedRecord(RUN_ID), state: STATES.PRE_T0 });
     const enumerator = forbiddenEnumerator();
-    await expectCode(runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: enumerator.enumerate }), 'state_unrecognized');
+    await expectCode(runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate }), 'state_unrecognized');
     assert.equal(enumerator.calls.length, 0);
   });
 
@@ -822,7 +871,7 @@ test('F7: a corrupt or structurally unrecognized state record is never overwritt
     // A resolved state whose selection is missing must not be re-reported.
     seedState(statePath, { ...pmAuthorizedRecord(RUN_ID), state: STATES.METADATA_SELECTION_RESOLVED });
     const enumerator = forbiddenEnumerator();
-    await expectCode(runRun3Select({ env: {}, statePath, runId: RUN_ID, enumerate: enumerator.enumerate }), 'state_unrecognized');
+    await expectCode(runRun3Select({ env: {}, statePath, runId: RUN_ID, pmAcknowledged: true, enumerate: enumerator.enumerate }), 'state_unrecognized');
     assert.equal(enumerator.calls.length, 0);
   });
 });
@@ -846,6 +895,7 @@ test('F8: a genuinely fresh PRE_T0 record is a valid starting point', async () =
       env: {},
       statePath,
       runId: RUN_ID,
+      pmAcknowledged: true,
       enumerate: fakeEnumerator(syntheticCandidates(40)).enumerate,
       controllerFactory: spy.factory,
     });
@@ -865,6 +915,7 @@ test('G1: a full successful run invokes zero T0, canary, or RAW-acquisition tran
       env: {},
       statePath,
       runId: RUN_ID,
+      pmAcknowledged: true,
       enumerate: fakeEnumerator(syntheticCandidates(40)).enumerate,
       controllerFactory: spy.factory,
     });
@@ -909,8 +960,8 @@ test('G3: the cli run3-select branch composes only the sealed selection path', (
   assert.ok(code.includes('runRun3Select'), 'cli must delegate to runRun3Select');
   // ...and bind the fixed canonical state path, never a flag or env var.
   assert.ok(
-    /runRun3Select\(\{\s*env,\s*statePath:\s*DEFAULT_STATE_PATH,\s*runId:\s*options\.runId\s*\}\)/.test(code),
-    'cli must bind the canonical state path',
+    /runRun3Select\(\{\s*env,\s*statePath:\s*DEFAULT_STATE_PATH,\s*runId:\s*options\.runId,\s*pmAcknowledged:\s*options\.authorizePm\s*\}\)/.test(code),
+    'cli must bind the canonical state path and thread the PM acknowledgement',
   );
   // The state-path env override stays confined to the read-only preflight.
   const selectBranch = code.slice(code.indexOf("command === 'run3-select'"));
