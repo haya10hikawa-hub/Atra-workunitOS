@@ -175,6 +175,48 @@ test("C: forbidden and server-owned fields never reach Launcher state", async ()
   assert.equal(wire.includes("tenant-secret"), false)
 })
 
+test("C: the projected Launcher WorkUnit matches the exact safe-projection contract", async () => {
+  // Pinned end to end. `mapInboxWorkUnitToLauncherWorkUnit` maps the same row
+  // WITHOUT the candidate projection and produces a different contract
+  // (status READY, roi 92, sourceDetail "GitHub signal"), so swapping the read
+  // model onto that unprojected mapper cannot pass this assertion.
+  const state = await loadLauncherWorkUnits({ readClient: okClient([row()]) })
+  assert.equal(state.status, "loaded")
+  assert.deepEqual(state.workUnits[0], {
+    id: "wu-1",
+    title: "PR #12 needs review",
+    source: "GitHub",
+    status: "NEEDS REVIEW",
+    roi: 9.4,
+    summary: "A teammate requested your review",
+    objective: "Review this review waiting and decide the next PM-owned step.",
+    kind: "review waiting",
+    priority: "high",
+    ownerLabel: "pm",
+    sourceIcon: {
+      id: "github",
+      label: "GitHub",
+      assetPath: "/workunit-source-icons/github.svg",
+      fallbackBadge: "GH",
+      sourceType: "local_asset",
+    },
+    statusTone: "green",
+    sourceDetail: "GitHub · review waiting",
+    urgency: "High impact",
+    nextStep: "Review the diff and sign off",
+  })
+})
+
+test("C: the read model routes through the projection, never the unprojected row mapper", async () => {
+  const model = await source(readModel)
+  assert.equal(model.includes("inboxWorkUnitsToSafeCandidates"), true)
+  assert.equal(model.includes("candidatesToLauncherWorkUnits"), true)
+  // `mapInboxWorkUnitToLauncherWorkUnit` and `fallbackLauncherWorkUnits` are
+  // unprojected/fixture primitives. Neither may appear on the real read path.
+  assert.equal(model.includes("mapInboxWorkUnitToLauncherWorkUnit"), false)
+  assert.equal(model.includes("fallbackLauncherWorkUnits"), false)
+})
+
 test("C: sourceUrl stays dropped — StartHub source jump is a separate slice", () => {
   const candidate = inboxWorkUnitToSafeCandidate(row())
   assert.equal(Object.keys(candidate).includes("sourceUrl"), false)
