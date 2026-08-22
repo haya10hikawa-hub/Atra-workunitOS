@@ -1,16 +1,27 @@
-import { readdir, readFile } from "node:fs/promises"
+import { readdir, readFile, stat } from "node:fs/promises"
 import path from "node:path"
 import ts from "typescript"
 
 const ignoredDirs = new Set(["node_modules", ".next", ".open-next", "dist", "coverage"])
 const codeFilePattern = /\.(?:[cm]?[jt]s|[jt]sx)$/i
 const nodeModuleSpecifiers = new Set(["module", "node:module"])
-const legacyTargets = [
-  "app/lib/workunitInbox/",
-  "app/lib/actionField/",
-  "app/components/workunitInbox/",
-  "app/components/legacy/workunitInbox/",
-]
+
+/**
+ * The four ratified WU-10 legacy root identities.
+ *
+ * These are PERMANENT MEASUREMENT IDENTITIES, not a mutable worklist. A root is closed by emptying
+ * the directory it names, never by removing its entry here: shrinking this list would silently
+ * redefine the WU-10 gate rather than satisfy it. `tests/architectureLegacySurface.test.mts` holds
+ * an independent closed-vocabulary literal, so editing either side alone fails.
+ */
+export const LEGACY_ROOT_IDENTITIES = Object.freeze([
+  "app/lib/workunitInbox",
+  "app/lib/actionField",
+  "app/components/workunitInbox",
+  "app/components/legacy/workunitInbox",
+])
+
+const legacyTargets = LEGACY_ROOT_IDENTITIES.map((identity) => `${identity}/`)
 const legacySurfaceRoots = legacyTargets
 
 export async function listFiles(dir) {
@@ -22,6 +33,53 @@ export async function listFiles(dir) {
     return [fullPath]
   }))
   return nested.flat().sort()
+}
+
+/**
+ * Structural status of ONE ratified legacy root identity.
+ *
+ * `CLOSED` means the ratified identity carries no legacy files — including the end state where the
+ * physical directory no longer exists. That is the only error this function absorbs, and it absorbs
+ * it only for the root directory itself: a missing NESTED directory, EACCES, a path that resolves to
+ * a non-directory, or any other filesystem failure still throws, so the measurement fails closed
+ * rather than reporting a false zero. `listFiles` is deliberately left untouched, so unrelated scans
+ * keep their existing strictness.
+ */
+export async function scanLegacyRoot(rootDir, identity) {
+  const absolute = path.join(rootDir, identity)
+  const stats = await stat(absolute).catch((error) => {
+    if (error && error.code === "ENOENT") return null
+    throw error
+  })
+  if (stats === null) {
+    return { root: identity, status: "CLOSED", present: false, files: [] }
+  }
+  if (!stats.isDirectory()) {
+    throw new Error(`Legacy root identity is not a directory: ${identity}`)
+  }
+  const files = (await listFiles(absolute))
+    .map((file) => path.relative(rootDir, file).split(path.sep).join("/"))
+    .sort()
+  return { root: identity, status: files.length === 0 ? "CLOSED" : "OPEN", present: true, files }
+}
+
+/**
+ * Structural status of every ratified legacy root identity, in ratified order. The returned array
+ * always has one entry per identity, so a closed root stays visible in the measurement instead of
+ * vanishing from it.
+ */
+export async function scanLegacyRoots(rootDir, identities = LEGACY_ROOT_IDENTITIES) {
+  return Promise.all(identities.map((identity) => scanLegacyRoot(rootDir, identity)))
+}
+
+/**
+ * Legacy edges that touch one ratified root, either by originating inside it or by targeting it.
+ * Roots overlap — one edge can leave root A and enter root B — so these per-root counts are a
+ * per-root view, never a partition of the global total.
+ */
+export function legacyEdgesTouchingRoot(edges, identity) {
+  const prefix = `${identity}/`
+  return edges.filter((edge) => isWithin(edge.file, prefix) || isWithin(edge.resolvedTarget, prefix))
 }
 
 export function isCodeFilePath(filePath) {
