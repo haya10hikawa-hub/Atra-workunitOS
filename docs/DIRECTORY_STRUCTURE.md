@@ -9,8 +9,9 @@ Current active structure is still hybrid:
 - `docs/CONTEXT_INDEX.md`
   - first-read AI context map for canonical files, legacy surfaces, and minimal reading bundles
 - `app/components/`
-  - current WorkUnit UI implementation
-  - legacy/dashboard-named implementation shell under `workunit-os/adopted/`
+  - canonical WorkUnit UI under `workunit-os/launcher/` — the DEFAULT rendered surface
+  - legacy/dashboard-named reference shell under `workunit-os/adopted/`, rendered only behind
+    `NEXT_PUBLIC_WORKUNIT_LEGACY_DASHBOARD`; it still carries the remaining real mutation wiring
   - transitional pre-v0 panes retained but not rendered from `app/page.tsx`
   - legacy WorkUnit Inbox UI compatibility exports
 - `app/api/`
@@ -116,10 +117,12 @@ Forbidden:
 | Concern | Canonical module / area | Notes |
 |--------|--------------------------|-------|
 | Canonical UI direction | `docs/CANONICAL_DECISION_INDEX.md` | WorkUnit Launcher + WorkUnit Graph + Action Field |
-| Current UI shell | `app/components/workunit-os/WorkUnitOSDashboard.tsx` | Active page entry; implementation name may lag canonical UI terms |
-| Current visual implementation | `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.tsx` | Legacy/dashboard-named implementation path; not product terminology source of truth |
-| Current Action Field implementation | `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.tsx` | Right-side Action Field area in current implementation |
-| UI fetch client | `app/lib/application/dashboard/dashboardDataClient.ts` | Reads `/api/workunit/inbox`, `/api/integrations/status`, `/api/audit/recent` |
+| Current UI shell | `app/components/workunit-os/WorkUnitOSDashboard.tsx` | Active page entry; implementation name may lag canonical UI terms. Renders the Launcher by default |
+| Canonical visual implementation | `app/components/workunit-os/launcher/WorkUnitLauncher.tsx` | Default rendered surface: WorkUnit Launcher → WorkUnit Graph → Action Field. Real READ only |
+| Legacy/reference implementation | `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.tsx` | Rendered only behind `NEXT_PUBLIC_WORKUNIT_LEGACY_DASHBOARD`; carries the remaining preview / approval / dry-run wiring; not the product terminology source of truth |
+| UI fetch client | `app/lib/application/dashboard/dashboardDataClient.ts` | Reads `/api/workunit/inbox`, `/api/integrations/status`, `/api/audit/recent`. `fetchDashboardWorkUnits` is shared by the Launcher read path and the adopted surface |
+| Launcher read model | `app/lib/application/launcher/launcherWorkUnitReadModel.ts` | Launcher loading / loaded / empty / error states; a failed real read never falls back to mock data |
+| Launcher safe projection | `app/lib/application/launcher/inboxWorkUnitToCandidate.ts` | Server `InboxWorkUnit` → `SafeWorkUnitCandidate` allowlist projection; `sourceUrl` stays dropped pending the StartHub slice |
 | UI view-model | `app/lib/application/dashboard/adoptedDashboardViewModel.ts` | Maps real API data into current shell; empty/loading/error states do not fabricate live WorkUnits |
 | Canonical Preview / Approval client | `app/lib/application/actionField/dashboardPreviewClient.ts` | Client-safe application helper |
 | Pre-v0 dashboard presentation model | `app/lib/application/dashboard/workUnitDashboardModel.ts` | Transitional model retained for older pane components and tests |

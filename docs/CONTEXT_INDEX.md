@@ -29,7 +29,8 @@ UI
 
 | Feature | Read these files first |
 |---|---|
-| WorkUnit UI implementation | `app/components/workunit-os/WorkUnitOSDashboard.tsx`, `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.tsx`, `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.module.css`, `app/lib/application/dashboard/*` |
+| WorkUnit UI implementation (canonical, default) | `app/components/workunit-os/WorkUnitOSDashboard.tsx`, `app/components/workunit-os/launcher/WorkUnitLauncher.tsx`, `app/lib/application/launcher/*`, `app/lib/application/atra/*` |
+| WorkUnit UI implementation (legacy/reference, flag-gated) | `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.tsx`, `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.module.css`, `app/lib/application/dashboard/*` |
 | Action Field | `app/lib/application/actionField/dashboardPreviewClient.ts`, `app/lib/application/actionField/errorState.ts`, `app/lib/application/dashboard/selectedWorkUnitPreviewModel.ts`, `app/lib/application/dashboard/dashboardApprovalStatusClient.ts`, `app/lib/application/dashboard/approvalDecisionTraceModel.ts` |
 | WorkUnit Inbox | `app/lib/application/workunitInbox/*` |
 | Provider reads | `app/lib/infrastructure/external/github/*`, `app/lib/infrastructure/external/slack/*`, `app/lib/infrastructure/external/calendar/*` |
@@ -71,6 +72,7 @@ UI truthfulness rule: empty, loading, error, disconnected, unapproved, and unpre
 | `app/components/workunitInbox/*` | Compatibility | Re-exports legacy WorkUnit Inbox UI | Zero active imports |
 | `app/components/legacy/workunitInbox/*` | Legacy | Physical old standalone inbox/detail/action-field UI | Compatibility exports removed and no active imports |
 | Old pre-v0 `app/components/workunit-os/*` panes | Transitional | Retained for implementation history only; not canonical UI direction | Current implementation catches up to WorkUnit Launcher / Graph / Action Field |
+| `app/components/workunit-os/adopted/*` | Legacy / reference | Not the canonical UX. Rendered only behind `NEXT_PUBLIC_WORKUNIT_LEGACY_DASHBOARD`; retained as the rollback path and as the surface still carrying real preview / approval / dry-run wiring | Remaining mutation capability migrates to the canonical Launcher |
 | Hopper / Studio / Decision prototype folders | Prototype / unknown | Not canonical WorkUnit UI root | PM decision to archive, migrate, or delete |
 
 ## 8. Rule for future prompts
