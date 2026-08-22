@@ -42,6 +42,7 @@
     "electron:runtime-smoke": "node scripts/electron-runtime-smoke.mjs"
   },
   "dependencies": {
+    "google-auth-library": "11.0.2",
     "next": "^16.2.9",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
