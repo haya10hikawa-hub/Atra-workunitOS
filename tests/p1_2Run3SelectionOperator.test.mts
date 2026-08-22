@@ -44,7 +44,7 @@ import {
   toStableErrorCode,
   validateRunId,
 } from '../tools/audit/p1-2-run3-controller/selectOperator.mjs';
-import { main } from '../tools/audit/p1-2-run3-controller/cli.mjs';
+import { main, parseRun3SelectArgs } from '../tools/audit/p1-2-run3-controller/cli.mjs';
 
 /* ------------------------------------------------------------------ *
  * Absolute no-live-network guard for this entire file.
@@ -339,6 +339,19 @@ test('A9: run3-preflight is unchanged and run3-select did not become the fallbac
   assert.equal(usage.code, 2);
   assert.match(usage.out, /usage:/);
   assert.match(usage.out, /run3-select --run-id <run-id> --authorize-pm/);
+});
+
+test('A3b: the PARSER layer refuses a missing --authorize-pm on its own', () => {
+  // A3 goes through `main`, where either gate produces the same stable code,
+  // so it cannot tell the two apart. This pins the parser gate directly: the
+  // composition must never be entered at all, which is what keeps the
+  // canonical state path from even being passed to it.
+  assert.deepEqual(parseRun3SelectArgs(['--run-id', RUN_ID]), { invalid: 'pm_authorization_required' });
+  assert.deepEqual(parseRun3SelectArgs([]), { invalid: 'argument_invalid' });
+  assert.deepEqual(parseRun3SelectArgs(['--authorize-pm']), { invalid: 'argument_invalid' });
+  // ...and it accepts exactly the two-argument contract, nothing more.
+  assert.deepEqual(parseRun3SelectArgs(['--run-id', RUN_ID, '--authorize-pm']), { runId: RUN_ID, authorizePm: true });
+  assert.deepEqual(parseRun3SelectArgs(['--authorize-pm', '--run-id', RUN_ID]), { runId: RUN_ID, authorizePm: true });
 });
 
 test('A10: the PM acknowledgement is enforced by the COMPOSITION, not only the parser', async () => {

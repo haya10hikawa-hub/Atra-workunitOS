@@ -165,7 +165,15 @@ const RUN3_SELECT_VALUE_FLAG_MAP = Object.freeze({ '--run-id': 'runId' });
  */
 const PM_AUTHORIZATION_FLAG = '--authorize-pm';
 
-function parseRun3SelectArgs(argv) {
+/**
+ * Exported so the parser layer can be pinned on its own. `run3-select`'s PM
+ * acknowledgement is enforced twice — here, and again inside `runRun3Select`
+ * — and the two produce the SAME stable code, so an end-to-end test through
+ * `main` cannot tell which layer refused. Testing this function directly is
+ * what keeps the parser gate from silently rotting behind the composition
+ * gate that currently masks it.
+ */
+export function parseRun3SelectArgs(argv) {
   const options = { runId: null, authorizePm: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
