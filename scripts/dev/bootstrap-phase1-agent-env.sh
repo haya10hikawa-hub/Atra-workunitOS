@@ -38,6 +38,11 @@ fi
 mkdir -p "$HOME/.config/opencode"
 herdr integration install opencode
 
+# Ponytail defaults to full upstream. Phase-1 requires fail-safe OFF unless a lane
+# explicitly opts into lite/full, so persist the user-level default as OFF.
+mkdir -p "$HOME/.config/ponytail"
+printf '%s\n' '{"defaultMode":"off"}' > "$HOME/.config/ponytail/config.json"
+
 if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
   echo "OPENROUTER_API_KEY is not set. Export it in your shell before starting the proxy/OpenCode." >&2
 else
@@ -56,10 +61,11 @@ printf '  uv:       '; command -v uv
 
 echo ""
 echo "Herdr OpenCode integration installed."
-echo "Ponytail default for this sprint: ${PONYTAIL_DEFAULT_MODE}"
+echo "Ponytail user default persisted = off"
+echo "Ponytail current process default = ${PONYTAIL_DEFAULT_MODE}"
 echo ""
 echo "Next:"
 echo "  1. export OPENROUTER_API_KEY=...   # do not commit it"
-echo "  2. ./scripts/dev/start-headroom-openrouter.sh"
+echo "  2. bash scripts/dev/start-headroom-openrouter.sh"
 echo "  3. herdr"
-echo "  4. inside a Herdr-managed worktree: ./scripts/dev/start-opencode-phase1.sh"
+echo "  4. inside a Herdr-managed worktree: bash scripts/dev/start-opencode-phase1.sh"
