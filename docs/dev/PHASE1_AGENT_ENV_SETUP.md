@@ -66,18 +66,24 @@ Frozen sprint posture:
 
 ```text
 HEADROOM_SAVINGS_PROFILE=coding
+HEADROOM_MODE=cache
 HEADROOM_DISABLE_KOMPRESS=1
+HEADROOM_DISABLE_KOMPRESS_FALLBACK=1
+HEADROOM_CODE_AWARE_ENABLED=0
 HEADROOM_PROTECT_RECENT=3
 HEADROOM_MIN_TOKENS=1000
 HEADROOM_OUTPUT_SHAPER=0
 HEADROOM_MODEL_ROUTER_ENABLED=0
-HEADROOM_TELEMETRY=on
+HEADROOM_TELEMETRY=off
 host=127.0.0.1
 port=8787
 daily proxy budget=$12
-code-aware AST compression=OFF
 message logging=OFF
 ```
+
+The launcher is deliberately version-tolerant. It inspects `headroom proxy --help`, fails closed if the required routing/budget options are unavailable, and uses `--lossless` when the installed Headroom version supports it. Otherwise it falls back to explicit Kompress/code-aware disabling.
+
+Anonymous Headroom telemetry is OFF. This does **not** disable local savings/request metrics exposed by the proxy.
 
 Verify without exposing credentials:
 
