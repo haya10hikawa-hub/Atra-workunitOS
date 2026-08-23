@@ -13,6 +13,8 @@ fi
 
 # Phase-1 safety posture: cache-oriented, structural/lossless optimization only.
 # Anonymous Headroom telemetry is disabled; local /stats metrics remain available.
+# Anthropic Claude subscription polling is also disabled because this sprint routes
+# implementation traffic through OpenRouter and does not use Claude subscription state.
 export HEADROOM_SAVINGS_PROFILE="coding"
 export HEADROOM_MODE="cache"
 export HEADROOM_DISABLE_KOMPRESS="1"
@@ -23,6 +25,7 @@ export HEADROOM_MIN_TOKENS="1000"
 export HEADROOM_OUTPUT_SHAPER="0"
 export HEADROOM_MODEL_ROUTER_ENABLED="0"
 export HEADROOM_TELEMETRY="off"
+export HEADROOM_NO_SUBSCRIPTION_TRACKING="1"
 export HEADROOM_LOG_LEVEL="warning"
 export HEADROOM_BUDGET="12"
 export HEADROOM_BUDGET_PERIOD="daily"
@@ -62,6 +65,13 @@ fi
 # variable above remains the compatibility fallback.
 if grep -Fq -- "--no-telemetry" <<<"$HELP"; then
   args+=(--no-telemetry)
+fi
+
+# OpenRouter-only Phase-1 operation must not poll Anthropic subscription usage.
+# Use both env + CLI when available so current and older compatible Headroom
+# versions converge on the same fail-closed behavior.
+if grep -Fq -- "--no-subscription-tracking" <<<"$HELP"; then
+  args+=(--no-subscription-tracking)
 fi
 
 # Prefer the strongest version-supported safety primitive: lossless compaction.
