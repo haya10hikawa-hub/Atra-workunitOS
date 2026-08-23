@@ -1,0 +1,23 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.DS_Store
+
+# Raw, restricted, authorized, and generated source material stays local.
+data/raw/
+data/restricted/
+data/authorized/
+data/local/
+data/generated/
+
+# Local databases and object-store artifacts.
+*.sqlite
+*.sqlite3
+*.db
+__pycache__/
+*.py[cod]
+
+# Hugging Face local-dir download metadata is machine-local. The immutable
+# model snapshots themselves are versioned under models/huggingface via Git LFS.
+models/huggingface/**/.cache/

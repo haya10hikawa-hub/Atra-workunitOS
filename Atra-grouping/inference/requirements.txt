@@ -1,0 +1,6 @@
+# Real inference runtime; deterministic test doubles stay in inference/service.py for offline CI.
+fastapi==0.115.12
+uvicorn==0.34.2
+transformers==4.49.0
+torch==2.9.1
+safetensors==0.5.3
