@@ -13,10 +13,15 @@ export function calculatePairErrors(
   const falseSplitPairs: string[] = []
   for (let i = 0; i < sources.length; i++) for (let j = i + 1; j < sources.length; j++) {
     const key = pair(sources[i], sources[j])
-    if (predictedBySource.get(sources[i]) === predictedBySource.get(sources[j])
+    const leftPredictedGroup = predictedBySource.get(sources[i])
+    const rightPredictedGroup = predictedBySource.get(sources[j])
+    const predictedSame = leftPredictedGroup !== undefined
+      && rightPredictedGroup !== undefined
+      && leftPredictedGroup === rightPredictedGroup
+    if (predictedSame
       && goldBySource.get(sources[i]) !== goldBySource.get(sources[j])) falseMergePairs.push(key)
     if (goldBySource.get(sources[i]) === goldBySource.get(sources[j])
-      && predictedBySource.get(sources[i]) !== predictedBySource.get(sources[j])) falseSplitPairs.push(key)
+      && !predictedSame) falseSplitPairs.push(key)
   }
   return Object.freeze({ falseMergePairs, falseSplitPairs })
 }

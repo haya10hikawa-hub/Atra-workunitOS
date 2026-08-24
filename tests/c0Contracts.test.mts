@@ -40,3 +40,27 @@ test("false merge and false split calculations are deterministic", () => {
   assert.deepEqual(calculatePairErrors(gold, [{ groupId: "p1", sourceIds: [sourceIds[0]] }, { groupId: "p2", sourceIds: [sourceIds[1]] }]), { falseMergePairs: [], falseSplitPairs: [sourceIds.slice().sort().join("|")] })
   assert.deepEqual(calculatePairErrors([{ groupId: "g1", sourceIds: [sourceIds[0]] }, { groupId: "g2", sourceIds: [sourceIds[1]] }], [{ groupId: "p1", sourceIds }]), { falseMergePairs: [sourceIds.slice().sort().join("|")], falseSplitPairs: [] })
 })
+
+test("one unassigned source in same Gold group is a false split", () => {
+  assert.deepEqual(calculatePairErrors([{ groupId: "g1", sourceIds: ["a", "b"] }], [{ groupId: "p1", sourceIds: ["a"] }]), { falseMergePairs: [], falseSplitPairs: ["a|b"] })
+})
+
+test("both unassigned sources in same Gold group are a false split", () => {
+  assert.deepEqual(calculatePairErrors([{ groupId: "g1", sourceIds: ["a", "b"] }], []), { falseMergePairs: [], falseSplitPairs: ["a|b"] })
+})
+
+test("both unassigned sources in different Gold groups are not an error", () => {
+  assert.deepEqual(calculatePairErrors([{ groupId: "g1", sourceIds: ["a"] }, { groupId: "g2", sourceIds: ["b"] }], []), { falseMergePairs: [], falseSplitPairs: [] })
+})
+
+test("one unassigned source in different Gold groups is not an error", () => {
+  assert.deepEqual(calculatePairErrors([{ groupId: "g1", sourceIds: ["a"] }, { groupId: "g2", sourceIds: ["b"] }], [{ groupId: "p1", sourceIds: ["a"] }]), { falseMergePairs: [], falseSplitPairs: [] })
+})
+
+test("same predicted group across different Gold groups is a false merge", () => {
+  assert.deepEqual(calculatePairErrors([{ groupId: "g1", sourceIds: ["a"] }, { groupId: "g2", sourceIds: ["b"] }], [{ groupId: "p1", sourceIds: ["a", "b"] }]), { falseMergePairs: ["a|b"], falseSplitPairs: [] })
+})
+
+test("same Gold and predicted groups are not an error", () => {
+  assert.deepEqual(calculatePairErrors([{ groupId: "g1", sourceIds: ["a", "b"] }], [{ groupId: "p1", sourceIds: ["a", "b"] }]), { falseMergePairs: [], falseSplitPairs: [] })
+})
