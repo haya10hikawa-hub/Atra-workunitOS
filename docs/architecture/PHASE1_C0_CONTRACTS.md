@@ -66,3 +66,46 @@ underlying work referent?”, “Is any related context incorrectly included?”
 and “Could a human understand the candidate without opening another source?”
 Evidence is a JSON measurement record containing the frozen IDs, calculation
 inputs, answers, and pass/fail result. No external provider is called.
+
+## Candidate Projection Provenance (Amendment)
+
+Status: normative amendment to this contract freeze; resolves the P1-3 to
+P1-4 `summary` provenance gap. It does not change any `c0.v1` shape.
+
+1. `WorkUnitCandidate` (`c0.v1`) is the canonical input to `CandidateProjection`
+   (`c0.v1`) for the Phase-1 canonical validation path. `SafeWorkUnitCandidate`
+   is not Phase-1 canonical Candidate truth, and `candidateWorkUnitBridge()` is
+   not the canonical P1-3 to P1-4 composition root. Legacy or mock Launcher
+   paths built on `SafeWorkUnitCandidate` may continue to exist outside the
+   canonical path; they may not claim canonical authority for it.
+
+2. The canonical field mapping from `WorkUnitCandidate` to `CandidateProjection`
+   is:
+
+   ```text
+   CandidateProjection.candidateId           = WorkUnitCandidate.candidateId
+   CandidateProjection.title                 = WorkUnitCandidate.title
+   CandidateProjection.sourceIds              = WorkUnitCandidate.evidenceSourceIds
+   CandidateProjection.missingInformation     = WorkUnitCandidate.missingInformation
+   CandidateProjection.humanReviewRequired    = WorkUnitCandidate.humanReviewRequired
+   ```
+
+3. `CandidateProjection.summary` has no field on `WorkUnitCandidate` and is not
+   derived from one. It is an explicit projection-only input supplied to the
+   projection function alongside the canonical `WorkUnitCandidate`. It is
+   presentation evidence only: it is not canonical Candidate truth, not
+   correlation truth, not source-membership truth, not approval truth, not
+   execution truth, and not attention state. The projection function must not
+   derive it from `SafeWorkUnitCandidate.summary`, `NormalizedToolSignal.summary`,
+   `LauncherWorkUnit.summary`, fallback Launcher data, `title`, an LLM, or
+   ambient UI state, unless a future, separately reviewed contract amendment
+   explicitly authorizes such a source.
+
+4. For the frozen Phase-1 mock fixture, the authoritative summary value is the
+   already-frozen `tests/fixtures/phase1/c0.v1.json` → `projection.summary`
+   (`"Read-only candidate projection"`). No other mock summary value is
+   authorized.
+
+5. This amendment does not define the future production summary-generation
+   mechanism. That mechanism remains undefined and is intentionally deferred
+   to a future, separately reviewed contract change.
