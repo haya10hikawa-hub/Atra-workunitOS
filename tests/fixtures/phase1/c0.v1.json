@@ -1,0 +1,32 @@
+{
+  "contractVersion": "c0.v1",
+  "artifactClass": "VALIDATION_FIXTURE",
+  "admissibility": {
+    "status": "BLOCKED",
+    "reason": "Only GitHub issue and GitHub pull-request captures exist; they are one provider.",
+    "independentProviderCount": 1
+  },
+  "dataset": {
+    "datasetId": "atra.phase1.correlation.validation",
+    "datasetVersion": "c0.v1",
+    "membershipFrozen": true,
+    "ordering": "declared membership order",
+    "members": [
+      { "sourceId": "src-github-issue-207", "tenantId": "dev-tenant", "provider": "github_issue", "providerObjectKey": "4968607486", "capturePath": "acquisitions/github/issue-4968607486.capture.json" },
+      { "sourceId": "src-github-pull-229", "tenantId": "dev-tenant", "provider": "github_pull_request", "providerObjectKey": "4258276579", "capturePath": "acquisitions/github/pull-request-4258276579.capture.json" }
+    ]
+  },
+  "goldSet": {
+    "goldSetId": "atra.phase1.correlation.gold.c0",
+    "labelsFrozen": true,
+    "labelClass": "FROZEN_VALIDATION_FIXTURE_NOT_PROVIDER_EVIDENCE",
+    "groups": [
+      { "groupId": "gold-work-001", "memberSourceIds": ["src-github-issue-207", "src-github-pull-229"] }
+    ]
+  },
+  "correlationGroup": { "groupId": "group-work-001", "memberSourceIds": ["src-github-issue-207", "src-github-pull-229"], "ruleVersion": "c0.v1", "reason": "fixture only" },
+  "candidate": { "candidateId": "candidate-work-001", "correlationGroupId": "group-work-001", "evidenceSourceIds": ["src-github-issue-207", "src-github-pull-229"], "contextSourceIds": [], "title": "Atra Phase-1 correlation work", "missingInformation": [], "humanReviewRequired": true },
+  "projection": { "candidateId": "candidate-work-001", "title": "Atra Phase-1 correlation work", "sourceIds": ["src-github-issue-207", "src-github-pull-229"], "summary": "Read-only candidate projection", "missingInformation": [], "humanReviewRequired": true },
+  "correction": { "correctionId": "correction-001", "candidateId": "candidate-work-001", "actorId": "human-reviewer-001", "action": "remove-member", "sourceId": "src-github-pull-229", "reason": "fixture correction" },
+  "measurement": { "measurementId": "measurement-001", "datasetId": "atra.phase1.correlation.validation", "goldSetId": "atra.phase1.correlation.gold.c0", "predictedGroupIds": ["group-work-001"], "falseMergePairs": [], "falseSplitPairs": [], "judgment": { "sameReferent": true, "relatedContextExcluded": true, "understandable": true }, "pass": true }
+}
