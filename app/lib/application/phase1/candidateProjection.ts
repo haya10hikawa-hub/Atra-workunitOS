@@ -13,7 +13,7 @@ export function projectCandidate(candidate: WorkUnitCandidate, summary: string):
   return Object.freeze({
     candidateId: candidate.candidateId,
     title: candidate.title,
-    sourceIds: Object.freeze([...candidate.evidenceSourceIds]),
+    sourceIds: Object.freeze([...candidate.evidenceSourceIds, ...candidate.contextSourceIds]),
     summary,
     missingInformation: Object.freeze([...candidate.missingInformation]),
     humanReviewRequired: candidate.humanReviewRequired,

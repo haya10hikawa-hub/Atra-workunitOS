@@ -60,7 +60,7 @@ async function withDevRouteRuntime<T>(mockLlm: boolean, run: (db: FakeD1Database
   }
 }
 
-test("default launcher and inbox paths match the exact current-behavior contract", () => {
+test("legacy mock adapter and inbox paths remain characterized but non-canonical", () => {
   const inbox = transformSignalsToInboxWorkUnits(signals).map((item) => ({
     id: item.id, signalId: item.signalId, tenantId: item.tenantId, sourceProvider: item.sourceProvider,
     kind: item.kind, priority: item.priority, sourceUrl: item.sourceUrl, status: item.status,
@@ -79,10 +79,10 @@ test("default launcher and inbox paths match the exact current-behavior contract
   }))
   assert.equal(contract.sourceSha, "066a43c3df07f3da10a2fc93ff7d90157c732114")
   assert.equal(contract.sourceShaRole, "refactor_base_only_not_tree_attestation")
-  assert.deepEqual({ inbox, bridge: { source: bridge.source, mode: bridge.mode, safety: bridge.safety, candidates }, launcher }, contract.defaultAndInbox)
+  assert.deepEqual({ inbox, bridge: { source: bridge.source, mode: bridge.mode, safety: bridge.safety, candidates }, launcher }, contract.legacyMockAndInbox)
 })
 
-test("actual default five-signal bridge to launcher projection matches the exact contract", () => {
+test("legacy five-signal bridge remains compatible outside the canonical Launcher path", () => {
   const bridge = candidateWorkUnitBridge()
   assert.deepEqual({
     bridge: {
@@ -90,10 +90,11 @@ test("actual default five-signal bridge to launcher projection matches the exact
       candidateIds: bridge.workUnits.map((item) => item.id),
     },
     launcher: candidatesToLauncherWorkUnits(bridge.workUnits),
-  }, contract.defaultMockToLauncher)
+  }, contract.legacyMockToLauncher)
 })
 
 test("default page to launcher composition source matches the reviewed snapshot", async () => {
+  assert.equal(contract.launcherCompositionAuthority, "canonical_c0_candidate_projection")
   const files = [
     "../app/page.tsx",
     "../app/components/workunit-os/WorkUnitOSDashboard.tsx",

@@ -44,6 +44,18 @@ test("projection summary is explicit and cannot mutate the candidate", () => {
   assert.deepEqual(candidate, before)
 })
 
+test("projection preserves evidence then context membership without scalar collapse", () => {
+  const candidate = {
+    ...formFixtureCandidate(),
+    evidenceSourceIds: Object.freeze(["evidence-2", "evidence-1"]),
+    contextSourceIds: Object.freeze(["context-2", "context-1"]),
+  }
+  assert.deepEqual(
+    projectCandidate(candidate, "explicit summary").sourceIds,
+    ["evidence-2", "evidence-1", "context-2", "context-1"],
+  )
+})
+
 test("unknown membership fails in P1-3 before projection", () => {
   assert.throws(() =>
     formWorkUnitCandidate(

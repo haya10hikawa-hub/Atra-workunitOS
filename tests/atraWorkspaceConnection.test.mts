@@ -21,7 +21,8 @@ import { FORBIDDEN_CANDIDATE_FIELDS } from "../app/lib/application/candidate/saf
 const read = (file: string) => readFileSync(join(process.cwd(), file), "utf-8")
 const PAGE = read("app/page.tsx")
 const DASHBOARD = read("app/components/workunit-os/WorkUnitOSDashboard.tsx")
-const LAUNCHER = read("app/components/workunit-os/launcher/WorkUnitLauncher.tsx")
+const LAUNCHER = read("app/components/workunit-os/launcher/LegacyMockWorkUnitLauncher.tsx")
+const CANONICAL_LAUNCHER = read("app/components/workunit-os/launcher/WorkUnitLauncher.tsx")
 const COMPONENT = read("app/components/atra/AtraWorkspace.tsx")
 const DERIVER = read("app/lib/application/atra/deriveAtraWorkspaceViewModel.ts")
 
@@ -43,10 +44,12 @@ function deepForbiddenKeys(value: unknown): string[] {
 }
 
 // 1
-test("WorkUnitLauncher renders AtraWorkspace through the page entry chain", () => {
+test("default entry is canonical while the AtraWorkspace path remains legacy-only", () => {
   assert.ok(PAGE.includes("WorkUnitOSDashboard"))
   assert.ok(DASHBOARD.includes("<WorkUnitLauncher />"))
   assert.ok(LAUNCHER.includes("<AtraWorkspace"))
+  assert.equal(CANONICAL_LAUNCHER.includes("<AtraWorkspace"), false)
+  assert.ok(CANONICAL_LAUNCHER.includes("CanonicalCandidateLauncherView"))
 })
 
 // 2

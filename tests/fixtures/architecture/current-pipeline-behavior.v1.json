@@ -1,7 +1,7 @@
 {
   "sourceSha": "066a43c3df07f3da10a2fc93ff7d90157c732114",
   "sourceShaRole": "refactor_base_only_not_tree_attestation",
-  "defaultAndInbox": {
+  "legacyMockAndInbox": {
     "inbox": [
       { "id": "wu:github-7", "signalId": "github-7", "tenantId": "tenant-ratchet", "sourceProvider": "github", "kind": "blocker", "priority": "high", "sourceUrl": "https://github.test/acme/repo/issues/7", "status": "open" },
       { "id": "wu:slack-9", "signalId": "slack-9", "tenantId": "tenant-ratchet", "sourceProvider": "slack", "kind": "missed_response", "priority": "medium", "sourceUrl": "https://slack.test/archives/release/p9", "status": "open" }
@@ -20,7 +20,7 @@
       { "id": "candidate:slack-9", "source": "Slack", "status": "NEEDS REVIEW", "priority": "medium", "hasGraph": false, "hasEvidenceSummary": false, "hasHumanReviewRequired": false }
     ]
   },
-  "defaultMockToLauncher": {
+  "legacyMockToLauncher": {
     "bridge": {
       "source": "mock_candidate_pipeline",
       "mode": "candidate_only",
@@ -121,10 +121,11 @@
       }
     ]
   },
+  "launcherCompositionAuthority": "canonical_c0_candidate_projection",
   "launcherCompositionSourceHashes": {
     "app/page.tsx": "8e83d9fab112a19e92d29b2e86c58664de46b35e1fe96b6131fa8c299b074aea",
     "app/components/workunit-os/WorkUnitOSDashboard.tsx": "3e20aa0df1b068fae4342f67cfb7750f63c2485e57fbe134961efdea56d28476",
-    "app/components/workunit-os/launcher/WorkUnitLauncher.tsx": "1a06c4d0f56d8b83c7f20b3856d50287178895f80ff084118c1ff2f35fb708c2"
+    "app/components/workunit-os/launcher/WorkUnitLauncher.tsx": "b29eb84b3c374571b4614ee20df2db95de79fc2319611416263c2c498fc5839b"
   },
   "inboxRoute": {
     "status": 200,
