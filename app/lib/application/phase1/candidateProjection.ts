@@ -1,4 +1,4 @@
-import type { SafeWorkUnitCandidate } from "../candidate/safeWorkUnitCandidate.ts"
+import type { WorkUnitCandidate } from "./workUnitCandidate.ts"
 
 export type CandidateProjection = {
   readonly candidateId: string
@@ -9,13 +9,13 @@ export type CandidateProjection = {
   readonly humanReviewRequired: true
 }
 
-export function projectCandidate(candidate: SafeWorkUnitCandidate): CandidateProjection {
+export function projectCandidate(candidate: WorkUnitCandidate, summary: string): CandidateProjection {
   return Object.freeze({
     candidateId: candidate.candidateId,
     title: candidate.title,
     sourceIds: Object.freeze([...candidate.evidenceSourceIds]),
-    summary: candidate.summary,
+    summary,
     missingInformation: Object.freeze([...candidate.missingInformation]),
-    humanReviewRequired: true,
+    humanReviewRequired: candidate.humanReviewRequired,
   })
 }

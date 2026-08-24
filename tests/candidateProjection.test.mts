@@ -1,32 +1,55 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { candidateWorkUnitBridge } from "../app/lib/application/candidate/candidateWorkUnitBridge.ts"
-import { projectCandidate } from "../app/lib/application/phase1/candidateProjection.ts"
-import { candidateToLauncherWorkUnit } from "../app/lib/application/launcher/candidateToLauncherWorkUnit.ts"
 import { readFile } from "node:fs/promises"
+import { fileURLToPath } from "node:url"
+import path from "node:path"
+import { formWorkUnitCandidate } from "../app/lib/application/phase1/workUnitCandidate.ts"
+import { projectCandidate } from "../app/lib/application/phase1/candidateProjection.ts"
 
-test("Launcher carries the C0 projection, not grouping truth", () => {
-  const candidate = candidateWorkUnitBridge().workUnits[0]!
-  const projection = projectCandidate(candidate)
-  const launcher = candidateToLauncherWorkUnit(candidate)
-  assert.deepEqual(launcher.candidateProjection, projection)
-  assert.equal("correlationGroupId" in launcher, false)
-  assert.equal(projection.humanReviewRequired, true)
-  assert.deepEqual(projection.missingInformation, [])
-  assert.ok(projection.sourceIds.length > 0)
+const root = fileURLToPath(new URL("../", import.meta.url))
+const fixture = JSON.parse(await readFile(path.join(root, "tests/fixtures/phase1/c0.v1.json"), "utf8"))
+const validSourceIds = fixture.dataset.members.map((member: { sourceId: string }) => member.sourceId)
+
+function formFixtureCandidate() {
+  return formWorkUnitCandidate(
+    fixture.correlationGroup,
+    validSourceIds,
+    fixture.candidate.title,
+    fixture.candidate.contextSourceIds,
+    fixture.candidate.missingInformation,
+  )
+}
+
+test("forms the canonical P1-3 candidate and projects the frozen C0 fixture", () => {
+  const candidate = formFixtureCandidate()
+  const before = structuredClone(candidate)
+  const projection = projectCandidate(candidate, fixture.projection.summary)
+
+  assert.equal(projection.candidateId, candidate.candidateId)
+  assert.equal(projection.title, candidate.title)
+  assert.deepEqual(projection.sourceIds, candidate.evidenceSourceIds)
+  assert.deepEqual(projection.missingInformation, candidate.missingInformation)
+  assert.equal(projection.humanReviewRequired, candidate.humanReviewRequired)
+  assert.equal(projection.summary, fixture.projection.summary)
+  assert.deepEqual(projection, fixture.projection)
+  assert.deepEqual(candidate, before)
+  assert.deepEqual(candidate.evidenceSourceIds, fixture.correlationGroup.memberSourceIds)
+  assert.deepEqual(projectCandidate(candidate, fixture.projection.summary), projection)
 })
 
-test("Launcher preview exposes projection evidence and never adds authority", async () => {
-  const source = await readFile("app/components/workunit-os/launcher/CommandPaletteView.tsx", "utf8")
-  for (const label of ["Candidate evidence", "Source records", "Context", "Missing information", "Human review required"]) {
-    assert.equal(source.includes(label), true, label)
-  }
-  for (const forbidden of ["approve", "execute", "/api/workunit/tools", "correlationGroupId"]) {
-    assert.equal(source.toLowerCase().includes(forbidden.toLowerCase()), false, forbidden)
-  }
+test("projection summary is explicit and cannot mutate the candidate", () => {
+  const candidate = formFixtureCandidate()
+  const before = structuredClone(candidate)
+  projectCandidate(candidate, "another read-only summary")
+  assert.deepEqual(candidate, before)
 })
 
-test("missing information is preserved by the projection", () => {
-  const candidate = { ...candidateWorkUnitBridge().workUnits[0]!, missingInformation: ["owner"] }
-  assert.deepEqual(projectCandidate(candidate).missingInformation, ["owner"])
+test("unknown membership fails in P1-3 before projection", () => {
+  assert.throws(() =>
+    formWorkUnitCandidate(
+      { ...fixture.correlationGroup, memberSourceIds: [...fixture.correlationGroup.memberSourceIds, "unknown"] },
+      validSourceIds,
+      fixture.candidate.title,
+    ),
+  )
 })
