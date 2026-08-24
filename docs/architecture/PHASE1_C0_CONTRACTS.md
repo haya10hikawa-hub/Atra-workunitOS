@@ -51,6 +51,16 @@ cannot approve execution or create a ReviewedWorkUnit.
 different gold groups. False split means two sources in one gold group are in
 different predicted groups. Pair lists are sorted and deduplicated.
 
+`pass` is an event-level validity result for the original machine-produced
+output, not a Value Gate, product success, correction, approval, or execution
+result. It is true exactly when `falseMergePairs.length === 0`,
+`falseSplitPairs.length === 0`, `judgment.sameReferent === true`,
+`judgment.relatedContextExcluded === true`, and `judgment.understandable ===
+true`. Pair errors and judgment are calculated before correction from the
+original prediction and frozen Gold; a `CorrectionRecord` is separate
+diagnostic evidence and does not alter `pass` or retroactively change the
+`MeasurementEvent`. No aggregate Value Gate threshold is defined here.
+
 Human judgment questions are frozen as: “Are all members about the same
 underlying work referent?”, “Is any related context incorrectly included?”,
 and “Could a human understand the candidate without opening another source?”
