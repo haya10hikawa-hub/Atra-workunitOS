@@ -34,6 +34,10 @@ export const SAFE_WORK_UNIT_CANDIDATE_FIELDS = [
   "actionFieldDraft",
   "candidateType",
   "evidenceSummary",
+  "candidateId",
+  "evidenceSourceIds",
+  "contextSourceIds",
+  "missingInformation",
   "humanReviewRequired",
   "candidateOnly",
 ] as const
@@ -94,6 +98,10 @@ export type SafeWorkUnitCandidate = {
   readonly actionFieldDraft: SafeCandidateActionFieldDraft
   readonly candidateType: string
   readonly evidenceSummary: string
+  readonly candidateId: string
+  readonly evidenceSourceIds: readonly string[]
+  readonly contextSourceIds: readonly string[]
+  readonly missingInformation: readonly string[]
   readonly humanReviewRequired: true
   readonly candidateOnly: true
 }
@@ -124,6 +132,10 @@ export function projectSafeWorkUnitCandidate(raw: Record<string, unknown>): Safe
     actionFieldDraft: projectActionFieldDraft(raw.actionFieldDraft),
     candidateType: text(raw.candidateType, "work_unit_candidate"),
     evidenceSummary: text(raw.evidenceSummary, ""),
+    candidateId: text(raw.candidateId, text(raw.id, "candidate:unknown")),
+    evidenceSourceIds: strings(raw.evidenceSourceIds),
+    contextSourceIds: strings(raw.contextSourceIds),
+    missingInformation: strings(raw.missingInformation),
     humanReviewRequired: true,
     candidateOnly: true,
   }
@@ -170,4 +182,8 @@ function number(value: unknown, fallback: number): number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+function strings(value: unknown): readonly string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []
 }

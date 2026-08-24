@@ -7,6 +7,7 @@
  */
 
 import type { SafeWorkUnitCandidate } from "../candidate/safeWorkUnitCandidate.ts"
+import { projectCandidate } from "../phase1/candidateProjection.ts"
 import type { LauncherWorkUnit } from "./workUnitSelectionModel.ts"
 import { resolveSourceAppIcon } from "./sourceAppIconModel.ts"
 
@@ -31,6 +32,7 @@ export function candidateToLauncherWorkUnit(candidate: SafeWorkUnitCandidate): L
     sourceDetail: candidate.sourceDetail,
     urgency: candidate.urgency,
     nextStep: candidate.nextStep,
+    candidateProjection: projectCandidate(candidate),
   }
 }
 

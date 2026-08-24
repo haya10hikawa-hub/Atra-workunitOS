@@ -103,6 +103,14 @@ export function CommandPaletteView(props: Props) {
           </div>
           <p className={styles.previewSummary}>{activeWorkUnit?.objective ?? "Select a WorkUnit to inspect the compact preview."}</p>
           <div className={styles.previewDivider} />
+          <div className={styles.previewSummary}>
+            <strong>Candidate evidence</strong>
+            <p>{activeWorkUnit?.candidateProjection?.summary ?? "No projection available."}</p>
+            <p>Source records: {activeWorkUnit?.candidateProjection?.sourceIds.join(", ") || "None declared"}</p>
+            <p>Context: no context records declared</p>
+            <p>Missing information: {activeWorkUnit?.candidateProjection?.missingInformation.join(", ") || "None declared"}</p>
+            <p>Human review required: {activeWorkUnit?.candidateProjection?.humanReviewRequired ? "Yes" : "No"}</p>
+          </div>
           <dl className={styles.previewFacts}>
             <div>
               <dt><FiBox className={styles.factIcon} aria-hidden="true" />Source</dt>

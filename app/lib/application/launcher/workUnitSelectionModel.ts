@@ -1,5 +1,6 @@
 import type { InboxWorkUnit } from "@/lib/application/workunitInbox/types"
 import { resolveSourceAppIcon, type SourceAppIconView } from "./sourceAppIconModel.ts"
+import type { CandidateProjection } from "../phase1/candidateProjection.ts"
 
 export type LauncherWorkUnit = {
   readonly id: string
@@ -17,6 +18,7 @@ export type LauncherWorkUnit = {
   readonly sourceDetail?: string
   readonly urgency?: string
   readonly nextStep?: string
+  readonly candidateProjection?: CandidateProjection
 }
 
 export function mapInboxWorkUnitToLauncherWorkUnit(workUnit: InboxWorkUnit): LauncherWorkUnit {
