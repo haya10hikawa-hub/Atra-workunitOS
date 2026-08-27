@@ -130,8 +130,13 @@ export function multisetDifference(left, right) {
   })
 }
 
+export function createModuleTargetResolver(rootDir) {
+  const compilerOptions = loadCompilerOptions(rootDir)
+  return (filePath, specifier) => resolveTarget(rootDir, compilerOptions, filePath, specifier)
+}
+
 export function resolveModuleTarget(rootDir, filePath, specifier) {
-  return resolveTarget(rootDir, loadCompilerOptions(rootDir), filePath, specifier)
+  return createModuleTargetResolver(rootDir)(filePath, specifier)
 }
 
 function loadCompilerOptions(rootDir) {
