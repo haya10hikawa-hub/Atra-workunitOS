@@ -4,6 +4,7 @@ import { readFile, readdir, stat } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import {
+  LEGACY_ROOT_IDENTITIES,
   extractModuleReferences,
   isCodeFilePath,
   resolveModuleTarget,
@@ -801,15 +802,21 @@ const VERSIONED_RECORD_FAMILY_SUFFIXES = [
   "RecordV1", "CandidateV1", "ReviewV1", "CorrectionV1", "GroupV1", "PreparationV1",
 ]
 
+// The ratified WU-10 exit-gate conditions, verbatim and in document order. Each entry must be the
+// WHOLE bullet: pinning a prefix lets the ratified sub-scope of a condition be deleted silently,
+// which is how condition 6 lost "covering path strings, configuration, package scripts and
+// documentation commands". Reconciled bidirectionally against the document below, so this array
+// and the gate section cannot drift apart in either direction.
 const WU10_GATE_CONDITIONS = [
   "legacy edge baseline = 0",
   "legacy file baseline = 0",
   "production entry-point reachability classified",
   "test-only reachability classified",
   "operator entry points classified",
-  "non-import references checked",
+  "non-import references checked, covering path strings, configuration, package scripts and documentation commands",
   "remaining unreachable modules explicitly classified",
   "PM decisions recorded for dormant research and prototypes",
+  "declared architecture-debt ledger contains no `known_open` entry, or each remaining entry has a recorded PM re-scope",
 ]
 
 const GO_TOKEN = "WU00_EXACT_HEAD_INDEPENDENT_ARCHITECTURE_EVIDENCE_GO"
@@ -1039,6 +1046,37 @@ test("governance: WU-10 baseline zero is necessary but not sufficient", async ()
   // Every non-baseline condition must remain in the gate. Dropping one would silently reduce
   // WU-10 to the baseline measure the gate exists to reject.
   assertDocDeclares(doc, WU10_GATE_CONDITIONS, "WU-10 gate conditions")
+})
+
+test("governance: WU-10 exit-gate conditions reconcile exactly with the executable pin", async () => {
+  // Bounded to the one ratified section, so unrelated Markdown bullets elsewhere in the program
+  // document can neither satisfy nor break this reconciliation.
+  const section = programSection(documentSections(await readProgramDoc()), "WU-10 cleanup exit gate")
+  const bullets = section
+    .split("\n")
+    .filter((line) => line.startsWith("- "))
+    .map((line) => line.slice(2).trim())
+
+  // Bidirectional and order-sensitive. A tenth documented condition with no executable pin, a
+  // pinned condition absent from the authority, or a deletion from either side all fail here.
+  // A manually maintained array length alone would not catch the first case.
+  assert.deepEqual(bullets, [...WU10_GATE_CONDITIONS],
+    "WU-10 exit-gate bullets and WU10_GATE_CONDITIONS must reconcile exactly, in document order")
+  assert.equal(bullets.length, 9, "the ratified WU-10 exit gate has exactly nine conditions")
+})
+
+test("governance: legacy root identities are permanent measurement identities", async () => {
+  const section = programSection(documentSections(await readProgramDoc()), "Legacy root identity permanence")
+  assertDocDeclares(section, [
+    "These four are permanent measurement identities.",
+    "Shrinking the ratified root list is not a mechanism of closure.",
+    "physical absence of a directory is a closed root, never an absent identity",
+    "`legacy file baseline = 0` is satisfied only when all four ratified root identities report `CLOSED`.",
+    "It adds no deletion authority",
+  ], "legacy root identity permanence")
+  for (const identity of LEGACY_ROOT_IDENTITIES) {
+    assert.ok(section.includes(`\`${identity}\``), `the amendment must name the ratified root ${identity}`)
+  }
 })
 
 test("governance: declared debt ledger is a review-governed registry, not a machine-closed ratchet", async () => {

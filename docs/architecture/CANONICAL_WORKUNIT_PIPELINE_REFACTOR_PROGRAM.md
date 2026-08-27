@@ -296,6 +296,18 @@ WU-10 completes only when **all** of the following hold. The legacy edge/file ba
 
 A module is not eligible for deletion merely because it has no static importer. WU-10 requires a reachability and non-import-reference instrument, which WU-00 does not provide.
 
+#### Legacy root identity permanence
+
+The gate above measures four legacy roots: `app/lib/workunitInbox`, `app/lib/actionField`, `app/components/workunitInbox` and `app/components/legacy/workunitInbox`. These four are permanent measurement identities. The measurement always reports one entry per ratified identity, so a root that has been emptied stays visible as a closed root rather than disappearing from the report.
+
+Shrinking the ratified root list is not a mechanism of closure. Removing an identity from the instrument's root definition, or from the executable list that pins it, drives the measured totals toward zero without any legacy code being removed, and is a governance violation rather than progress against the gate. This mirrors the declared-debt rule that removing the record is never the mechanism of closure.
+
+A ratified root reports `CLOSED` once it contains no legacy files, and that includes the end state in which its physical directory no longer exists; physical absence of a directory is a closed root, never an absent identity. A root that still contains legacy files reports `OPEN`. Any other filesystem outcome — an unreadable directory, or a path that is not a directory — is a measurement failure, not a closed root.
+
+`legacy file baseline = 0` is satisfied only when all four ratified root identities report `CLOSED`.
+
+This invariant makes the existing gate well-defined at its own zero state. It adds no deletion authority: it does not authorize deleting any root, does not authorize incremental per-root cleanup, and does not change any condition of the gate above.
+
 ## WU-00 Acceptance
 
 - No changes under `app/**`, `migrations/**`, or runtime configuration.

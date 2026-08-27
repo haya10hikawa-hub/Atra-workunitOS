@@ -4,21 +4,17 @@ import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import {
+  LEGACY_ROOT_IDENTITIES,
   findLegacyEdges,
   legacyEdgeKey,
-  listFiles,
+  legacyEdgesTouchingRoot,
   multisetDifference,
+  scanLegacyRoots,
   scanModuleGraph,
 } from "./lib/typescriptModuleGraph.mjs"
 
 const rootDir = fileURLToPath(new URL("../", import.meta.url))
 const fixturePath = path.join(rootDir, "tests/fixtures/architecture/legacy-surface.v1.json")
-const legacyRoots = [
-  "app/lib/workunitInbox",
-  "app/lib/actionField",
-  "app/components/workunitInbox",
-  "app/components/legacy/workunitInbox",
-]
 
 const contract = JSON.parse(await readFile(fixturePath, "utf8"))
 if (contract.sourceShaRole !== "refactor_base_only_not_tree_attestation"
@@ -30,16 +26,28 @@ if (contract.sourceShaRole !== "refactor_base_only_not_tree_attestation"
 const edges = findLegacyEdges(await scanModuleGraph(rootDir, ["app", "tests"]))
 const actualEdges = edges.map(legacyEdgeKey).sort()
 const expectedEdges = [...contract.legacyEdges].sort()
-const actualFiles = (await Promise.all(legacyRoots.map(async (root) => listFiles(path.join(rootDir, root)))))
-  .flat()
-  .map((file) => path.relative(rootDir, file).split(path.sep).join("/"))
-  .sort()
+
+// One entry per ratified identity, always. A root that holds no legacy files reports CLOSED and
+// stays in the report; it is never dropped, because absence from the measurement is not closure.
+const roots = await scanLegacyRoots(rootDir)
+const actualFiles = roots.flatMap((root) => root.files).sort()
 
 console.log(`Legacy module edges: ${actualEdges.length}`)
 for (const [kind, count] of countBy(edges, (edge) => edge.kind)) console.log(`- ${kind}: ${count}`)
 console.log(`- production: ${edges.filter((edge) => edge.file.startsWith("app/")).length}`)
 console.log(`- tests: ${edges.filter((edge) => edge.file.startsWith("tests/")).length}`)
 console.log(`Legacy files: ${actualFiles.length}`)
+
+console.log(`Ratified legacy root identities: ${LEGACY_ROOT_IDENTITIES.length}`)
+for (const root of roots) {
+  const edgeCount = legacyEdgesTouchingRoot(edges, root.root).length
+  const absent = root.present ? "" : ", directory absent"
+  console.log(`- ${root.root}: status=${root.status}, edges=${edgeCount}, files=${root.files.length}${absent}`)
+}
+console.log(`Open roots: ${roots.filter((root) => root.status === "OPEN").length}`)
+console.log(`Closed roots: ${roots.filter((root) => root.status === "CLOSED").length}`)
+// Per-root edge counts overlap where one edge leaves one root and enters another, so they are a
+// per-root view rather than a partition; the global total above stays the single baseline number.
 
 const additions = multisetDifference(actualEdges, expectedEdges)
 const removals = multisetDifference(expectedEdges, actualEdges)
