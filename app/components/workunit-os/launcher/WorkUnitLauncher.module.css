@@ -1209,3 +1209,37 @@
   outline: 2px solid #59d778;
   outline-offset: 1px;
 }
+
+/* Launcher async read status.
+   A single non-interactive strip. It never carries an action control, so no
+   preview / approval / execution affordance can appear on this surface. */
+.readStatus {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  z-index: 1;
+  transform: translateX(-50%);
+  margin: 0;
+  max-width: min(560px, calc(100vw - 48px));
+  padding: 8px 16px;
+  border: 1px solid rgba(139, 154, 150, 0.25);
+  border-radius: 999px;
+  background: rgba(20, 24, 23, 0.92);
+  color: #d6dedb;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.readStatus--loading {
+  color: #a8b4b0;
+}
+
+.readStatus--empty {
+  color: #d6dedb;
+}
+
+.readStatus--error {
+  border-color: rgba(214, 118, 108, 0.5);
+  color: #e3a49c;
+}

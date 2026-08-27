@@ -3,13 +3,15 @@
 import { useEffect, useMemo, useState } from "react"
 import { AtraWorkspace } from "@/components/atra/AtraWorkspace"
 import { deriveAtraWorkspaceViewModel } from "@/lib/application/atra/deriveAtraWorkspaceViewModel"
-import { candidateWorkUnitBridge } from "@/lib/application/candidate/candidateWorkUnitBridge"
-import { candidatesToLauncherWorkUnits } from "@/lib/application/launcher/candidateToLauncherWorkUnit"
+import {
+  LAUNCHER_LOADING_STATE,
+  loadLauncherWorkUnits,
+  type LauncherReadState,
+} from "@/lib/application/launcher/launcherWorkUnitReadModel"
 import {
   clampLauncherActiveIndex,
   filterLauncherWorkUnits,
   getActiveLauncherWorkUnit,
-  type LauncherWorkUnit,
 } from "@/lib/application/launcher/workUnitSelectionModel"
 import {
   getLauncherKeyIntent,
@@ -24,25 +26,31 @@ import launcherStyles from "./WorkUnitLauncher.module.css"
 export type WorkUnitLauncherMode = "palette" | "action-field"
 
 export function WorkUnitLauncher() {
-  // Candidate-only data source: SafeWorkUnitCandidate (mock_candidate_pipeline)
-  // adapted into LauncherWorkUnit. Swapping to the live candidate bridge later
-  // requires no UI change.
-  const workUnits = useMemo<LauncherWorkUnit[]>(
-    () => candidatesToLauncherWorkUnits(candidateWorkUnitBridge().workUnits),
-    [],
-  )
-  const defaultWorkUnitId = useMemo(
-    () => workUnits.find((unit) => /quarterly/i.test(unit.title))?.id ?? workUnits[0]?.id ?? "",
-    [workUnits],
-  )
+  // Real data source: GET /api/workunit/inbox through the canonical read model.
+  // Every row passes the safe candidate projection before it reaches this state,
+  // and a failed read resolves to `error` — never to mock WorkUnits.
+  const [readState, setReadState] = useState<LauncherReadState>(LAUNCHER_LOADING_STATE)
+  const workUnits = readState.workUnits
 
-  const [selectedWorkUnitId, setSelectedWorkUnitId] = useState(defaultWorkUnitId)
+  const [selectedWorkUnitId, setSelectedWorkUnitId] = useState("")
   // Node selection is scoped to its WorkUnit; switching WorkUnit falls back to the
   // default focus stage without a reset effect.
   const [nodeSelection, setNodeSelection] = useState<{ readonly workUnitId: string; readonly nodeId: string } | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [query, setQuery] = useState("")
   const [activeIndex, setActiveIndex] = useState(0)
+
+  useEffect(() => {
+    let active = true
+    loadLauncherWorkUnits().then((next) => {
+      if (!active) return
+      setReadState(next)
+      setSelectedWorkUnitId((current) => (current === "" ? next.workUnits[0]?.id ?? "" : current))
+    })
+    return () => {
+      active = false
+    }
+  }, [])
 
   const selectedWorkUnit = workUnits.find((unit) => unit.id === selectedWorkUnitId) ?? workUnits[0] ?? null
   const effectiveNodeId =
@@ -107,6 +115,7 @@ export function WorkUnitLauncher() {
         onSelectNode={handleSelectNode}
         onOpenPalette={() => setPaletteOpen(true)}
       />
+      <LauncherReadStatus state={readState} />
       {paletteOpen ? (
         <div className={launcherStyles.overlay}>
           <CommandPaletteView
@@ -126,5 +135,27 @@ export function WorkUnitLauncher() {
         </div>
       ) : null}
     </>
+  )
+}
+
+/**
+ * Async read status for the canonical Launcher.
+ *
+ * `loaded` renders nothing: the WorkUnit Graph and Action Field are the surface.
+ * The other states are announced in a single safe, non-interactive strip — no
+ * dashboard pane, no retry mutation, no fixture data.
+ */
+function LauncherReadStatus({ state }: { state: LauncherReadState }) {
+  if (state.status === "loaded") return null
+  const label = state.status === "loading" ? "Loading WorkUnits…" : state.message ?? ""
+  return (
+    <p
+      className={`${launcherStyles.readStatus} ${launcherStyles[`readStatus--${state.status}`]}`}
+      role="status"
+      aria-live="polite"
+      data-read-status={state.status}
+    >
+      {label}
+    </p>
   )
 }

@@ -29,9 +29,10 @@ UI
 |------|------|
 | `docs/CANONICAL_DECISION_INDEX.md` | Product UI source of truth: WorkUnit Launcher + WorkUnit Graph + Action Field |
 | `app/page.tsx` | Root page: renders `WorkUnitOSDashboard` only |
-| `app/components/workunit-os/WorkUnitOSDashboard.tsx` | Current UI entry; implementation name may lag canonical UI terms |
-| `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.tsx` | Current legacy/dashboard-named implementation shell; not product terminology source of truth |
-| `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.module.css` | Current implementation CSS Module |
+| `app/components/workunit-os/WorkUnitOSDashboard.tsx` | UI entry; implementation name may lag canonical UI terms. Renders `WorkUnitLauncher` by DEFAULT; `AdoptedWorkUnitDashboard` only when `NEXT_PUBLIC_WORKUNIT_LEGACY_DASHBOARD === "true"` |
+| `app/components/workunit-os/launcher/WorkUnitLauncher.tsx` | Canonical UX and the default rendered surface: WorkUnit Launcher → WorkUnit Graph → Action Field. Reads real WorkUnits via `launcherWorkUnitReadModel` |
+| `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.tsx` | Legacy/reference surface behind the legacy flag; carries the remaining real mutation wiring (preview / approval / dry-run). Not the canonical UX and not the product terminology source of truth |
+| `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.module.css` | Legacy/reference surface CSS Module |
 
 ### Deprecated / reference only
 | Path | Status |
@@ -46,7 +47,9 @@ UI
 |------|------|
 | `app/lib/application/actionField/dashboardPreviewClient.ts` | Canonical client-safe Preview / Approval UI client |
 | `app/lib/application/actionField/errorState.ts` | Canonical Action Field error-state mapper |
-| `app/lib/application/dashboard/dashboardDataClient.ts` | Legacy-named client-safe UI fetch helper for WorkUnits, integration status, and recent audit logs |
+| `app/lib/application/dashboard/dashboardDataClient.ts` | Legacy-named client-safe UI fetch helper for WorkUnits, integration status, and recent audit logs. `fetchDashboardWorkUnits` is SHARED: both the canonical Launcher read path and the adopted surface read `/api/workunit/inbox` through it |
+| `app/lib/application/launcher/launcherWorkUnitReadModel.ts` | Canonical Launcher read state machine (loading / loaded / empty / error). Reuses `fetchDashboardWorkUnits`; never falls back to mock data on failure |
+| `app/lib/application/launcher/inboxWorkUnitToCandidate.ts` | Server `InboxWorkUnit` → `SafeWorkUnitCandidate` via `projectSafeWorkUnitCandidate`; the Launcher's safe-projection chokepoint for real data (`sourceUrl` stays dropped) |
 | `app/lib/application/dashboard/dashboardStatusClient.ts` | Compatibility re-export for older dashboard status/audit imports |
 | `app/lib/application/dashboard/adoptedDashboardViewModel.ts` | Current UI mapping from inbox/status/audit API data; empty states do not fabricate sample WorkUnits |
 | `app/lib/application/dashboard/selectedWorkUnitPreviewModel.ts` | Canonical selected-WorkUnit-to-preview-group mapper; extracts safe fields only (no hashes, tokens, secrets); gates on decision selection |
@@ -61,7 +64,17 @@ UI
 ```
 page.tsx
   └── WorkUnitOSDashboard
-        └── AdoptedWorkUnitDashboard
+        ├── WorkUnitLauncher                       (DEFAULT — canonical UX)
+        │     ├── launcherWorkUnitReadModel.ts
+        │     │    └── dashboardDataClient.ts  (shared)
+        │     │         → GET /api/workunit/inbox
+        │     ├── inboxWorkUnitToCandidate.ts
+        │     │    └── projectSafeWorkUnitCandidate  (safe projection chokepoint)
+        │     ├── candidateToLauncherWorkUnit.ts
+        │     └── AtraWorkspace + CommandPaletteView
+        │          (READ ONLY — no preview / approval / dry-run / tools route)
+        │
+        └── AdoptedWorkUnitDashboard               (legacy flag only — reference/rollback)
               ├── dashboardDataClient.ts
               │    → GET /api/workunit/inbox, /api/integrations/status, /api/audit/recent
               ├── adoptedDashboardViewModel.ts
