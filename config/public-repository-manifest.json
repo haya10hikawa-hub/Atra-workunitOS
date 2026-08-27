@@ -1,0 +1,875 @@
+{
+  "schemaVersion": "atra-public-repository-manifest-v1",
+  "architecture": "private-canonical-plus-public-mirror",
+  "architectureReason": "main's history permanently contains 2052 generated .open-next/ blobs, ~25 of which carry developer machine paths, plus internal process, red-team, and agent-automation documents. A deterministic allowlist export is safer than repeated manual cleanup, and no history rewrite is authorized.",
+  "publicHistoryClassification": "PUBLIC_HISTORY_UNSAFE",
+  "repositoryVisibility": "private",
+  "notes": [
+    "This manifest is authoritative. docs/release/PUBLIC_REPOSITORY_INVENTORY.md is a generated human-readable projection of it.",
+    "Inclusion is allowlist-based: a tracked path is public only if it matches an `include` rule. Everything else is private by default.",
+    "Rules are evaluated in order; the FIRST matching rule wins. Every tracked path must match exactly one rule or verification fails as UNCLASSIFIED.",
+    "`trackedPathsDigest` pins the exact set of tracked paths. Adding or removing any tracked file changes it and fails verification until a human records a classification decision here."
+  ],
+  "forbidden": [
+    "**/*.pem",
+    "**/*.key",
+    "**/*.p12",
+    "**/*.pfx",
+    "**/*.crt",
+    "**/*.cer",
+    "**/*.jks",
+    "**/*.keystore",
+    "**/.env",
+    "**/.env.*",
+    "**/.dev.vars",
+    "**/*.sqlite",
+    "**/*.sqlite3",
+    "**/*.db",
+    "**/*.db-wal",
+    "**/*.db-shm",
+    "**/wrangler.deploy*.json",
+    "**/bootstrap.control*.sql",
+    "**/.d1-evidence/**",
+    "**/evidence/**",
+    "**/.hermes/**",
+    "**/.claude/**",
+    "**/.codex/**",
+    "**/.atra/**",
+    "**/.git/**",
+    "**/node_modules/**",
+    "**/.open-next/**",
+    "**/.wrangler/**",
+    "**/.next/**"
+  ],
+  "forbiddenContent": [
+    {
+      "id": "personal_machine_path",
+      "pattern": "/(?:Users|home)/(?!runner/)[A-Za-z0-9._-]+/",
+      "reason": "Developer machine paths identify a person and leak local layout.",
+      "allowPaths": [
+        "tests/d1evidenceRecorder.test.mts",
+        "tests/d1migrationOperatorGates.test.mts"
+      ],
+      "allowReason": "These two tests assert that absolute filesystem paths are REJECTED by the evidence guards. The literal is the negative fixture that proves the protection works; removing it would delete the proof."
+    },
+    {
+      "id": "unresolved_placeholder",
+      "pattern": "REPLACE_WITH_[A-Z_]+",
+      "reason": "An unresolved placeholder must never reach a built artifact.",
+      "allowPaths": [
+        "wrangler.json",
+        "docs/operations/CLOUDFLARE_D1_SETUP.md",
+        "docs/operations/CLOUDFLARE_RUNTIME_DEPLOYMENT.md",
+        "docs/operations/ENVIRONMENT_CONFIG.md",
+        "config/public-repository-manifest.json",
+        "docs/release/PUBLIC_REPOSITORY_POLICY.md",
+        "docs/release/PUBLIC_REPOSITORY_INVENTORY.md",
+        "tests/publicRepositoryBoundary.test.mts",
+        "tests/cloudflareDeployConfig.test.mts",
+        "tests/cloudflareRuntimeEnvValidation.test.mts",
+        "tests/d1bootstrapApplyGates.test.mts",
+        "tests/d1migrationOperatorGates.test.mts"
+      ],
+      "allowReason": "wrangler.json is the committed safe TEMPLATE: the placeholders are the mechanism that keeps real D1 database ids out of Git. The operations docs instruct operators to replace them. The boundary manifest, this policy, and the listed tests name the literal because they DESCRIBE or ASSERT ON that mechanism; none is a built or deployed artifact."
+    }
+  ],
+  "maxBinaryBytes": 1048576,
+  "rules": [
+    {
+      "pattern": ".hermes/**",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "REMOVE_FROM_TRACKING",
+      "reason": "Agent-local planning state. Proven to have zero runtime, build, test, CI, or documentation consumers (the only repository matches for 'hermes' are the unrelated `hermes-parser` npm package in package-lock.json). Removed from tracking and ignored."
+    },
+    {
+      "pattern": "app/**",
+      "disposition": "include",
+      "classification": "PUBLIC_REQUIRED",
+      "action": "KEEP",
+      "reason": "Application, domain, and UI source required to build Atra."
+    },
+    {
+      "pattern": "electron/**",
+      "disposition": "include",
+      "classification": "PUBLIC_REQUIRED",
+      "action": "KEEP",
+      "reason": "Electron desktop shell source; gated by `npm run electron:build:check` in CI."
+    },
+    {
+      "pattern": "migrations/**",
+      "disposition": "include",
+      "classification": "PUBLIC_REQUIRED",
+      "action": "KEEP",
+      "reason": "Canonical schema definitions, lane manifest, and schema contract. These are the only reproducible definition of the database schema and must never be deleted."
+    },
+    {
+      "pattern": "contracts/**",
+      "disposition": "include",
+      "classification": "PUBLIC_REQUIRED",
+      "action": "KEEP",
+      "reason": "Public operational evidence SCHEMA (not evidence instances)."
+    },
+    {
+      "pattern": "scripts/loop/**",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Self-described local developer tooling: collects phase/PR status for the internal engineering loop. Not product, not referenced by build or CI."
+    },
+    {
+      "pattern": "scripts/report-legacy-surface.mjs",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Internal refactor-programme reporting; referenced only by internal architecture documents."
+    },
+    {
+      "pattern": "scripts/**",
+      "disposition": "include",
+      "classification": "PUBLIC_REQUIRED",
+      "action": "KEEP",
+      "reason": "Build, migration, deployment, and safety-gate tooling invoked by package.json scripts and .github/workflows/ci.yml. Removing any of these breaks a declared npm script."
+    },
+    {
+      "pattern": "tests/alphaEvidenceLedger.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/alphaExitCriteriaGate.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/alphaOperatorRunbook.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/alphaReleaseCandidateDryRun.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/alphaReleaseReadinessConsolidation.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/alphaReleaseReadinessGate.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/alphaReleaseSafetyChecklist.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/alphaSafetyGateValidation.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/approvalStoreDualReadWiringPreSpec.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/architectureBoundaries.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/atraDoctrineIntakeRubric.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/canonicalApprovalPayloadGate.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/d1ReadOnlyExecutionGate.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/d1RepositoryInvariantEnforcement.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/d1SchemaIndexConstraintHardening.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/d1SchemaIntegrityInventory.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/d1SchemaReadOnlyQueryPlanningGate.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/decompositionEvaluationHarnessSpecGate.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/decompositionStandardGate.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/electronDependencyPolicy.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/evidenceProvenanceStandard.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/evidenceReviewGate.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/humanDecisionGate.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/llmJudgmentEvaluationGate.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/nl2sqlPlanningGate.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/phase6Fabel5CrossLaneAuditPlan.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/phase6ImplementationReadinessGate.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/phase6PersistenceAuditEvidenceSpec.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/phase6PersistenceImplementationGate.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/phase6PersistenceTargetDecisionSpec.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/phase6RecorderAuditSummaryEvidenceLedgerLinkageGateSpec.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/phase6RecorderAuditSummaryEvidenceLedgerStaticContractNoAppendValidatorSpec.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/phase6RecorderAuditSummaryLaneReadinessReview.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/phase6RecorderAuditSummarySpec.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/phase6RevisionReference.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/phase6StorageGateSpec.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/phase6TemporalAssociation.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/phase6TemporalContract.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/relationshipGraphModelGate.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/ruleReviewGate.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/safeQueryPlanGenerationGate.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/sqlCompilationGate.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/tenantSecretProviderDesignGate.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Documentation-contract test: it asserts on the CONTENT of internal governance documents that the boundary keeps private. It verifies process artifacts, not public product behaviour, so it moves with its subject."
+    },
+    {
+      "pattern": "tests/publicRepositoryBoundary.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "KEEP",
+      "reason": "Governs the PRIVATE canonical repository's boundary (tracked-path digest, ignore contract). The generated public mirror has a different tracked set, so this test belongs to the canonical repository only."
+    },
+    {
+      "pattern": "config/public-repository-manifest.json",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "KEEP",
+      "reason": "The boundary definition for the private canonical repository. The public mirror is a product repository and does not carry its own export machinery."
+    },
+    {
+      "pattern": "scripts/lib/publicRepositoryManifest.mjs",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "KEEP",
+      "reason": "Boundary tooling of the private canonical repository."
+    },
+    {
+      "pattern": "scripts/verify-public-repository.mjs",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "KEEP",
+      "reason": "Boundary tooling of the private canonical repository."
+    },
+    {
+      "pattern": "scripts/export-public-repository.mjs",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "KEEP",
+      "reason": "Boundary tooling of the private canonical repository."
+    },
+    {
+      "pattern": "docs/release/PUBLIC_REPOSITORY_POLICY.md",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "KEEP",
+      "reason": "Describes what the private canonical repository withholds; it is a maintainer document, not part of the public product contract."
+    },
+    {
+      "pattern": "tests/loopStatusCollector.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Covers scripts/loop/**. Must move with its subject: `npm test` globs tests/*.test.mts, so keeping the test without its subject would break the public test contract."
+    },
+    {
+      "pattern": "tests/proactiveVoiceSecretary.test.mts",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Covers prototypes/proactive-voice-secretary/**. Must move with its subject for the same reason."
+    },
+    {
+      "pattern": "tests/**",
+      "disposition": "include",
+      "classification": "PUBLIC_REQUIRED",
+      "action": "KEEP",
+      "reason": "Tests needed to verify public code, including the security fixtures that prove tenant isolation, approval binding, CSRF, and redaction behaviour. Deliberately public: they are the evidence the security claims are real."
+    },
+    {
+      "pattern": "prototypes/**",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Unreleased research prototype (proactive voice secretary). Not part of the public product contract."
+    },
+    {
+      "pattern": "public/Photos/**",
+      "disposition": "include",
+      "classification": "THIRD_PARTY_UNRESOLVED",
+      "action": "BLOCK_PUBLICATION",
+      "reason": "Raster third-party brand marks (Slack, Gmail, Google Calendar, Salesforce) rendered by the WorkUnit UI. No provenance or licence is recorded anywhere in the repository. Retained because removing them is a product-UI change outside this WorkUnit's scope; publication is blocked until the licensing WorkUnit resolves redistribution rights."
+    },
+    {
+      "pattern": "public/workunit-source-icons/**",
+      "disposition": "include",
+      "classification": "THIRD_PARTY_VERIFIED",
+      "action": "KEEP",
+      "reason": "Vendored Simple Icons SVGs; provenance recorded in public/workunit-source-icons/SOURCES.md. The icon files themselves are CC0, but the depicted marks remain third-party trademarks \u2014 trademark-use review belongs to the licensing WorkUnit."
+    },
+    {
+      "pattern": "public/**",
+      "disposition": "include",
+      "classification": "PUBLIC_REQUIRED",
+      "action": "KEEP",
+      "reason": "First-party Atra assets (workunit-logo.png) referenced by the launcher stylesheet."
+    },
+    {
+      "pattern": "docs/release/PUBLIC_REPOSITORY_INVENTORY.md",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "KEEP",
+      "reason": "Private review artifact: it enumerates what is deliberately withheld, which is internal information."
+    },
+    {
+      "pattern": "docs/release/PRIVATE_ASSET_MIGRATION_MANIFEST.md",
+      "disposition": "exclude",
+      "classification": "PRIVATE_OPERATIONS",
+      "action": "KEEP",
+      "reason": "Private migration ledger for assets leaving the repository."
+    },
+    {
+      "pattern": "docs/release/**",
+      "disposition": "exclude",
+      "classification": "PRIVATE_OPERATIONS",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Alpha release readiness matrices and summaries \u2014 internal release process state."
+    },
+    {
+      "pattern": "docs/security/REDTEAM_2026-06-29.md",
+      "disposition": "exclude",
+      "classification": "SENSITIVE",
+      "action": "BLOCK_PUBLICATION",
+      "reason": "Red-team assessment naming residual unfixed weaknesses, the private sandbox worktree, and the private hardening branch. Publishing an attack-surface map with open gaps is a direct security exposure."
+    },
+    {
+      "pattern": "docs/security/**",
+      "disposition": "include",
+      "classification": "PUBLIC_OPTIONAL",
+      "action": "KEEP",
+      "reason": "Security model, trust boundaries, and the contributor security checklist \u2014 the public security contract."
+    },
+    {
+      "pattern": "docs/specs/**",
+      "disposition": "include",
+      "classification": "PUBLIC_OPTIONAL",
+      "action": "KEEP",
+      "reason": "Public product/API contracts: API, data model, error model, domain model, action fields, LLM processing, MVP use cases."
+    },
+    {
+      "pattern": "docs/architecture/CANONICAL_WORKUNIT_PIPELINE_REFACTOR_PROGRAM.md",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Internal refactor programme plan with phase ratchets and workstream sequencing."
+    },
+    {
+      "pattern": "docs/architecture/**",
+      "disposition": "include",
+      "classification": "PUBLIC_OPTIONAL",
+      "action": "KEEP",
+      "reason": "Public architecture documentation: system overview, organisation, SaaS architecture, persistence contract."
+    },
+    {
+      "pattern": "docs/operations/CODEX_AUTOMATION_PROMPTS.md",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Internal agent automation prompt library and unreleased roadmap commentary."
+    },
+    {
+      "pattern": "docs/operations/**",
+      "disposition": "include",
+      "classification": "PUBLIC_OPTIONAL",
+      "action": "KEEP",
+      "reason": "Operator-facing setup and deployment contracts needed to actually run Atra. Contain placeholders only \u2014 no real account, database, or tenant identifiers."
+    },
+    {
+      "pattern": "docs/research/**",
+      "disposition": "include",
+      "classification": "PUBLIC_OPTIONAL",
+      "action": "KEEP",
+      "reason": "Hopper vector algorithm specification, referenced by the public architecture overview."
+    },
+    {
+      "pattern": "docs/README.md",
+      "disposition": "include",
+      "classification": "PUBLIC_OPTIONAL",
+      "action": "KEEP",
+      "reason": "Documentation index."
+    },
+    {
+      "pattern": "docs/DIRECTORY_STRUCTURE.md",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "REPLACE_WITH_PUBLIC_EQUIVALENT",
+      "reason": "Describes the full private repository layout, including directories that do not exist in the public mirror."
+    },
+    {
+      "pattern": "docs/**",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Default-private: internal engineering process records \u2014 phase gates (P6_*, P7_*, PHASE_*), EXPLICIT_HUMAN_GO approval records, alpha release process, decision/risk/evidence ledgers, branch protection policy, doctrine, and go-to-market models. None is part of the public product contract."
+    },
+    {
+      "pattern": "AGENTS.md",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Internal agent operating instructions and PM/assistant working contract."
+    },
+    {
+      "pattern": "AI_JUDGMENT_CRITERIA.md",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Internal judgment rubric used to steer the assistant engineering organisation."
+    },
+    {
+      "pattern": "NODE_DECOMPOSITION_POLICY.md",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Internal working policy, not a product contract."
+    },
+    {
+      "pattern": "NODE_DECOMPOSITION_WHITEBOARD.md",
+      "disposition": "exclude",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "action": "MOVE_TO_PRIVATE_REPOSITORY",
+      "reason": "Working whiteboard \u2014 explicitly in-progress internal thinking."
+    },
+    {
+      "pattern": "README.md",
+      "disposition": "include",
+      "classification": "PUBLIC_REQUIRED",
+      "action": "KEEP",
+      "reason": "Public entry point."
+    },
+    {
+      "pattern": ".github/workflows/**",
+      "disposition": "include",
+      "classification": "PUBLIC_REQUIRED",
+      "action": "KEEP",
+      "reason": "CI Safety Gate. Reviewed: `permissions: contents: read`, no secrets, no deployment, no external execution."
+    },
+    {
+      "pattern": ".gitignore",
+      "disposition": "include",
+      "classification": "PUBLIC_REQUIRED",
+      "action": "KEEP",
+      "reason": "Security contract. Must never be deleted; the public mirror needs the same protections."
+    },
+    {
+      "pattern": "wrangler.json",
+      "disposition": "include",
+      "classification": "PUBLIC_REQUIRED",
+      "action": "KEEP",
+      "reason": "Safe deployment template. Contains REPLACE_WITH_* placeholders only \u2014 verified across all history that no concrete D1 database id was ever committed."
+    },
+    {
+      "pattern": "package.json",
+      "disposition": "include",
+      "classification": "PUBLIC_REQUIRED",
+      "action": "KEEP",
+      "reason": "Package manifest. License metadata is owned by the parallel licensing WorkUnit and was not modified here."
+    },
+    {
+      "pattern": "package-lock.json",
+      "disposition": "include",
+      "classification": "PUBLIC_REQUIRED",
+      "action": "KEEP",
+      "reason": "Lockfile required for reproducible installs."
+    },
+    {
+      "pattern": "tsconfig.json",
+      "disposition": "include",
+      "classification": "PUBLIC_REQUIRED",
+      "action": "KEEP",
+      "reason": "TypeScript configuration."
+    },
+    {
+      "pattern": "next.config.ts",
+      "disposition": "include",
+      "classification": "PUBLIC_REQUIRED",
+      "action": "KEEP",
+      "reason": "Next.js build configuration."
+    },
+    {
+      "pattern": "open-next.config.ts",
+      "disposition": "include",
+      "classification": "PUBLIC_REQUIRED",
+      "action": "KEEP",
+      "reason": "OpenNext/Cloudflare build configuration."
+    },
+    {
+      "pattern": "postcss.config.mjs",
+      "disposition": "include",
+      "classification": "PUBLIC_REQUIRED",
+      "action": "KEEP",
+      "reason": "PostCSS/Tailwind configuration."
+    },
+    {
+      "pattern": "eslint.config.mjs",
+      "disposition": "include",
+      "classification": "PUBLIC_REQUIRED",
+      "action": "KEEP",
+      "reason": "Lint configuration used by `npm run lint`."
+    }
+  ],
+  "removedFromTracking": [
+    {
+      "path": ".hermes/plan.md",
+      "classification": "PRIVATE_DEVELOPMENT",
+      "reason": "Stale agent planning note for work completed long ago. Zero consumers.",
+      "historyStatus": "REMAINS_IN_HISTORY",
+      "rollback": "git show c3655f35:.hermes/plan.md"
+    },
+    {
+      "path": "public/file.svg",
+      "classification": "OBSOLETE",
+      "reason": "create-next-app scaffold asset; zero references.",
+      "historyStatus": "REMAINS_IN_HISTORY",
+      "rollback": "git checkout c3655f35 -- public/file.svg"
+    },
+    {
+      "path": "public/globe.svg",
+      "classification": "OBSOLETE",
+      "reason": "create-next-app scaffold asset; zero references.",
+      "historyStatus": "REMAINS_IN_HISTORY",
+      "rollback": "git checkout c3655f35 -- public/globe.svg"
+    },
+    {
+      "path": "public/next.svg",
+      "classification": "OBSOLETE",
+      "reason": "create-next-app scaffold asset carrying a third-party mark; zero references.",
+      "historyStatus": "REMAINS_IN_HISTORY",
+      "rollback": "git checkout c3655f35 -- public/next.svg"
+    },
+    {
+      "path": "public/vercel.svg",
+      "classification": "OBSOLETE",
+      "reason": "create-next-app scaffold asset carrying a third-party mark; zero references.",
+      "historyStatus": "REMAINS_IN_HISTORY",
+      "rollback": "git checkout c3655f35 -- public/vercel.svg"
+    },
+    {
+      "path": "public/window.svg",
+      "classification": "OBSOLETE",
+      "reason": "create-next-app scaffold asset; zero references.",
+      "historyStatus": "REMAINS_IN_HISTORY",
+      "rollback": "git checkout c3655f35 -- public/window.svg"
+    },
+    {
+      "path": "public/Photos/icon/database.png",
+      "classification": "THIRD_PARTY_UNRESOLVED",
+      "reason": "Unreferenced raster icon with no recorded provenance.",
+      "historyStatus": "REMAINS_IN_HISTORY",
+      "rollback": "git checkout c3655f35 -- public/Photos/icon/database.png"
+    },
+    {
+      "path": "public/Photos/icon/github.png",
+      "classification": "THIRD_PARTY_UNRESOLVED",
+      "reason": "Unreferenced third-party brand raster with no recorded provenance.",
+      "historyStatus": "REMAINS_IN_HISTORY",
+      "rollback": "git checkout c3655f35 -- public/Photos/icon/github.png"
+    },
+    {
+      "path": "public/workunit-ui-icons/docs.png",
+      "classification": "THIRD_PARTY_UNRESOLVED",
+      "reason": "Unreferenced third-party brand raster with no recorded provenance.",
+      "historyStatus": "REMAINS_IN_HISTORY",
+      "rollback": "git checkout c3655f35 -- public/workunit-ui-icons/docs.png"
+    },
+    {
+      "path": "public/workunit-ui-icons/github.png",
+      "classification": "THIRD_PARTY_UNRESOLVED",
+      "reason": "Unreferenced third-party brand raster with no recorded provenance.",
+      "historyStatus": "REMAINS_IN_HISTORY",
+      "rollback": "git checkout c3655f35 -- public/workunit-ui-icons/github.png"
+    },
+    {
+      "path": "public/workunit-ui-icons/jira.png",
+      "classification": "THIRD_PARTY_UNRESOLVED",
+      "reason": "Unreferenced third-party brand raster with no recorded provenance.",
+      "historyStatus": "REMAINS_IN_HISTORY",
+      "rollback": "git checkout c3655f35 -- public/workunit-ui-icons/jira.png"
+    },
+    {
+      "path": "public/workunit-ui-icons/notion.png",
+      "classification": "THIRD_PARTY_UNRESOLVED",
+      "reason": "Unreferenced third-party brand raster with no recorded provenance.",
+      "historyStatus": "REMAINS_IN_HISTORY",
+      "rollback": "git checkout c3655f35 -- public/workunit-ui-icons/notion.png"
+    },
+    {
+      "path": "public/workunit-ui-icons/slack.png",
+      "classification": "THIRD_PARTY_UNRESOLVED",
+      "reason": "Unreferenced third-party brand raster with no recorded provenance.",
+      "historyStatus": "REMAINS_IN_HISTORY",
+      "rollback": "git checkout c3655f35 -- public/workunit-ui-icons/slack.png"
+    },
+    {
+      "path": "public/workunit-ui-icons/slides.png",
+      "classification": "THIRD_PARTY_UNRESOLVED",
+      "reason": "Unreferenced third-party brand raster with no recorded provenance.",
+      "historyStatus": "REMAINS_IN_HISTORY",
+      "rollback": "git checkout c3655f35 -- public/workunit-ui-icons/slides.png"
+    }
+  ],
+  "trackedPathCount": 1008,
+  "trackedPathsDigest": "65a1d0a0a2eefb6bcd9cb319d346ee5617f159f72f32327b17dda21b5d3cd2ed",
+  "publicationBlockers": [
+    {
+      "id": "PUBLIC_CI_GATE_DEPENDS_ON_PRIVATE_GOVERNANCE_DOCS",
+      "severity": "blocking",
+      "detail": "scripts/alpha-safety-gate.mjs (npm run alpha:safety-gate, a required CI Safety Gate step) reads internal release-governance artifacts that the boundary keeps private, including docs/release/ALPHA_RELEASE_MATRIX.json and docs/PHASE_7A_ALPHA_RELEASE_SAFETY_CHECKLIST.md. The gate therefore cannot pass in the public export as currently wired.",
+      "remediationOptions": [
+        "Give the public mirror a reduced npm script set that omits alpha:safety-gate and the ratchet entries naming private tests.",
+        "Split the safety gate into a public product-invariant gate and a private release-governance gate.",
+        "Publish a redacted subset of the governance artifacts the gate reads."
+      ],
+      "requiredOwner": "Product/release owner \u2014 this is a product configuration decision, deliberately not made inside the repository-boundary WorkUnit."
+    },
+    {
+      "id": "PACKAGE_JSON_RATCHET_NAMES_PRIVATE_TESTS",
+      "severity": "blocking",
+      "detail": "package.json `test:canonical-pipeline-ratchets` explicitly names tests/architectureBoundaries.test.mts, which reads the SENSITIVE docs/architecture/CANONICAL_WORKUNIT_PIPELINE_REFACTOR_PROGRAM.md (a live list of open CSRF/auth/SSRF gaps). The named test is private, so the script entry dangles in the export.",
+      "remediationOptions": [
+        "Public-variant package.json scripts.",
+        "Split the ratchet into public-invariant and private-governance halves."
+      ],
+      "requiredOwner": "Product/release owner"
+    },
+    {
+      "id": "THIRD_PARTY_RASTER_BRAND_MARKS_UNRESOLVED",
+      "severity": "blocking",
+      "detail": "public/Photos/icon/{slack.png,gmail.png,google-calendar.png,salesforce.jpeg} are rendered by the UI with no recorded provenance or redistribution right.",
+      "remediationOptions": [
+        "Licensing WorkUnit resolves rights.",
+        "Replace with the CC0 Simple Icons SVGs already vendored.",
+        "Remove and adjust the UI (a product change)."
+      ],
+      "requiredOwner": "Licensing WorkUnit"
+    },
+    {
+      "id": "NO_DEDICATED_SECRET_SCANNER",
+      "severity": "blocking",
+      "detail": "gitleaks/trufflehog are not installed. Only a bounded pattern-based fallback scan was run over all 3913 reachable blobs; it found no credential requiring rotation, but it is not equivalent to a real scanner.",
+      "remediationOptions": [
+        "Run gitleaks over the full history before any publication."
+      ],
+      "requiredOwner": "Release owner"
+    }
+  ]
+}
