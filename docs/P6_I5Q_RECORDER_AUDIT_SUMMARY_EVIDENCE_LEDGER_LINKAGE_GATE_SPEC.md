@@ -31,7 +31,7 @@ summary emitter, audit runtime, audit event emitter, real persistence, durable s
 production storage adapter, database schema, D1 bindings/migrations/access, SQL execution/mutation,
 product runtime pipeline, ApprovalStore integration, P7.1 TSP wiring, external action execution, Formal
 WorkUnit promotion, and StartHub runtime. No `app/`, `tests/fixtures/`, `tests/harness/`,
-`docs/ALPHA_EVIDENCE_LEDGER.md`, or `docs/GRAPH_MODEL.md` change in this loop.
+`docs/ALPHA_EVIDENCE_LEDGER.md`, or `docs/archive/v0/GRAPH_MODEL.md` change in this loop.
 
 ## 3. Dependency Chain
 
@@ -207,7 +207,7 @@ production readiness. This loop performs no append and asserts these conditions 
 ## 21. Graph Model Write No-Go Conditions
 
 A Graph Model write is out of scope and No-Go for this lane. A Recorder Audit Summary record is not a
-Graph Model node and not a Graph Model edge. [`GRAPH_MODEL.md`](./GRAPH_MODEL.md) is referenced only as
+Graph Model node and not a Graph Model edge. [`GRAPH_MODEL.md`](./archive/v0/GRAPH_MODEL.md) is referenced only as
 existing, unchanged, out-of-scope doctrine; this loop does not modify it and writes no graph. Any
 future graph linkage requires its own separate gate.
 

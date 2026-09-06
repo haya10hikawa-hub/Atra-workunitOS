@@ -140,7 +140,7 @@ test("spec references Graph Model doc only as out-of-scope / No-Go", () => {
 test("referenced doctrine and lane docs exist on disk", () => {
   for (const rel of [
     "../docs/ALPHA_EVIDENCE_LEDGER.md",
-    "../docs/GRAPH_MODEL.md",
+    "../docs/archive/v0/GRAPH_MODEL.md",
     "../docs/P6_I5Q_RECORDER_AUDIT_SUMMARY_EVIDENCE_LEDGER_LINKAGE_GATE_SPEC.md",
     "../app/lib/phase6/recorderAuditSummary/validators.ts",
   ]) {
@@ -397,7 +397,7 @@ test("explicit human Go records the docs-only scope and non-authorization bounda
     "The task will create only the three allowed files.",
     "The task will not modify `app/`.",
     "The task will not modify `docs/ALPHA_EVIDENCE_LEDGER.md`.",
-    "The task will not modify `docs/GRAPH_MODEL.md`.",
+    "The task will not modify `docs/archive/v0/GRAPH_MODEL.md`.",
     "No validator implementation is allowed.",
     "No contract type implementation is allowed.",
     "No Evidence Ledger append is allowed.",

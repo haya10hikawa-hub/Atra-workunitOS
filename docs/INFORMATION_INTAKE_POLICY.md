@@ -4,8 +4,8 @@
 
 Defines what information Atra accepts, ignores, holds, or blocks — before any
 decomposition, ranking, or judgment happens. Child of
-[`ATRA_DOCTRINE.md`](./ATRA_DOCTRINE.md); judged by
-[`DECISION_RUBRIC.md`](./DECISION_RUBRIC.md). Documentation and a static test only — no
+[`ATRA_DOCTRINE.md`](./archive/v0/ATRA_DOCTRINE.md); judged by
+[`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md). Documentation and a static test only — no
 runtime behavior change.
 
 ---
@@ -118,7 +118,7 @@ never silently completed by a model guess.
 - Held input must not be promoted to a Formal WorkUnit until missing information is
   resolved (see §6).
 - Blocked input must never be promoted, decomposed, or used — promotion from blocked
-  input is a No-Go condition in [`DECISION_RUBRIC.md`](./DECISION_RUBRIC.md).
+  input is a No-Go condition in [`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md).
 - All promotion remains human-only (Candidate ≠ Formal WorkUnit).
 
 ## 13. Non-authorization Statement

@@ -160,7 +160,7 @@ readiness.
 ## 12. Relationship and Graph Checks
 
 Evaluation verifies that emitted relationships and graph nodes/edges conform to
-[`RELATIONSHIP_SCHEMA.md`](./RELATIONSHIP_SCHEMA.md) and [`GRAPH_MODEL.md`](./GRAPH_MODEL.md):
+[`RELATIONSHIP_SCHEMA.md`](./RELATIONSHIP_SCHEMA.md) and [`GRAPH_MODEL.md`](./archive/v0/GRAPH_MODEL.md):
 typed, tenant-scoped, no cross-tenant edges, contradiction/conflict/missing-information
 preserved as reviewable structures, and no relationship that promotes or executes.
 

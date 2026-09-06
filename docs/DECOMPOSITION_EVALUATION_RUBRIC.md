@@ -25,7 +25,7 @@ grounding, and reviewability — never as fluency or confidence.
 
 The rubric scores Typed Decomposition Objects and their relationships/graph projections
 (per [`TYPED_DECOMPOSITION_OBJECT.md`](./TYPED_DECOMPOSITION_OBJECT.md),
-[`RELATIONSHIP_SCHEMA.md`](./RELATIONSHIP_SCHEMA.md), [`GRAPH_MODEL.md`](./GRAPH_MODEL.md))
+[`RELATIONSHIP_SCHEMA.md`](./RELATIONSHIP_SCHEMA.md), [`GRAPH_MODEL.md`](./archive/v0/GRAPH_MODEL.md))
 produced from fixture Signals — candidate-only output, never live production data.
 
 ## 4. Evaluation Principle

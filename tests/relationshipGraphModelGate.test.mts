@@ -20,7 +20,7 @@ import path from "node:path"
 const root = process.cwd()
 
 const REL = path.join(root, "docs/RELATIONSHIP_SCHEMA.md")
-const GRAPH = path.join(root, "docs/GRAPH_MODEL.md")
+const GRAPH = path.join(root, "docs/archive/v0/GRAPH_MODEL.md")
 
 const read = (p: string): string => (existsSync(p) ? readFileSync(p, "utf8") : "")
 const rel = read(REL)
@@ -37,7 +37,7 @@ test("1. docs/RELATIONSHIP_SCHEMA.md exists", () => {
   assert.ok(rel.length > 0)
 })
 
-test("2. docs/GRAPH_MODEL.md exists", () => {
+test("2. docs/archive/v0/GRAPH_MODEL.md exists", () => {
   assert.equal(existsSync(GRAPH), true)
   assert.ok(graph.length > 0)
 })

@@ -149,7 +149,7 @@ Each `action_candidates` entry carries:
 `human_review_required` and `action_readiness` express readiness for human review, not
 permission to execute. When evidence is insufficient, contradictory, or third-party-only for
 a high-impact decision, `human_review_required` is true (per
-[`DECISION_RUBRIC.md`](./DECISION_RUBRIC.md)).
+[`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md)).
 
 ## 15. Promotion Blockers
 

@@ -10,7 +10,7 @@ Builds on the P6.1 constitution, the P6.2 evidence/provenance foundation
 [`PROVENANCE_MODEL.md`](./PROVENANCE_MODEL.md)), and the P6.3 decomposition standard
 ([`DECOMPOSITION_STANDARD.md`](./DECOMPOSITION_STANDARD.md),
 [`TYPED_DECOMPOSITION_OBJECT.md`](./TYPED_DECOMPOSITION_OBJECT.md)). Pairs with
-[`GRAPH_MODEL.md`](./GRAPH_MODEL.md). Documentation and a static test only.
+[`GRAPH_MODEL.md`](./archive/v0/GRAPH_MODEL.md). Documentation and a static test only.
 
 > This is a **product-level schema and contract**. It adds no runtime relationship storage,
 > no graph database, and changes no decomposition runtime behavior.

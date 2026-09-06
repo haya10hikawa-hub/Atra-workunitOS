@@ -8,7 +8,7 @@ Review Record ([`EVIDENCE_REVIEW_RECORD_CONTRACT.md`](./EVIDENCE_REVIEW_RECORD_C
 reviewed by a human before it may support any decision. Grounded in
 [`EVIDENCE_STANDARD.md`](./EVIDENCE_STANDARD.md),
 [`PROVENANCE_MODEL.md`](./PROVENANCE_MODEL.md), and
-[`DECISION_RUBRIC.md`](./DECISION_RUBRIC.md). Documentation and a static test only.
+[`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md). Documentation and a static test only.
 
 ---
 
@@ -102,7 +102,7 @@ validated it, and a human decides what it means.
 `decision_impact_scope` carries the same values as the Evidence Review Record's field
 ([`EVIDENCE_REVIEW_RECORD_CONTRACT.md`](./EVIDENCE_REVIEW_RECORD_CONTRACT.md) §14 —
 priority, risk, action readiness, or promotion readiness, per
-[`DECISION_RUBRIC.md`](./DECISION_RUBRIC.md)); the LLM Judgment Record preserves it
+[`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md)); the LLM Judgment Record preserves it
 unchanged and must not modify it. `redaction_state` is the stored redaction classification
 carried on the record; it is distinct from the gate's `redaction_check_result` input (the
 review outcome consumed from the Evidence Review Record) and a future implementation must

@@ -8,7 +8,7 @@ Defines the shape of an Evidence Review Record: the non-executing object produce
 the result may support human decision-making as evidence. Grounded in
 [`EVIDENCE_STANDARD.md`](./EVIDENCE_STANDARD.md),
 [`PROVENANCE_MODEL.md`](./PROVENANCE_MODEL.md), and
-[`DECISION_RUBRIC.md`](./DECISION_RUBRIC.md). Documentation and a static test only.
+[`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md). Documentation and a static test only.
 
 ---
 
@@ -98,7 +98,7 @@ the evidence role it is proposed to play (supports / weakens / contradicts / …
 [`EVIDENCE_STANDARD.md`](./EVIDENCE_STANDARD.md) evidence roles); `allowed_use` /
 `disallowed_use` scope where the evidence may and may not be cited;
 `decision_impact_scope` names which decision dimensions of
-[`DECISION_RUBRIC.md`](./DECISION_RUBRIC.md) the evidence may inform — priority, risk,
+[`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md) the evidence may inform — priority, risk,
 action readiness, or promotion readiness — and citing it outside that scope is a
 disallowed use; `reviewed_by_system` names the deterministic rule set (and version) that
 produced the record — never a model identity.
@@ -256,7 +256,7 @@ recording gate; this contract only carries the fields that decision would fill.
 
 Evidence ≠ Truth; Evidence ≠ Approval; Evidence ≠ Execution Authorization. Acceptance as
 evidence means only that a human may now weigh it under
-[`DECISION_RUBRIC.md`](./DECISION_RUBRIC.md) — every downstream action keeps its own
+[`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md) — every downstream action keeps its own
 preview, approval, and execution gates.
 
 ## 15. Validation Rules

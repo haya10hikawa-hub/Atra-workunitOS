@@ -3,7 +3,7 @@
 **Phase:** P6.4. **Baseline:** `main` @ `17df0e3`.
 
 Defines the product-level model of typed nodes and edges Atra uses to explain decisions.
-Pairs with [`RELATIONSHIP_SCHEMA.md`](./RELATIONSHIP_SCHEMA.md) and consumes the P6.2
+Pairs with [`RELATIONSHIP_SCHEMA.md`](../../RELATIONSHIP_SCHEMA.md) and consumes the P6.2
 evidence/provenance and P6.3 decomposition contracts. Documentation and a static test only —
 it is **not** a runtime graph database in this phase.
 
@@ -121,8 +121,8 @@ Every edge carries:
 ## 9. Evidence and Provenance in the Graph
 
 Evidence nodes and evidence edges reference provenance-bearing evidence per
-[`EVIDENCE_STANDARD.md`](./EVIDENCE_STANDARD.md); provenance nodes/refs follow
-[`PROVENANCE_MODEL.md`](./PROVENANCE_MODEL.md). Model confidence is not evidence and cannot
+[`EVIDENCE_STANDARD.md`](../../EVIDENCE_STANDARD.md); provenance nodes/refs follow
+[`PROVENANCE_MODEL.md`](../../PROVENANCE_MODEL.md). Model confidence is not evidence and cannot
 be a node's evidence. A graph element without restorable provenance cannot be treated as
 evidence.
 
@@ -159,7 +159,7 @@ GraphRAG may use the graph only after a separate GraphRAG gate.
 Vector retrieval may use graph-derived projections only after a separate vector/retrieval gate.
 
 A vector hit or graph-derived projection is not evidence until its provenance is restored
-(per [`PROVENANCE_MODEL.md`](./PROVENANCE_MODEL.md)).
+(per [`PROVENANCE_MODEL.md`](../../PROVENANCE_MODEL.md)).
 
 ## 14. Relationship to Future NL2SQL and D1 Queries
 

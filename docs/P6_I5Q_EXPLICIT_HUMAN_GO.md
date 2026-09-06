@@ -27,7 +27,7 @@ the loop is No-Go. This file must be created before the gate spec doc and the st
 - The task will not modify `app/lib/persistence/`.
 - The task will not modify `tests/fixtures/` or `tests/harness/`.
 - The task will not modify `docs/ALPHA_EVIDENCE_LEDGER.md`.
-- The task will not modify `docs/GRAPH_MODEL.md`.
+- The task will not modify `docs/archive/v0/GRAPH_MODEL.md`.
 - The task will not modify migrations, packages, or workflows.
 - No Evidence Ledger append is allowed.
 - No Evidence Ledger writer is allowed.

@@ -139,7 +139,7 @@ test("gate spec references Graph Model doc only as out-of-scope / No-Go", () => 
 test("referenced doctrine and lane docs exist on disk", () => {
   for (const rel of [
     "../docs/ALPHA_EVIDENCE_LEDGER.md",
-    "../docs/GRAPH_MODEL.md",
+    "../docs/archive/v0/GRAPH_MODEL.md",
     "../docs/P6_I5P_RECORDER_AUDIT_SUMMARY_LANE_READINESS_REVIEW.md",
     "../docs/P6_I5K_RECORDER_AUDIT_SUMMARY_SPEC.md",
     "../app/lib/phase6/recorderAuditSummary/validators.ts",
@@ -380,7 +380,7 @@ test("explicit human Go records the docs-only scope and non-authorization bounda
     "The task will create only the three allowed files.",
     "The task will not modify `app/`.",
     "The task will not modify `docs/ALPHA_EVIDENCE_LEDGER.md`.",
-    "The task will not modify `docs/GRAPH_MODEL.md`.",
+    "The task will not modify `docs/archive/v0/GRAPH_MODEL.md`.",
     "No Evidence Ledger append is allowed.",
     "No Graph Model write is allowed.",
     "Gate Spec PASS is not authorization to implement append.",

@@ -27,8 +27,8 @@ const rootDir = fileURLToPath(new URL("../", import.meta.url))
 
 const UNIVERSE_DOC = "docs/architecture/ATRA_SOURCE_UNIVERSE.md"
 const SEMANTICS_DOC = "docs/architecture/SOURCE_RECORD_V1_SEMANTICS.md"
-const PRODUCT_AUTHORITY_DOC = "docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md"
-const DOCTRINE_DOC = "docs/ATRA_DOCTRINE.md"
+const PRODUCT_AUTHORITY_DOC = "docs/archive/v0/PHASE1_VALUE_GATE_PROGRAM.md"
+const DOCTRINE_DOC = "docs/archive/v0/ATRA_DOCTRINE.md"
 
 // Two code authorities the matrix answers to. Neither is a gate: the first is the closed canonical
 // namespace vocabulary, the second is the set of namespaces a producer can actually emit. Both are

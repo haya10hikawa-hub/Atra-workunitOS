@@ -115,7 +115,7 @@ Forbidden:
 
 | Concern | Canonical module / area | Notes |
 |--------|--------------------------|-------|
-| Canonical UI direction | `docs/CANONICAL_DECISION_INDEX.md` | WorkUnit Launcher + WorkUnit Graph + Action Field |
+| Canonical UI direction | `docs/archive/v0/CANONICAL_DECISION_INDEX.md` | WorkUnit Launcher + WorkUnit Graph + Action Field |
 | Current UI shell | `app/components/workunit-os/WorkUnitOSDashboard.tsx` | Active page entry; implementation name may lag canonical UI terms |
 | Current visual implementation | `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.tsx` | Legacy/dashboard-named implementation path; not product terminology source of truth |
 | Current Action Field implementation | `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.tsx` | Right-side Action Field area in current implementation |
@@ -154,7 +154,7 @@ Transitional modules still in repository:
 - `app/components/workunit-os/{WorkUnitExplorerPane,DecompositionConsole,DecisionTracePanel,ActionFieldEntryPanel}.tsx`
   - retained old shell components; no longer rendered from the root page
 
-These remain to avoid breaking the current MVP while canonical ownership moves to `app/lib/application/actionField/`. Product UI direction is defined in `docs/CANONICAL_DECISION_INDEX.md`.
+These remain to avoid breaking the current MVP while canonical ownership moves to `app/lib/application/actionField/`. Product UI direction is defined in `docs/archive/v0/CANONICAL_DECISION_INDEX.md`.
 
 Phase 1 reduction adds `scripts/report-legacy-surface.mjs` and `tests/architectureLegacySurface.test.mts` to track this surface before deletion.
 

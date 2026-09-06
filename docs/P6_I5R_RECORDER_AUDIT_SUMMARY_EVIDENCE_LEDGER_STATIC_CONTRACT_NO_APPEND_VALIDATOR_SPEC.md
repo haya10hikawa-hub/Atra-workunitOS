@@ -35,7 +35,7 @@ audit event emitter, real persistence, durable storage, repository, production s
 database schema, D1 bindings/migrations/access, SQL execution/mutation, product runtime pipeline,
 ApprovalStore integration, P7.1 TSP wiring, external action execution, Formal WorkUnit promotion, and
 StartHub runtime. No `app/`, `tests/fixtures/`, `tests/harness/`, `docs/ALPHA_EVIDENCE_LEDGER.md`, or
-`docs/GRAPH_MODEL.md` change in this loop.
+`docs/archive/v0/GRAPH_MODEL.md` change in this loop.
 
 ## 3. Dependency Chain
 
@@ -219,7 +219,7 @@ candidate can authorize an append.
 
 A future validator would reject (fail closed) any candidate with `graph_write_allowed` not equal to
 `false`, any `graph_write_performed` field, or any content that would constitute a Graph Model node or
-edge write. [`GRAPH_MODEL.md`](./GRAPH_MODEL.md) is referenced only as existing, unchanged,
+edge write. [`GRAPH_MODEL.md`](./archive/v0/GRAPH_MODEL.md) is referenced only as existing, unchanged,
 out-of-scope doctrine; this loop does not modify it and writes no graph.
 
 ## 24. ApprovalStore / External Action Rejection Rules

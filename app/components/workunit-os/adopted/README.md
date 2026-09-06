@@ -3,7 +3,7 @@
 ## Ownership
 - Current implementation shell for WorkUnit OS.
 - `WorkUnitOSDashboard.tsx` renders this shell.
-- Product UI source of truth is `docs/CANONICAL_DECISION_INDEX.md`: WorkUnit Launcher + WorkUnit Graph + Action Field.
+- Product UI source of truth is `docs/archive/v0/CANONICAL_DECISION_INDEX.md`: WorkUnit Launcher + WorkUnit Graph + Action Field.
 - Do not treat dashboard naming in this folder as product terminology.
 
 ## Allowed imports

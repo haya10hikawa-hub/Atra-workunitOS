@@ -25,7 +25,7 @@ const rootDir = fileURLToPath(new URL("../", import.meta.url))
 
 const PROFILE_DOC = "docs/architecture/GMAIL_MESSAGE_ACQUISITION_PROFILE.md"
 const SEMANTICS_DOC = "docs/architecture/SOURCE_RECORD_V1_SEMANTICS.md"
-const PRODUCT_AUTHORITY_DOC = "docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md"
+const PRODUCT_AUTHORITY_DOC = "docs/archive/v0/PHASE1_VALUE_GATE_PROGRAM.md"
 const NAMESPACE_TYPES = "app/lib/domain/types.ts"
 const RECORD_VALIDATOR = "app/lib/domain/source/validateSourceRecord.ts"
 

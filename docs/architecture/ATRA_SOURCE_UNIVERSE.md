@@ -21,7 +21,7 @@ REASON                 = this record establishes vocabulary, not capability; eve
 ```text
 Human PM
   ↓
-docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md      product priority, phase order, Gates
+docs/archive/v0/PHASE1_VALUE_GATE_PROGRAM.md      product priority, phase order, Gates
   ├─ docs/architecture/CANONICAL_WORKUNIT_PIPELINE_REFACTOR_PROGRAM.md   domain architecture
   ├─ docs/architecture/SOURCE_RECORD_V1_SEMANTICS.md                     canonical record semantics
   └─ this document                                                       information-layer vocabulary
@@ -176,7 +176,7 @@ Contributes: proposed action; human approval; execution result; verification tha
 Cannot alone establish: work truth. An action result is evidence that Atra acted, not evidence that
 the underlying work is complete — the two are separate facts and are reconciled, never equated.
 
-Bounded by `docs/ATRA_DOCTRINE.md` §7 (what Atra must not do) and §11 (the product invariant): Atra proposes, rules guard, humans decide. Phase-1 is
+Bounded by `docs/archive/v0/ATRA_DOCTRINE.md` §7 (what Atra must not do) and §11 (the product invariant): Atra proposes, rules guard, humans decide. Phase-1 is
 read-only; no provider write path exists or is authorized here.
 
 ## Multi-Role Evidence
