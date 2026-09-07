@@ -1,0 +1,103 @@
+{
+  "schema_version": "1.0.0",
+  "state_revision": 1,
+  "last_updated": "2026-09-07T20:06:04+09:00",
+  "project": {
+    "name": "Atra Work Reconstruction Classifier",
+    "repo": "haya10hikawa-hub/Atra-workunitOS",
+    "branch": "codex/whole-system-verification-repair",
+    "head_at_creation": "e6f27049b869dd7fbf895fe8203b257f9d015191",
+    "main_baseline": "eddbe55d4efa9cc71e4d1dc2dbd28fe00037b26c",
+    "scope": "SourceRecordV1 -> WorkUnitCandidateV1"
+  },
+  "hard_boundaries": [
+    "no merge",
+    "no deploy",
+    "no live provider write",
+    "no Issue close",
+    "no remote D1 mutation",
+    "no autonomous external execution"
+  ],
+  "invariants": [
+    "AI proposes candidates; deterministic rules/human review own final authority",
+    "embedding/reranker relevance is never SAME_WORK truth",
+    "A SAME B and B SAME C never automatically implies A SAME C",
+    "every grouping claim keeps sourceRef and evidenceSpan",
+    "UNCERTAIN is valid",
+    "model never infers tenant/identity/approval/execution truth",
+    "corrections are append-only"
+  ],
+  "model_baseline": {
+    "generation": "Qwen/Qwen3.5-27B",
+    "generation_shadow": "Qwen/Qwen3.5-35B-A3B",
+    "embedding": "Qwen/Qwen3-Embedding-8B",
+    "reranker": "Qwen/Qwen3-Reranker-8B",
+    "runtime": "AWS GPU + vLLM structured JSON"
+  },
+  "pipeline": [
+    {"id":"S0","name":"SourceRecordV1","status":"PROVEN_BOUNDED"},
+    {"id":"S1","name":"sanitize/trust gate","status":"PARTIAL"},
+    {"id":"S2","name":"SemanticAtomV1 extraction","status":"NOT_IMPLEMENTED"},
+    {"id":"S3","name":"hybrid retrieval","status":"NOT_IMPLEMENTED"},
+    {"id":"S4","name":"reranking","status":"NOT_IMPLEMENTED"},
+    {"id":"S5","name":"RelationV1 4-way judge","status":"NOT_IMPLEMENTED"},
+    {"id":"S6","name":"deterministic constraint gate","status":"NOT_IMPLEMENTED"},
+    {"id":"S7","name":"CorrelationGroupV1 guarded grouping","status":"NOT_IMPLEMENTED"},
+    {"id":"S8","name":"WorkUnitCandidateV1 formation","status":"NOT_IMPLEMENTED"},
+    {"id":"S9","name":"append-only correction lineage","status":"NOT_IMPLEMENTED"}
+  ],
+  "agents": {
+    "classifier-chief": {"role":"orchestrator","tasks":["state","sequencing","handoff"],"file":"00_CLASSIFIER_CHIEF.md"},
+    "ontology-schema": {"role":"ontology/contracts","tasks":["C001","C002","C003"],"file":"01_ONTOLOGY_SCHEMA_AGENT.md"},
+    "model-infra": {"role":"AWS/vLLM/model benchmark","tasks":["C004","C005"],"file":"02_MODEL_INFRA_AGENT.md"},
+    "retrieval-rerank": {"role":"hybrid retrieval/rerank","tasks":["C006","C007"],"file":"03_RETRIEVAL_RERANK_AGENT.md"},
+    "relation-grouping": {"role":"relation/constraints/grouping/formation","tasks":["C008","C009","C010","C011"],"file":"04_RELATION_GROUPING_AGENT.md"},
+    "golden-eval": {"role":"Golden Set/evaluation/tuning decision","tasks":["C003","C012","C014"],"file":"05_GOLDEN_EVAL_AGENT.md"},
+    "classifier-redteam": {"role":"independent adversarial reviewer","tasks":["review gates"],"file":"06_CLASSIFIER_REDTEAM.md"}
+  },
+  "tasks": {
+    "C001": {"title":"Freeze ontology + >=20 boundary examples","status":"READY","owner":null,"deps":[],"done_when":["semantic atom labels unambiguous","4 relation labels unambiguous",">=20 merge/split/uncertain examples"]},
+    "C002": {"title":"Canonical TS/JSON schemas","status":"BLOCKED","owner":null,"deps":["C001"],"done_when":["SemanticAtomV1","RelationV1","CorrelationGroupV1","WorkUnitCandidateV1","WorkUnitCorrectionV1","fail-closed validators"]},
+    "C003": {"title":"Golden Set format + annotation guide","status":"BLOCKED","owner":null,"deps":["C001","C002"],"done_when":["episode format","pair labels","must-not-merge","evidence spans","adjudication"]},
+    "C004": {"title":"AWS/vLLM benchmark harness","status":"READY","owner":null,"deps":[],"done_when":["replayable episode runs","model/config recorded","latency/tokens/GPU recorded","schema validation"]},
+    "C005": {"title":"Semantic Atom extractor baseline","status":"BLOCKED","owner":null,"deps":["C002","C004"],"done_when":["Qwen3.5-27B schema-valid output","evidence span grounding","unknown preserved","unsafe input fails safely"]},
+    "C006": {"title":"Hybrid retrieval baseline","status":"BLOCKED","owner":null,"deps":["C002","C004"],"done_when":["explicit refs","BM25/lexical","Qwen3-Embedding-8B","Recall@10/30"]},
+    "C007": {"title":"Reranker baseline","status":"BLOCKED","owner":null,"deps":["C006"],"done_when":["Qwen3-Reranker-8B","relevance-only score","delta vs no-rerank"]},
+    "C008": {"title":"4-way Relation Judge","status":"BLOCKED","owner":null,"deps":["C002","C003","C004","C007"],"done_when":["SAME/RELATED/UNRELATED/UNCERTAIN","evidence","contradictions","abstention","27B vs shadow comparison"]},
+    "C009": {"title":"Deterministic constraint gate","status":"BLOCKED","owner":null,"deps":["C008"],"done_when":["cannot-link","tenant/security block","completion-boundary conflict","model cannot override"]},
+    "C010": {"title":"CorrelationGroupV1 builder","status":"BLOCKED","owner":null,"deps":["C009"],"done_when":["guarded agglomeration","no transitive-only merge","group revision/lineage"]},
+    "C011": {"title":"WorkUnitCandidateV1 formation","status":"BLOCKED","owner":null,"deps":["C010"],"done_when":["independent outcomes split","grounded done condition","evidence retained","no self-promotion"]},
+    "C012": {"title":"False merge/split evaluator","status":"BLOCKED","owner":null,"deps":["C003","C010"],"done_when":["false merge","false split","ja/en/mixed slices","abstention burden"]},
+    "C013": {"title":"Append-only correction lineage","status":"BLOCKED","owner":null,"deps":["C002","C011"],"done_when":["merge/split replayable","source evidence never erased","eval eligibility stored"]},
+    "C014": {"title":"Fine-tuning go/no-go","status":"BLOCKED","owner":null,"deps":["C012","C013"],"done_when":["failure stage localized","baseline vs tuned cost/quality","decision recorded"]}
+  },
+  "quality_targets_initial_not_proof": {
+    "retrieval_recall_at_30_normal": ">=0.97",
+    "retrieval_recall_at_30_hard": ">=0.93",
+    "same_work_precision": ">=0.97",
+    "relation_macro_f1": ">=0.90",
+    "false_merge_episode_rate": "<=0.02",
+    "false_split_workunit_rate": "<=0.05",
+    "safety_gate_violations": 0,
+    "ja_en_macro_f1_gap": "<=0.05"
+  },
+  "agent_protocol": {
+    "state_lock": {"holder":null,"acquired_at":null,"purpose":null},
+    "statuses": ["READY","IN_PROGRESS","BLOCKED","REVIEW","DONE"],
+    "rules": [
+      "read AGENTS.md + this file + verification report + AI_JUDGMENT_CRITERIA.md + NODE_DECOMPOSITION_POLICY.md",
+      "claim only READY tasks with DONE deps",
+      "serialize state JSON writes",
+      "implementation moves IN_PROGRESS -> REVIEW; independent review moves REVIEW -> DONE",
+      "record factual evidence/tests/metrics",
+      "increment state_revision for each authoritative state update",
+      "never silently change accepted architecture"
+    ]
+  },
+  "current_handoff": {
+    "start_parallel": ["ontology-schema:C001","model-infra:C004"],
+    "next_after_C001": "C002",
+    "review_rule": "ontology/grouping/model-selection milestones require classifier-redteam or differently biased review",
+    "do_not_repeat": "do not rerun whole-system audit; use existing report and focused gates"
+  }
+}
