@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0.0",
-  "state_revision": 2,
-  "last_updated": "2026-09-07T20:19:04+09:00",
+  "state_revision": 3,
+  "last_updated": "2026-09-07T20:41:00+09:00",
   "project": {
     "name": "Atra Work Reconstruction Classifier",
     "repo": "haya10hikawa-hub/Atra-workunitOS",
@@ -9,6 +9,21 @@
     "branch_origin_commit": "e288499f2f1f44fa0941b64cf7363b5988845408",
     "main_baseline": "eddbe55d4efa9cc71e4d1dc2dbd28fe00037b26c",
     "scope": "SourceRecordV1 -> WorkUnitCandidateV1"
+  },
+  "canonical_docs": {
+    "overview_and_purpose": "docs/classifier/PROJECT_OVERVIEW_AND_PURPOSE.md",
+    "final_target_and_product_shape": "docs/classifier/FINAL_TARGET_AND_PRODUCT_SHAPE.md",
+    "development_architecture_and_plan": "docs/classifier/DEVELOPMENT_ARCHITECTURE_AND_PLAN.md",
+    "team_roles_and_operating_model": "docs/classifier/TEAM_ROLES_AND_OPERATING_MODEL.md",
+    "repository_agent_rules": "AGENTS.md",
+    "ai_judgment_criteria": "AI_JUDGMENT_CRITERIA.md",
+    "node_decomposition_policy": "NODE_DECOMPOSITION_POLICY.md",
+    "verification_handoff": "docs/release/WHOLE_SYSTEM_VERIFICATION_2026-09-07.md"
+  },
+  "coordination_files": {
+    "team_agent_registry": "docs/agents/classifier/TEAM_AGENT_REGISTRY.json",
+    "agent_handoff_protocol": "docs/agents/classifier/AGENT_HANDOFF_PROTOCOL.json",
+    "agent_bootstrap": "docs/agents/classifier/AGENT_BOOTSTRAP.md"
   },
   "hard_boundaries": [
     "no merge",
@@ -90,7 +105,9 @@
     "state_lock": {"holder":null,"acquired_at":null,"purpose":null},
     "statuses": ["READY","IN_PROGRESS","BLOCKED","REVIEW","DONE"],
     "rules": [
-      "read AGENTS.md + this file + verification report + AI_JUDGMENT_CRITERIA.md + NODE_DECOMPOSITION_POLICY.md",
+      "read AGENTS.md + this file + canonical classifier docs + verification report + AI_JUDGMENT_CRITERIA.md + NODE_DECOMPOSITION_POLICY.md",
+      "read TEAM_AGENT_REGISTRY.json for team ownership",
+      "use AGENT_HANDOFF_PROTOCOL.json for cross-team handoffs",
       "claim only READY tasks with DONE deps",
       "serialize state JSON writes",
       "implementation moves IN_PROGRESS -> REVIEW; independent review moves REVIEW -> DONE",
