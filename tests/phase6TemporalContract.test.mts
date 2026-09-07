@@ -22,7 +22,7 @@ import type {
 } from "../app/lib/phase6/temporalContract/types.ts"
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url))
-const H0_DOC_SHA256 = "f2ac89f35735756358105d0c6cba2055face10397e5c71b8c9b15220147ef00f"
+const H0_DOC_SHA256 = "bdc005357bb5a23f0de8dad1db3e407d3e54ce84f986ead847b250ea6bf32aa5"
 
 const [T0, T1, T2, T3, T4, T5, T6, T7] = [1, 2, 3, 4, 5, 6, 7, 8].map((day) => `2026-01-0${day}T00:00:00.000Z`)
 const obs = (validFrom: string | null, validTo: string | null, observedAt: string, recordedAt: string): TemporalObservationInput =>

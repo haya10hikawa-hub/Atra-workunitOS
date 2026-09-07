@@ -39,9 +39,9 @@ function pinProse(doc: string, label: string, needles: readonly string[]): void 
   }
 }
 
-const GO = "../docs/P6_A0_EXPLICIT_HUMAN_GO.md"
-const AUDIT = "../docs/P6_A0_FABEL5_PHASE6_CROSS_LANE_AUDIT.md"
-const PLAN = "../docs/P6_A0_FABEL5_PATCH_SEQUENCE_PLAN.md"
+const GO = "../docs/legacy/P6_A0_EXPLICIT_HUMAN_GO.md"
+const AUDIT = "../docs/legacy/P6_A0_FABEL5_PHASE6_CROSS_LANE_AUDIT.md"
+const PLAN = "../docs/legacy/P6_A0_FABEL5_PATCH_SEQUENCE_PLAN.md"
 
 const AUDIT_SHA = "d37ff15eab635ca711b8e4310a25a4a1a734f314"
 const REPO = "haya10hikawa-hub/Atra-workunitOS"
@@ -304,9 +304,9 @@ test("no document claims the audit grants runtime/approval/execution/append/pers
 // 17
 test("changed-paths limitation to the four allowed files is recorded", () => {
   pinProse(read(GO), "GO allowed files", [
-    "docs/P6_A0_EXPLICIT_HUMAN_GO.md",
-    "docs/P6_A0_FABEL5_PHASE6_CROSS_LANE_AUDIT.md",
-    "docs/P6_A0_FABEL5_PATCH_SEQUENCE_PLAN.md",
+    "docs/legacy/P6_A0_EXPLICIT_HUMAN_GO.md",
+    "docs/legacy/P6_A0_FABEL5_PHASE6_CROSS_LANE_AUDIT.md",
+    "docs/legacy/P6_A0_FABEL5_PATCH_SEQUENCE_PLAN.md",
     "tests/phase6Fabel5CrossLaneAuditPlan.test.mts",
     "既存ファイルは一切変更しない。",
   ])

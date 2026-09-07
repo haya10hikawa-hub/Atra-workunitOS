@@ -1,5 +1,7 @@
 # REAL_LLM_READINESS_GATE.md
 
+**Status: PLAN — FUTURE / NOT IMPLEMENTED.** Product authority: NONE.
+
 ## Purpose
 
 Phase 1E defines the readiness gate required before any future real LLM provider integration.

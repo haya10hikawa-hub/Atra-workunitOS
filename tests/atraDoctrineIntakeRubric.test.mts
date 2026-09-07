@@ -19,7 +19,7 @@ import path from "node:path"
 const root = process.cwd()
 
 const DOCTRINE = path.join(root, "docs/archive/v0/ATRA_DOCTRINE.md")
-const INTAKE = path.join(root, "docs/INFORMATION_INTAKE_POLICY.md")
+const INTAKE = path.join(root, "docs/archive/v0/INFORMATION_INTAKE_POLICY.md")
 const RUBRIC = path.join(root, "docs/archive/v0/DECISION_RUBRIC.md")
 
 const read = (p: string): string => (existsSync(p) ? readFileSync(p, "utf8") : "")
@@ -38,7 +38,7 @@ test("1. docs/archive/v0/ATRA_DOCTRINE.md exists", () => {
   assert.ok(doctrine.length > 0)
 })
 
-test("2. docs/INFORMATION_INTAKE_POLICY.md exists", () => {
+test("2. docs/archive/v0/INFORMATION_INTAKE_POLICY.md exists", () => {
   assert.equal(existsSync(INTAKE), true)
   assert.ok(intake.length > 0)
 })

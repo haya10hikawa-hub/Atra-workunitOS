@@ -39,9 +39,9 @@ function section(doc: string, heading: string): string {
   return doc.slice(after, nextIdx < 0 ? doc.length : nextIdx)
 }
 
-const GO = "../docs/P6_I5A_EXPLICIT_HUMAN_GO.md"
-const DECISION = "../docs/P6_I5A_PERSISTENCE_TARGET_DECISION.md"
-const RECORD = "../docs/P6_I5A_TARGET_DECISION_RECORD_CONTRACT.md"
+const GO = "../docs/legacy/P6_I5A_EXPLICIT_HUMAN_GO.md"
+const DECISION = "../docs/legacy/P6_I5A_PERSISTENCE_TARGET_DECISION.md"
+const RECORD = "../docs/legacy/P6_I5A_TARGET_DECISION_RECORD_CONTRACT.md"
 
 const SELECTED = "in_memory_test_only_store"
 const DEFERRED = [

@@ -19,8 +19,8 @@ import path from "node:path"
 
 const root = process.cwd()
 
-const EVIDENCE = path.join(root, "docs/EVIDENCE_STANDARD.md")
-const PROVENANCE = path.join(root, "docs/PROVENANCE_MODEL.md")
+const EVIDENCE = path.join(root, "docs/archive/v0/EVIDENCE_STANDARD.md")
+const PROVENANCE = path.join(root, "docs/archive/v0/PROVENANCE_MODEL.md")
 
 const read = (p: string): string => (existsSync(p) ? readFileSync(p, "utf8") : "")
 const evidence = read(EVIDENCE)
@@ -32,12 +32,12 @@ const requireAll = (haystack: string, needles: string[], label: string): void =>
 
 // ── Files exist ──────────────────────────────────────────────
 
-test("1. docs/EVIDENCE_STANDARD.md exists", () => {
+test("1. docs/archive/v0/EVIDENCE_STANDARD.md exists", () => {
   assert.equal(existsSync(EVIDENCE), true)
   assert.ok(evidence.length > 0)
 })
 
-test("2. docs/PROVENANCE_MODEL.md exists", () => {
+test("2. docs/archive/v0/PROVENANCE_MODEL.md exists", () => {
   assert.equal(existsSync(PROVENANCE), true)
   assert.ok(provenance.length > 0)
 })

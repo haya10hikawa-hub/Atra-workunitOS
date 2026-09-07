@@ -19,8 +19,8 @@ import path from "node:path"
 
 const root = process.cwd()
 
-const SPEC = path.join(root, "docs/DECOMPOSITION_EVALUATION_HARNESS_SPEC.md")
-const RUBRIC = path.join(root, "docs/DECOMPOSITION_EVALUATION_RUBRIC.md")
+const SPEC = path.join(root, "docs/archive/v0/DECOMPOSITION_EVALUATION_HARNESS_SPEC.md")
+const RUBRIC = path.join(root, "docs/archive/v0/DECOMPOSITION_EVALUATION_RUBRIC.md")
 
 const read = (p: string): string => (existsSync(p) ? readFileSync(p, "utf8") : "")
 const spec = read(SPEC)
@@ -32,12 +32,12 @@ const requireAll = (haystack: string, needles: string[], label: string): void =>
 
 // ── Files exist ──────────────────────────────────────────────
 
-test("1. docs/DECOMPOSITION_EVALUATION_HARNESS_SPEC.md exists", () => {
+test("1. docs/archive/v0/DECOMPOSITION_EVALUATION_HARNESS_SPEC.md exists", () => {
   assert.equal(existsSync(SPEC), true)
   assert.ok(spec.length > 0)
 })
 
-test("2. docs/DECOMPOSITION_EVALUATION_RUBRIC.md exists", () => {
+test("2. docs/archive/v0/DECOMPOSITION_EVALUATION_RUBRIC.md exists", () => {
   assert.equal(existsSync(RUBRIC), true)
   assert.ok(rubric.length > 0)
 })

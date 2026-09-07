@@ -1,13 +1,15 @@
 # LLM Judgment Record Contract
 
+**Classification: REFERENCE — CURRENT TECHNICAL ARTIFACT; NO PRODUCT AUTHORITY.** Frozen V0 links are historical provenance only.
+
 **Phase:** P6.13. **Baseline:** `main` @ `dcf6007`.
 
 Defines the shape of an LLM Judgment Record: the non-executing object produced by the
 [`LLM_JUDGMENT_EVALUATION_GATE.md`](./LLM_JUDGMENT_EVALUATION_GATE.md) from a valid Evidence
 Review Record ([`EVIDENCE_REVIEW_RECORD_CONTRACT.md`](./EVIDENCE_REVIEW_RECORD_CONTRACT.md)),
 reviewed by a human before it may support any decision. Grounded in
-[`EVIDENCE_STANDARD.md`](./EVIDENCE_STANDARD.md),
-[`PROVENANCE_MODEL.md`](./PROVENANCE_MODEL.md), and
+[`EVIDENCE_STANDARD.md`](./archive/v0/EVIDENCE_STANDARD.md),
+[`PROVENANCE_MODEL.md`](./archive/v0/PROVENANCE_MODEL.md), and
 [`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md). Documentation and a static test only.
 
 ---

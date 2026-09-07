@@ -1,5 +1,7 @@
 # Query Result Record Contract
 
+**Classification: REFERENCE — CURRENT TECHNICAL ARTIFACT; NO PRODUCT AUTHORITY.** Frozen V0 links are historical provenance only.
+
 **Phase:** P6.11. **Baseline:** `main` @ `5fda748`.
 
 Defines the shape of a Query Result Record: the tenant-scoped, provenance-bearing object a
@@ -7,7 +9,7 @@ Defines the shape of a Query Result Record: the tenant-scoped, provenance-bearin
 ([`D1_READ_ONLY_EXECUTION_GATE.md`](./D1_READ_ONLY_EXECUTION_GATE.md)) would produce from a
 valid Rule Review Record ([`RULE_REVIEW_RECORD_CONTRACT.md`](./RULE_REVIEW_RECORD_CONTRACT.md)).
 This is the object that can finally satisfy the evidence predicate of
-[`EVIDENCE_STANDARD.md`](./EVIDENCE_STANDARD.md). Documentation and a static test only.
+[`EVIDENCE_STANDARD.md`](./archive/v0/EVIDENCE_STANDARD.md). Documentation and a static test only.
 
 ---
 

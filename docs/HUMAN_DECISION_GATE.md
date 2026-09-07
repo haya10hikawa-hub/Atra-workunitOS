@@ -1,5 +1,7 @@
 # Human Decision Gate
 
+**Classification: REFERENCE — CURRENT TECHNICAL ARTIFACT; NO PRODUCT AUTHORITY.** Frozen V0 links are historical provenance only.
+
 **Phase:** P6.14. **Baseline:** `main` @ `1c34375`.
 
 Defines what may happen after Evidence Review
@@ -10,8 +12,8 @@ queue. Closes the query spine's terminal: the three human queues
 `ready_for_human_judgment_review`) now have a human-authored decision artifact to consume
 them — the **Human Decision Record**. Grounded in
 [`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md),
-[`EVIDENCE_STANDARD.md`](./EVIDENCE_STANDARD.md), and
-[`PROVENANCE_MODEL.md`](./PROVENANCE_MODEL.md). Also discharges, at the recording level, the
+[`EVIDENCE_STANDARD.md`](./archive/v0/EVIDENCE_STANDARD.md), and
+[`PROVENANCE_MODEL.md`](./archive/v0/PROVENANCE_MODEL.md). Also discharges, at the recording level, the
 Evidence Acceptance recording gate that
 [`EVIDENCE_REVIEW_GATE.md`](./EVIDENCE_REVIEW_GATE.md) and
 [`LLM_JUDGMENT_EVALUATION_GATE.md`](./LLM_JUDGMENT_EVALUATION_GATE.md) reference as future.
@@ -330,4 +332,4 @@ Future external action execution requires a separate execution gate.
 This Human Decision Gate authorizes no ApprovalStore approval, no action authorization, no external action execution, no automatic Formal WorkUnit promotion, no automated decision-making, no runtime decision storage, no runtime evidence acceptance storage, no runtime evidence ledger update, no runtime graph update, no ApprovalStore integration, no real LLM enablement, no GraphRAG implementation, no vectorization, no deployment, and no automated decision-making.
 
 Enforcement in code is governed by separate, future gates
-([`NEXT_CAPABILITY_GATE.md`](./NEXT_CAPABILITY_GATE.md)) with recorded human decisions.
+([`NEXT_CAPABILITY_GATE.md`](./archive/v0/NEXT_CAPABILITY_GATE.md)) with recorded human decisions.

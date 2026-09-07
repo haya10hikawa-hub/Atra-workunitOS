@@ -1,5 +1,7 @@
 # Rule Review Record Contract
 
+**Classification: REFERENCE — CURRENT TECHNICAL ARTIFACT; NO PRODUCT AUTHORITY.** Frozen V0 links are historical provenance only.
+
 **Phase:** P6.10. **Baseline:** `main` @ `0fe6d60`.
 
 Defines the shape of a Rule Review Record: the non-executing object produced by the

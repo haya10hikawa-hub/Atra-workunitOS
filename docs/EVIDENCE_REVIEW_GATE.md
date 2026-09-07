@@ -1,5 +1,7 @@
 # Evidence Review Gate
 
+**Classification: REFERENCE — CURRENT TECHNICAL ARTIFACT; NO PRODUCT AUTHORITY.** Frozen V0 links are historical provenance only.
+
 **Phase:** P6.12. **Baseline:** `main` @ `727244f`.
 
 Defines how a Query Result Record with `result_status` `ready_for_evidence_review`
@@ -7,8 +9,8 @@ Defines how a Query Result Record with `result_status` `ready_for_evidence_revie
 before it is allowed to support human decision-making as evidence. Discharges the forward
 reference left by [`D1_READ_ONLY_EXECUTION_GATE.md`](./D1_READ_ONLY_EXECUTION_GATE.md) §16
 ("Future evidence use requires complete provenance and human-review compatibility") and
-grounds it in [`EVIDENCE_STANDARD.md`](./EVIDENCE_STANDARD.md) and
-[`PROVENANCE_MODEL.md`](./PROVENANCE_MODEL.md). Pairs with
+grounds it in [`EVIDENCE_STANDARD.md`](./archive/v0/EVIDENCE_STANDARD.md) and
+[`PROVENANCE_MODEL.md`](./archive/v0/PROVENANCE_MODEL.md). Pairs with
 [`EVIDENCE_REVIEW_RECORD_CONTRACT.md`](./EVIDENCE_REVIEW_RECORD_CONTRACT.md). Documentation
 and a static test only.
 
@@ -123,7 +125,7 @@ Evidence Review pass must not authorize Formal WorkUnit promotion.
 
 `source_trust_marker`, `content_integrity_reference`, and `denied_schema_absence` are
 review-time inputs derived for this gate: the trust marker classifies where the result's
-rows came from — mapping the [`INFORMATION_INTAKE_POLICY.md`](./INFORMATION_INTAKE_POLICY.md)
+rows came from — mapping the [`INFORMATION_INTAKE_POLICY.md`](./archive/v0/INFORMATION_INTAKE_POLICY.md)
 trust ladder and first-vs-third-party ranking onto result sources
 (first_party_system_record / integration_provided_record / user_provided_record at the
 trusted end; derived_query_result / aggregated_result for computed results;
@@ -358,4 +360,4 @@ Evidence Review Record must not authorize Formal WorkUnit promotion.
 This Evidence Review Gate authorizes no truth assignment, no automated decision, no approval, no action authorization, no external action execution, no Formal WorkUnit promotion, no runtime evidence storage, no runtime provenance storage, no GraphRAG implementation, no vectorization, no real LLM enablement, no database access, no D1 execution, no SQL execution, no deployment, and no automated decision-making.
 
 Enforcement in code is governed by separate, future gates
-([`NEXT_CAPABILITY_GATE.md`](./NEXT_CAPABILITY_GATE.md)) with recorded human decisions.
+([`NEXT_CAPABILITY_GATE.md`](./archive/v0/NEXT_CAPABILITY_GATE.md)) with recorded human decisions.

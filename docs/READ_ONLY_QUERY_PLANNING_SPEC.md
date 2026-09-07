@@ -1,8 +1,10 @@
 # Read-only Query Planning Spec
 
+**Classification: REFERENCE — CURRENT TECHNICAL ARTIFACT; NO PRODUCT AUTHORITY.** This artifact does not select or authorize a product capability.
+
 **Phase:** P6.6. **Baseline:** `main` @ `651ff8e`.
 
-Defines, at the product level, what a read-only query plan is: a constrained,
+Documents the frozen V0 technical shape of a read-only query plan: a constrained,
 tenant-scoped, provenance-aware plan for retrieving decision-relevant information — never
 SQL execution, never an LLM writing or running SQL. Consumes the
 [`D1_SCHEMA_CATALOG.md`](./D1_SCHEMA_CATALOG.md) and enforces the P6.2 rule that a SQL result

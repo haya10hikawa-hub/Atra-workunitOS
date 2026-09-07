@@ -12,7 +12,7 @@ import assert from "node:assert/strict"
 import { readFile } from "node:fs/promises"
 
 const MIGRATION = "migrations/0005_tenant_scoped_indexes.sql"
-const DOC = "docs/PHASE_6B_D1_SCHEMA_INDEX_CONSTRAINT_HARDENING.md"
+const DOC = "docs/legacy/PHASE_6B_D1_SCHEMA_INDEX_CONSTRAINT_HARDENING.md"
 const APPROVAL_REPO = "app/lib/persistence/d1/approvalRecordRepository.ts"
 const PREVIEW_REPO = "app/lib/persistence/d1/actionPreviewRepository.ts"
 const BINDING = "app/lib/security/approvalPreviewBinding.ts"

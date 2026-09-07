@@ -1,11 +1,13 @@
 # TenantSecretProvider Design Gate
 
+**Status: PLAN — FUTURE / NOT IMPLEMENTED.** Product authority: NONE.
+
 **Phase:** P6.0. **Baseline:** `main` @ `287515c`.
 
 This document is the **design gate** for a future `TenantSecretProvider` and for keyed
 approval-secret handling. It is opened only after Alpha exit
-([`ALPHA_EXIT_CRITERIA.md`](./ALPHA_EXIT_CRITERIA.md)) and sits under the
-[`NEXT_CAPABILITY_GATE.md`](./NEXT_CAPABILITY_GATE.md) "secret handling plan documented"
+([`ALPHA_EXIT_CRITERIA.md`](./legacy/ALPHA_EXIT_CRITERIA.md)) and sits under the
+[`NEXT_CAPABILITY_GATE.md`](./archive/v0/NEXT_CAPABILITY_GATE.md) "secret handling plan documented"
 prerequisite. It is **documentation and a static test only** — it designs nothing runtime,
 connects nothing, and enables no capability.
 
@@ -131,7 +133,7 @@ Implementation may begin only after a separate, approved phase in which: every �
 and §8 lifecycle stage is designed and reviewed; the [`APPROVAL_HASH_KEYING_PLAN.md`](./APPROVAL_HASH_KEYING_PLAN.md)
 migration gates are satisfied; the [`APPROVAL_SECRET_THREAT_MODEL.md`](./APPROVAL_SECRET_THREAT_MODEL.md)
 No-Go conditions are all false; and a human sign-off is recorded per
-[`ALPHA_SIGNOFF_TEMPLATE.md`](./ALPHA_SIGNOFF_TEMPLATE.md). Until then the capability is
+[`ALPHA_SIGNOFF_TEMPLATE.md`](./legacy/ALPHA_SIGNOFF_TEMPLATE.md). Until then the capability is
 **No-Go** and this document authorizes no code.
 
 ## 13. Non-authorization statement

@@ -1,5 +1,7 @@
 # SQL Compilation Gate
 
+**Classification: REFERENCE — CURRENT TECHNICAL ARTIFACT; NO PRODUCT AUTHORITY.** Frozen V0 links are historical provenance only.
+
 **Phase:** P6.9. **Baseline:** `main` @ `bf90ff4`.
 
 Defines how a valid Safe Query Plan ([`SAFE_QUERY_PLAN_CONTRACT.md`](./SAFE_QUERY_PLAN_CONTRACT.md))
@@ -223,8 +225,8 @@ Compiled SQL Artifact may describe future provenance capture, but it must not cr
 
 Future query results are not evidence unless query plan, compiled artifact, tenant scope, selected source rows, and result provenance are recorded.
 
-This preserves the evidence boundary of [`EVIDENCE_STANDARD.md`](./EVIDENCE_STANDARD.md) and
-[`PROVENANCE_MODEL.md`](./PROVENANCE_MODEL.md): SQL results are not evidence until provenance
+This preserves the evidence boundary of [`EVIDENCE_STANDARD.md`](./archive/v0/EVIDENCE_STANDARD.md) and
+[`PROVENANCE_MODEL.md`](./archive/v0/PROVENANCE_MODEL.md): SQL results are not evidence until provenance
 is restored, and no compilation step creates evidence on its own.
 
 ## 15. Failure and No-Go Conditions
@@ -269,4 +271,4 @@ A Compiled SQL Artifact must not authorize external execution.
 This SQL Compilation Gate authorizes no SQL execution, no D1 execution, no database access, no free-form SQL generation, no LLM-controlled SQL generation, no LLM-controlled database access, no runtime SQL compiler, no runtime query planner, no runtime Safe Query Plan generation, no GraphRAG implementation, no vectorization, no real LLM enablement, no external execution, no Formal WorkUnit promotion, and no automated decision-making.
 
 Enforcement in code is governed by separate, future gates
-([`NEXT_CAPABILITY_GATE.md`](./NEXT_CAPABILITY_GATE.md)) with recorded human decisions.
+([`NEXT_CAPABILITY_GATE.md`](./archive/v0/NEXT_CAPABILITY_GATE.md)) with recorded human decisions.

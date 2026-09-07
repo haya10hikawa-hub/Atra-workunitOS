@@ -10,7 +10,7 @@ import assert from "node:assert/strict"
 import { readFile } from "node:fs/promises"
 import { execFileSync } from "node:child_process"
 
-const DOC = "docs/PHASE_7B_ALPHA_SAFETY_GATE_VALIDATION.md"
+const DOC = "docs/legacy/PHASE_7B_ALPHA_SAFETY_GATE_VALIDATION.md"
 const GATE = "scripts/alpha-safety-gate.mjs"
 const PKG = "package.json"
 const EXTERNAL = "app/lib/security/externalActions.ts"

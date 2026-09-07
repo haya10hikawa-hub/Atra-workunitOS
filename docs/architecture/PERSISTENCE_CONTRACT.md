@@ -1,5 +1,7 @@
 # Alpha D1 Persistence Contract
 
+**Status: CANONICAL — CURRENT V0 TECHNICAL INVARIANTS ONLY.** This persistence contract does not define the next product.
+
 > Status: **Alpha** · Patch: **P0-FIX-D1-OPERATIONAL-CONTRACT** · Related: Issue #155
 >
 > This document is the single, canonical source for how WorkUnit OS persists

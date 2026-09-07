@@ -1,5 +1,7 @@
 # Rule Review Gate
 
+**Classification: REFERENCE — CURRENT TECHNICAL ARTIFACT; NO PRODUCT AUTHORITY.** Frozen V0 links are historical provenance only.
+
 **Phase:** P6.10. **Baseline:** `main` @ `0fe6d60`.
 
 Defines how a valid Compiled SQL Artifact
@@ -237,8 +239,8 @@ Rule Review Record may describe future provenance capture, but it must not creat
 
 Future query results are not evidence unless query plan, compiled artifact, rule review record, tenant scope, selected source rows, and result provenance are recorded.
 
-This preserves the evidence boundary of [`EVIDENCE_STANDARD.md`](./EVIDENCE_STANDARD.md) and
-[`PROVENANCE_MODEL.md`](./PROVENANCE_MODEL.md): review never manufactures evidence, and the
+This preserves the evidence boundary of [`EVIDENCE_STANDARD.md`](./archive/v0/EVIDENCE_STANDARD.md) and
+[`PROVENANCE_MODEL.md`](./archive/v0/PROVENANCE_MODEL.md): review never manufactures evidence, and the
 provenance chain now includes the rule review record itself.
 
 ## 15. Failure and No-Go Conditions
@@ -285,4 +287,4 @@ A Rule Review Record must not authorize external execution.
 This Rule Review Gate authorizes no D1 execution, no SQL execution, no database access, no execution authorization, no approval, no runtime rule review, no runtime approval, no provenance record creation, no GraphRAG implementation, no vectorization, no real LLM enablement, no external execution, no Formal WorkUnit promotion, and no automated decision-making.
 
 Enforcement in code is governed by separate, future gates
-([`NEXT_CAPABILITY_GATE.md`](./NEXT_CAPABILITY_GATE.md)) with recorded human decisions.
+([`NEXT_CAPABILITY_GATE.md`](./archive/v0/NEXT_CAPABILITY_GATE.md)) with recorded human decisions.

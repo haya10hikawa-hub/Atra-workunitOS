@@ -1,5 +1,7 @@
 # Query Intent Contract
 
+**Classification: REFERENCE — CURRENT TECHNICAL ARTIFACT; NO PRODUCT AUTHORITY.**
+
 **Phase:** P6.7. **Baseline:** `main` @ `c2d73fe`.
 
 Defines the shape of a Query Intent: a non-executable, tenant-scoped description of *what

@@ -12,7 +12,7 @@
  * Every event is validated with the P6-I5G validator before it is accepted, is
  * scoped to a single tenant, and must carry the one fixed adapter and selected
  * target class. The capability and purity boundaries are described in
- * docs/P6_I5J_IN_MEMORY_TEST_ONLY_PERSISTENCE_AUDIT_EVIDENCE_RECORDER.md, not
+ * docs/legacy/P6_I5J_IN_MEMORY_TEST_ONLY_PERSISTENCE_AUDIT_EVIDENCE_RECORDER.md, not
  * inside this source.
  *
  * The only import is the Phase 6 Persistence Audit Evidence module surface.

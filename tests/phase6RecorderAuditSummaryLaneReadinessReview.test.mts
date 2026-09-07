@@ -32,8 +32,8 @@ function requireAll(doc: string, label: string, needles: readonly string[]): voi
   }
 }
 
-const GO = "../docs/P6_I5P_EXPLICIT_HUMAN_GO.md"
-const REVIEW = "../docs/P6_I5P_RECORDER_AUDIT_SUMMARY_LANE_READINESS_REVIEW.md"
+const GO = "../docs/legacy/P6_I5P_EXPLICIT_HUMAN_GO.md"
+const REVIEW = "../docs/legacy/P6_I5P_RECORDER_AUDIT_SUMMARY_LANE_READINESS_REVIEW.md"
 
 // ─── Files exist ────────────────────────────────────────────────
 
@@ -92,27 +92,27 @@ test("readiness review names P6-I5K through P6-I5O and their PRs", () => {
 // ─── Review doc: all expected artifact paths mentioned ──────────
 
 const LANE_ARTIFACT_PATHS = [
-  "docs/P6_I5K_EXPLICIT_HUMAN_GO.md",
-  "docs/P6_I5K_RECORDER_AUDIT_SUMMARY_SPEC.md",
-  "docs/P6_I5K_RECORDER_AUDIT_SUMMARY_CONTRACT.md",
+  "docs/legacy/P6_I5K_EXPLICIT_HUMAN_GO.md",
+  "docs/legacy/P6_I5K_RECORDER_AUDIT_SUMMARY_SPEC.md",
+  "docs/legacy/P6_I5K_RECORDER_AUDIT_SUMMARY_CONTRACT.md",
   "tests/phase6RecorderAuditSummarySpec.test.mts",
-  "docs/P6_I5L_EXPLICIT_HUMAN_GO.md",
-  "docs/P6_I5L_RECORDER_AUDIT_SUMMARY_TYPES_VALIDATORS.md",
+  "docs/legacy/P6_I5L_EXPLICIT_HUMAN_GO.md",
+  "docs/legacy/P6_I5L_RECORDER_AUDIT_SUMMARY_TYPES_VALIDATORS.md",
   "app/lib/phase6/recorderAuditSummary/types.ts",
   "app/lib/phase6/recorderAuditSummary/validators.ts",
   "app/lib/phase6/recorderAuditSummary/index.ts",
   "tests/phase6RecorderAuditSummaryValidators.test.mts",
-  "docs/P6_I5M_EXPLICIT_HUMAN_GO.md",
-  "docs/P6_I5M_PURE_RECORDER_AUDIT_SUMMARY_CONSTRUCTORS.md",
+  "docs/legacy/P6_I5M_EXPLICIT_HUMAN_GO.md",
+  "docs/legacy/P6_I5M_PURE_RECORDER_AUDIT_SUMMARY_CONSTRUCTORS.md",
   "app/lib/phase6/recorderAuditSummary/construction.ts",
   "app/lib/phase6/recorderAuditSummary/constructors.ts",
   "tests/phase6RecorderAuditSummaryConstructors.test.mts",
-  "docs/P6_I5N_EXPLICIT_HUMAN_GO.md",
-  "docs/P6_I5N_TEST_ONLY_RECORDER_AUDIT_SUMMARY_FIXTURE.md",
+  "docs/legacy/P6_I5N_EXPLICIT_HUMAN_GO.md",
+  "docs/legacy/P6_I5N_TEST_ONLY_RECORDER_AUDIT_SUMMARY_FIXTURE.md",
   "tests/fixtures/phase6/recorderAuditSummaryFixture.mts",
   "tests/phase6RecorderAuditSummaryFixture.test.mts",
-  "docs/P6_I5O_EXPLICIT_HUMAN_GO.md",
-  "docs/P6_I5O_TEST_ONLY_RECORDER_AUDIT_SUMMARY_HARNESS.md",
+  "docs/legacy/P6_I5O_EXPLICIT_HUMAN_GO.md",
+  "docs/legacy/P6_I5O_TEST_ONLY_RECORDER_AUDIT_SUMMARY_HARNESS.md",
   "tests/harness/phase6/recorderAuditSummaryHarness.mts",
   "tests/phase6RecorderAuditSummaryHarness.test.mts",
 ]

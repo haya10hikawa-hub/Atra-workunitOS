@@ -192,7 +192,7 @@ const HASH = "app/lib/security/hash.ts"
 const ROW_HELPERS = "app/lib/persistence/d1/rowHelpers.ts"
 const DRY_RUN = "app/api/workunit/[id]/execution/dry-run/route.ts"
 const MIGRATION = "migrations/0005_tenant_scoped_indexes.sql"
-const DOC = "docs/PHASE_6C_D1_REPOSITORY_INVARIANT_ENFORCEMENT.md"
+const DOC = "docs/legacy/PHASE_6C_D1_REPOSITORY_INVARIANT_ENFORCEMENT.md"
 async function read(p: string): Promise<string> { return readFile(p, "utf8") }
 
 test("20. tenant-owned approval/preview/workUnit update paths bind tenant_id", async () => {

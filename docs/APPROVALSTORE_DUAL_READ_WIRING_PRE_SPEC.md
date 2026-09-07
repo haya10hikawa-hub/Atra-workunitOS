@@ -1,10 +1,12 @@
 # ApprovalStore Dual-read Wiring Pre-spec
 
+**Status: PLAN — FUTURE / NOT IMPLEMENTED.** Product authority: NONE.
+
 **Phase:** P7.2A (security lane). **Baseline:** `main` @ `45975b4`.
 
 Defines how the existing approval path may **later** be migrated from legacy approval-hash
 verification toward the P7.1 canonical approval MAC utilities
-([`P7_1_TSP_MINIMAL_RUNTIME_IMPLEMENTATION.md`](./P7_1_TSP_MINIMAL_RUNTIME_IMPLEMENTATION.md))
+([`P7_1_TSP_MINIMAL_RUNTIME_IMPLEMENTATION.md`](./legacy/P7_1_TSP_MINIMAL_RUNTIME_IMPLEMENTATION.md))
 using a future dual-read / shadow-compare rollout. Pairs with
 [`APPROVAL_MAC_ROLLOUT_CONTRACT.md`](./APPROVAL_MAC_ROLLOUT_CONTRACT.md). Documentation and a
 static test only.
@@ -396,4 +398,4 @@ is resolved by this docs-only phase):
 This ApprovalStore Dual-read Wiring Pre-spec authorizes no runtime wiring, no ApprovalStore behavior change, no approval verification behavior change, no external action execution, no real LLM enablement, no production TenantSecretProvider, no secret storage, no KMS integration, no nonce storage, no key rotation runtime, no keyed MAC enforcement, no deployment, and no automated decision-making.
 
 Enforcement in code is governed by separate, future gates
-([`NEXT_CAPABILITY_GATE.md`](./NEXT_CAPABILITY_GATE.md)) with recorded human decisions.
+([`NEXT_CAPABILITY_GATE.md`](./archive/v0/NEXT_CAPABILITY_GATE.md)) with recorded human decisions.

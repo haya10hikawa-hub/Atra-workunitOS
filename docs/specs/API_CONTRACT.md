@@ -1,5 +1,7 @@
 # API_CONTRACT.md
 
+**Status: CANONICAL — CURRENT V0 IMPLEMENTATION CONTRACT ONLY.** This API shape does not define or authorize the next product.
+
 # WorkUnit OS API Contract
 
 ## 1. Purpose

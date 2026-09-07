@@ -1,5 +1,7 @@
 # NL2SQL Planning Gate
 
+**Classification: REFERENCE — CURRENT TECHNICAL ARTIFACT; NO PRODUCT AUTHORITY.** Frozen V0 links are historical provenance only.
+
 **Phase:** P6.7. **Baseline:** `main` @ `c2d73fe`.
 
 Discharges the P6.6 forward reference by defining the NL2SQL Planning Gate: how a
@@ -180,4 +182,4 @@ future-gated capabilities and authorizes none of them.
 This NL2SQL Planning Gate authorizes no SQL generation, no SQL execution, no D1 execution, no free-form SQL generation, no runtime query planner, no database access, no LLM-controlled database access, no GraphRAG implementation, no vectorization, no real LLM enablement, no external execution, no Formal WorkUnit promotion, and no automated decision-making.
 
 Enforcement in code is governed by separate, future gates
-([`NEXT_CAPABILITY_GATE.md`](./NEXT_CAPABILITY_GATE.md)) with recorded human decisions.
+([`NEXT_CAPABILITY_GATE.md`](./archive/v0/NEXT_CAPABILITY_GATE.md)) with recorded human decisions.

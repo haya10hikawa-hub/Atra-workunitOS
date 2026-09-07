@@ -1,5 +1,7 @@
 # Safe Query Plan Contract
 
+**Classification: REFERENCE — CURRENT TECHNICAL ARTIFACT; NO PRODUCT AUTHORITY.** Frozen V0 links are historical provenance only.
+
 **Phase:** P6.8. **Baseline:** `main` @ `d694587`.
 
 Defines the shape of a Safe Query Plan: the non-executable object produced by the

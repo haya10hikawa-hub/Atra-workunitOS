@@ -16,9 +16,9 @@ import path from "node:path"
 
 const root = process.cwd()
 
-const ALPHA = path.join(root, "docs/ALPHA_RELEASE_READINESS.md")
-const RC = path.join(root, "docs/RELEASE_CANDIDATE_GATE.md")
-const RISK = path.join(root, "docs/RISK_REGISTER.md")
+const ALPHA = path.join(root, "docs/legacy/ALPHA_RELEASE_READINESS.md")
+const RC = path.join(root, "docs/legacy/RELEASE_CANDIDATE_GATE.md")
+const RISK = path.join(root, "docs/legacy/RISK_REGISTER.md")
 
 const read = (p: string): string => (existsSync(p) ? readFileSync(p, "utf8") : "")
 const alpha = read(ALPHA)
@@ -27,17 +27,17 @@ const risk = read(RISK)
 
 // ── Files exist ──────────────────────────────────────────────
 
-test("1. docs/ALPHA_RELEASE_READINESS.md exists", () => {
+test("1. docs/legacy/ALPHA_RELEASE_READINESS.md exists", () => {
   assert.equal(existsSync(ALPHA), true)
   assert.ok(alpha.length > 0)
 })
 
-test("2. docs/RELEASE_CANDIDATE_GATE.md exists", () => {
+test("2. docs/legacy/RELEASE_CANDIDATE_GATE.md exists", () => {
   assert.equal(existsSync(RC), true)
   assert.ok(rc.length > 0)
 })
 
-test("3. docs/RISK_REGISTER.md exists", () => {
+test("3. docs/legacy/RISK_REGISTER.md exists", () => {
   assert.equal(existsSync(RISK), true)
   assert.ok(risk.length > 0)
 })

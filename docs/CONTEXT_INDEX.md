@@ -2,9 +2,9 @@
 
 ## 1. Purpose
 
-This is the first-read file for AI agents.
+This is an implementation-path reference. Read [`PRODUCT_STATE.md`](../PRODUCT_STATE.md) and [`current/README.md`](./current/README.md) first.
 
-It tells agents which files to read for each task and prevents unnecessary reads of legacy, compatibility, prototype, generated, or build-output surfaces.
+It routes agents to files for each maintenance task and prevents unnecessary reads of legacy, compatibility, prototype, generated, or build-output surfaces.
 
 ## 2. Global dependency direction
 
@@ -53,7 +53,7 @@ UI
 
 | Task | Minimal context |
 |---|---|
-| UI work | `docs/archive/v0/CANONICAL_DECISION_INDEX.md`, `docs/CONTEXT_INDEX.md`, current WorkUnit UI implementation files, client-safe view models, relevant API response shape only |
+| UI maintenance | `PRODUCT_STATE.md`, `docs/CONTEXT_INDEX.md`, current V0 UI implementation files, client-safe view models, and relevant API response shape; frozen UI direction is under `docs/archive/v0/` |
 | Auth work | `docs/security/SECURITY_MODEL.md`, `app/lib/application/auth/*`, `app/lib/security/session.ts`, control repositories |
 | Persistence work | `docs/DEPENDENCY_MAP.md`, target route file, `routeRepositories.ts`, `repositoryResolver.ts`, target repository implementation |
 | LLM work | `app/lib/llm/sanitize.ts`, `app/lib/llm/budget.ts`, `app/lib/llm/prompts.ts`, `app/lib/llm/processWorkSignal.ts` |
@@ -70,7 +70,7 @@ UI truthfulness rule: empty, loading, error, disconnected, unapproved, and unpre
 | `app/lib/actionField/*` | Compatibility | Re-exports canonical Action Field helpers | Zero imports from active code/tests |
 | `app/components/workunitInbox/*` | Compatibility | Re-exports legacy WorkUnit Inbox UI | Zero active imports |
 | `app/components/legacy/workunitInbox/*` | Legacy | Physical old standalone inbox/detail/action-field UI | Compatibility exports removed and no active imports |
-| Old pre-v0 `app/components/workunit-os/*` panes | Transitional | Retained for implementation history only; not canonical UI direction | Current implementation catches up to WorkUnit Launcher / Graph / Action Field |
+| Old pre-v0 `app/components/workunit-os/*` panes | Transitional | Retained for implementation history only; not product direction | Explicit PM-approved disposition after product direction is resolved |
 | Hopper / Studio / Decision prototype folders | Prototype / unknown | Not canonical WorkUnit UI root | PM decision to archive, migrate, or delete |
 
 ## 8. Rule for future prompts

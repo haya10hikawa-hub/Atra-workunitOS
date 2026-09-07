@@ -3,7 +3,7 @@
  *
  * Each test corresponds to a confirmed finding from the 4-agent red-team
  * exercise and asserts the blue-team control now blocks the attack. Test ids
- * map to the finding ids in docs/security/REDTEAM_2026-06-29.md.
+ * map to the finding ids in docs/legacy/security/REDTEAM_2026-06-29.md.
  */
 
 import { test } from "node:test"

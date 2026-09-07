@@ -1,5 +1,7 @@
 # Compiled SQL Artifact Contract
 
+**Classification: REFERENCE — CURRENT TECHNICAL ARTIFACT; NO PRODUCT AUTHORITY.** Frozen V0 links are historical provenance only.
+
 **Phase:** P6.9. **Baseline:** `main` @ `bf90ff4`.
 
 Defines the shape of a Compiled SQL Artifact: the non-executed object produced by the

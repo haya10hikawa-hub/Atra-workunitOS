@@ -14,7 +14,7 @@
  *
  * The only import is the Phase 6 Persistence Audit Evidence module surface. The
  * capability and purity boundaries are described in
- * docs/P6_I5I_TEST_ONLY_PERSISTENCE_AUDIT_EVIDENCE_FIXTURE.md, not inside this
+ * docs/legacy/P6_I5I_TEST_ONLY_PERSISTENCE_AUDIT_EVIDENCE_FIXTURE.md, not inside this
  * source.
  */
 

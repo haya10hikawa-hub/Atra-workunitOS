@@ -1,13 +1,15 @@
 # Evidence Review Record Contract
 
+**Classification: REFERENCE — CURRENT TECHNICAL ARTIFACT; NO PRODUCT AUTHORITY.** Frozen V0 links are historical provenance only.
+
 **Phase:** P6.12. **Baseline:** `main` @ `727244f`.
 
 Defines the shape of an Evidence Review Record: the non-executing object produced by the
 [`EVIDENCE_REVIEW_GATE.md`](./EVIDENCE_REVIEW_GATE.md) from a valid Query Result Record
 ([`QUERY_RESULT_RECORD_CONTRACT.md`](./QUERY_RESULT_RECORD_CONTRACT.md)), reviewed before
 the result may support human decision-making as evidence. Grounded in
-[`EVIDENCE_STANDARD.md`](./EVIDENCE_STANDARD.md),
-[`PROVENANCE_MODEL.md`](./PROVENANCE_MODEL.md), and
+[`EVIDENCE_STANDARD.md`](./archive/v0/EVIDENCE_STANDARD.md),
+[`PROVENANCE_MODEL.md`](./archive/v0/PROVENANCE_MODEL.md), and
 [`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md). Documentation and a static test only.
 
 ---
@@ -95,7 +97,7 @@ Evidence Review Record is **not**:
 evidence *of*; `evidence_type` records the result shape being offered (per
 [`QUERY_RESULT_RECORD_CONTRACT.md`](./QUERY_RESULT_RECORD_CONTRACT.md) §7) together with
 the evidence role it is proposed to play (supports / weakens / contradicts / …, per
-[`EVIDENCE_STANDARD.md`](./EVIDENCE_STANDARD.md) evidence roles); `allowed_use` /
+[`EVIDENCE_STANDARD.md`](./archive/v0/EVIDENCE_STANDARD.md) evidence roles); `allowed_use` /
 `disallowed_use` scope where the evidence may and may not be cited;
 `decision_impact_scope` names which decision dimensions of
 [`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md) the evidence may inform — priority, risk,

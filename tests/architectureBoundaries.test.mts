@@ -773,7 +773,7 @@ test("the import direction change emits byte-identical JavaScript", async () => 
 // Each test therefore pairs the recorded statement in the program document with a
 // structural check, so the boundary cannot quietly become untrue.
 
-const PROGRAM_DOC = "docs/architecture/CANONICAL_WORKUNIT_PIPELINE_REFACTOR_PROGRAM.md"
+const PROGRAM_DOC = "docs/archive/v0/CANONICAL_WORKUNIT_PIPELINE_REFACTOR_PROGRAM.md"
 
 const PROPOSED_CANONICAL_TYPES = [
   "CanonicalSourceRecordV1", "CorrelationGroupV1", "WorkUnitCandidateV1", "WorkUnitCorrectionV1",

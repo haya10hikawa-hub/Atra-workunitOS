@@ -1,5 +1,7 @@
 # Approval MAC Rollout Contract
 
+**Status: PLAN — FUTURE / NOT IMPLEMENTED.** Product authority: NONE.
+
 **Phase:** P7.2A (security lane). **Baseline:** `main` @ `45975b4`.
 
 Defines the shape of a rollout record and the rules governing how legacy approval

@@ -19,7 +19,7 @@ const HASH = "app/lib/security/hash.ts"
 const TENANT_SECRET = "app/lib/security/tenantSecret.ts"
 const BINDING = "app/lib/security/approvalPreviewBinding.ts"
 const DRY_RUN = "app/api/workunit/[id]/execution/dry-run/route.ts"
-const DOC = "docs/PHASE_6A_D1_SCHEMA_INTEGRITY_INVENTORY.md"
+const DOC = "docs/legacy/PHASE_6A_D1_SCHEMA_INTEGRITY_INVENTORY.md"
 
 async function read(path: string): Promise<string> {
   return readFile(path, "utf8")
