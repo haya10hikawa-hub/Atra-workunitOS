@@ -1,0 +1,258 @@
+{
+  "schema_version": "1.0.0",
+  "project": "Atra Work Reconstruction Classifier",
+  "branch": "codex/classifier-work-reconstruction",
+  "authority": {
+    "pm": "user",
+    "shared_state": "docs/agents/classifier/ATRA_CLASSIFIER_MASTER_STATE.json",
+    "handoff_protocol": "docs/agents/classifier/AGENT_HANDOFF_PROTOCOL.json"
+  },
+  "organization": {
+    "classifier-chief": {
+      "team": "program-control",
+      "agent_file": "docs/agents/classifier/00_CLASSIFIER_CHIEF.md",
+      "role": "orchestrator",
+      "coding_model": "GPT-5.6 Sol",
+      "reasoning": "High",
+      "owns_tasks": [],
+      "responsibilities": [
+        "serialize authoritative state updates",
+        "sequence READY tasks by dependencies",
+        "resolve file ownership conflicts",
+        "integrate handoffs",
+        "surface PM decisions",
+        "prevent scope expansion"
+      ],
+      "may_review": [
+        "process-completeness",
+        "handoff-completeness"
+      ],
+      "must_not_approve_alone": [
+        "ontology correctness",
+        "grouping correctness",
+        "model selection",
+        "red-team closure"
+      ],
+      "inputs": [
+        "all team handoffs",
+        "ATRA_CLASSIFIER_MASTER_STATE.json"
+      ],
+      "outputs": [
+        "updated project state",
+        "next-task assignments",
+        "PM decision request when required"
+      ]
+    },
+    "ontology-schema": {
+      "team": "ontology-and-contracts",
+      "agent_file": "docs/agents/classifier/01_ONTOLOGY_SCHEMA_AGENT.md",
+      "role": "ontology_schema_owner",
+      "coding_model": "GPT-5.6 Sol",
+      "reasoning": "High",
+      "owns_tasks": ["C001", "C002"],
+      "co_owns_tasks": ["C003"],
+      "responsibilities": [
+        "define SemanticAtom taxonomy",
+        "define SAME_WORK vs RELATED_DIFFERENT_WORK boundary",
+        "define canonical TypeScript/JSON contracts",
+        "create boundary examples",
+        "keep unknown and uncertainty semantics explicit"
+      ],
+      "primary_outputs": [
+        "SemanticAtomV1 schema",
+        "RelationV1 schema",
+        "CorrelationGroupV1 schema",
+        "WorkUnitCandidateV1 schema",
+        "WorkUnitCorrectionV1 schema",
+        "ontology examples"
+      ],
+      "depends_on": [],
+      "downstream_consumers": [
+        "model-infra",
+        "retrieval-rerank",
+        "relation-grouping",
+        "golden-eval"
+      ],
+      "independent_review_required": true,
+      "reviewers": ["golden-eval", "classifier-redteam"]
+    },
+    "model-infra": {
+      "team": "model-infrastructure",
+      "agent_file": "docs/agents/classifier/02_MODEL_INFRA_AGENT.md",
+      "role": "model_gateway_and_benchmark_owner",
+      "coding_model": "GPT-5.6 Sol",
+      "reasoning": "High",
+      "owns_tasks": ["C004", "C005"],
+      "responsibilities": [
+        "build AWS/vLLM benchmark harness",
+        "implement provider-neutral ClassifierModelGateway adapter",
+        "record model/config/version per run",
+        "validate structured output",
+        "record latency/token/GPU metrics",
+        "support replayable episode runs"
+      ],
+      "baseline_models": {
+        "generation": "Qwen/Qwen3.5-27B",
+        "generation_shadow": "Qwen/Qwen3.5-35B-A3B",
+        "embedding": "Qwen/Qwen3-Embedding-8B",
+        "reranker": "Qwen/Qwen3-Reranker-8B"
+      },
+      "depends_on": [],
+      "schema_dependency_for_C005": ["C002"],
+      "downstream_consumers": [
+        "retrieval-rerank",
+        "relation-grouping",
+        "golden-eval"
+      ],
+      "independent_review_required": true,
+      "reviewers": ["golden-eval", "classifier-redteam"]
+    },
+    "retrieval-rerank": {
+      "team": "retrieval-and-ranking",
+      "agent_file": "docs/agents/classifier/03_RETRIEVAL_RERANK_AGENT.md",
+      "role": "candidate_retrieval_owner",
+      "coding_model": "GPT-5.6 Sol",
+      "reasoning": "High",
+      "owns_tasks": ["C006", "C007"],
+      "responsibilities": [
+        "include mandatory explicit references",
+        "implement lexical retrieval",
+        "implement Qwen3-Embedding-8B dense retrieval",
+        "union and deduplicate candidates",
+        "implement Qwen3-Reranker-8B reranking",
+        "measure Recall@10 and Recall@30",
+        "preserve relevance-vs-identity boundary"
+      ],
+      "depends_on": ["C002", "C004"],
+      "outputs": [
+        "RetrievalCandidateV1 candidates",
+        "RerankedCandidateV1 candidates",
+        "retrieval metrics"
+      ],
+      "downstream_consumers": ["relation-grouping", "golden-eval"],
+      "independent_review_required": false,
+      "reviewers": ["golden-eval"]
+    },
+    "relation-grouping": {
+      "team": "relation-and-grouping-core",
+      "agent_file": "docs/agents/classifier/04_RELATION_GROUPING_AGENT.md",
+      "role": "work_identity_and_grouping_owner",
+      "coding_model": "GPT-5.6 Sol",
+      "reasoning": "High",
+      "owns_tasks": ["C008", "C009", "C010", "C011"],
+      "responsibilities": [
+        "implement 4-way relation judge",
+        "retain supporting evidence and contradictions",
+        "implement deterministic cannot-link and safety constraints",
+        "implement guarded agglomerative grouping",
+        "prevent transitive-only false merge",
+        "form independent WorkUnitCandidateV1 outcomes"
+      ],
+      "depends_on": ["C002", "C003", "C004", "C007"],
+      "outputs": [
+        "RelationV1",
+        "AdmissibleRelationV1",
+        "CorrelationGroupV1",
+        "WorkUnitCandidateV1"
+      ],
+      "downstream_consumers": ["golden-eval"],
+      "independent_review_required": true,
+      "reviewers": ["golden-eval", "classifier-redteam"]
+    },
+    "golden-eval": {
+      "team": "golden-set-and-evaluation",
+      "agent_file": "docs/agents/classifier/05_GOLDEN_EVAL_AGENT.md",
+      "role": "evaluation_authority",
+      "coding_model": "GPT-5.6 Sol",
+      "reasoning": "High",
+      "owns_tasks": ["C012", "C014"],
+      "co_owns_tasks": ["C003"],
+      "responsibilities": [
+        "define episode-level Golden Set format",
+        "protect train/dev/test leakage boundaries",
+        "maintain Japanese/English/mixed slices",
+        "measure retrieval/relation/grouping metrics",
+        "measure false merge and false split separately",
+        "measure abstention burden",
+        "produce fine-tuning go/no-go evidence"
+      ],
+      "golden_truth_rule": "model-generated labels cannot become Golden truth without human adjudication",
+      "depends_on": ["C001", "C002"],
+      "outputs": [
+        "annotation guide",
+        "Golden Set",
+        "evaluation reports",
+        "tuning decision evidence"
+      ],
+      "independent_review_required": true,
+      "reviewers": ["classifier-redteam"]
+    },
+    "classifier-redteam": {
+      "team": "independent-quality-and-safety",
+      "agent_file": "docs/agents/classifier/06_CLASSIFIER_REDTEAM.md",
+      "role": "adversarial_reviewer",
+      "coding_model": "GPT-5.6 Sol",
+      "reasoning": "High",
+      "owns_tasks": [],
+      "responsibilities": [
+        "construct false-merge counterexamples",
+        "construct false-split counterexamples",
+        "attack transitive grouping",
+        "test Japanese/English language imbalance",
+        "test prompt injection and unsupported claims",
+        "test evaluation leakage",
+        "verify model cannot override deterministic blockers"
+      ],
+      "must_not_primary_implement": [
+        "the feature currently under red-team approval"
+      ],
+      "outputs": [
+        "counterexamples",
+        "review verdict",
+        "blocking findings",
+        "regression cases"
+      ],
+      "review_authority_for": [
+        "ontology milestone",
+        "model-selection milestone",
+        "grouping milestone",
+        "Golden Set milestone",
+        "classifier release candidate"
+      ]
+    }
+  },
+  "task_dependency_graph": {
+    "C001": [],
+    "C002": ["C001"],
+    "C003": ["C001", "C002"],
+    "C004": [],
+    "C005": ["C002", "C004"],
+    "C006": ["C002", "C004"],
+    "C007": ["C006"],
+    "C008": ["C002", "C003", "C004", "C007"],
+    "C009": ["C008"],
+    "C010": ["C009"],
+    "C011": ["C010"],
+    "C012": ["C003", "C010"],
+    "C013": ["C002", "C011"],
+    "C014": ["C012", "C013"]
+  },
+  "initial_parallel_execution": [
+    {
+      "agent": "ontology-schema",
+      "task": "C001"
+    },
+    {
+      "agent": "model-infra",
+      "task": "C004"
+    }
+  ],
+  "shared_state_rules": {
+    "code_parallelism": "allowed when file ownership does not overlap",
+    "authoritative_json_updates": "serialized",
+    "state_lock_path": "ATRA_CLASSIFIER_MASTER_STATE.json#agent_protocol.state_lock",
+    "implementation_completion": "IN_PROGRESS -> REVIEW",
+    "final_completion": "REVIEW -> DONE after evidence and required independent review",
+    "architecture_change": "record decision proposal; do not silently change accepted design"
+  }
+}
