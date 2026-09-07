@@ -1,0 +1,186 @@
+{
+  "schema_version": "1.0.0",
+  "project": "Atra Work Reconstruction Classifier",
+  "purpose": "Standard machine-readable envelope for handoff between classifier development agents.",
+  "authoritative_project_state": "docs/agents/classifier/ATRA_CLASSIFIER_MASTER_STATE.json",
+  "agent_registry": "docs/agents/classifier/TEAM_AGENT_REGISTRY.json",
+  "rules": [
+    "A handoff describes completed evidence, not intentions presented as facts.",
+    "The receiving agent must re-check task dependencies before starting work.",
+    "A handoff cannot grant merge, deploy, live provider write, remote D1 mutation, Issue close, or execution authority.",
+    "The primary implementation agent may move a task to REVIEW but not self-approve a milestone requiring independent review.",
+    "All architecture deviations must be represented as decision_proposals.",
+    "Unknown values remain null/unknown rather than invented.",
+    "Files and metrics referenced in evidence must exist or be reproducible from the recorded command/config."
+  ],
+  "handoff_envelope": {
+    "handoff_id": "string",
+    "created_at": "ISO-8601 timestamp",
+    "from_agent": "agent id from TEAM_AGENT_REGISTRY.json",
+    "to_agent": "agent id from TEAM_AGENT_REGISTRY.json or classifier-chief",
+    "task_id": "C001-C014 or review gate id",
+    "task_status": "IN_PROGRESS | BLOCKED | REVIEW | DONE",
+    "goal": "short statement of the bounded task goal",
+    "scope": {
+      "included": ["string"],
+      "excluded": ["string"]
+    },
+    "inputs_used": [
+      {
+        "type": "file | model | dataset | task-output | decision | benchmark",
+        "ref": "string",
+        "revision": "string or null"
+      }
+    ],
+    "work_completed": ["string"],
+    "artifacts": [
+      {
+        "type": "file | schema | benchmark | dataset | report | test | metric",
+        "path_or_ref": "string",
+        "description": "string"
+      }
+    ],
+    "evidence": [
+      {
+        "type": "test | metric | benchmark | review | file",
+        "command_or_ref": "string",
+        "result": "PASS | FAIL | VALUE | NOT_RUN",
+        "details": "string",
+        "model": "string or null",
+        "dataset_slice": "string or null"
+      }
+    ],
+    "acceptance_criteria": [
+      {
+        "criterion": "string",
+        "status": "PASS | FAIL | NOT_VERIFIED",
+        "evidence_refs": ["string"]
+      }
+    ],
+    "decisions_applied": [
+      {
+        "decision_id": "string",
+        "summary": "string"
+      }
+    ],
+    "decision_proposals": [
+      {
+        "proposal_id": "string",
+        "question": "string",
+        "current_design": "string",
+        "proposed_change": "string",
+        "reason": "string",
+        "impact": ["string"],
+        "requires_pm": "boolean"
+      }
+    ],
+    "risks": [
+      {
+        "severity": "low | medium | high | safety_critical",
+        "description": "string",
+        "mitigation": "string or null"
+      }
+    ],
+    "blockers": [
+      {
+        "description": "string",
+        "blocked_by": "task id | decision | external dependency | unknown",
+        "required_to_unblock": "string"
+      }
+    ],
+    "open_questions": [
+      {
+        "question": "string",
+        "owner": "agent id | PM | unknown",
+        "blocking": "boolean"
+      }
+    ],
+    "recommended_next": [
+      {
+        "agent": "agent id",
+        "task": "task id or review gate",
+        "reason": "string"
+      }
+    ],
+    "state_update": {
+      "expected_previous_revision": "integer",
+      "new_revision": "integer",
+      "task_owner": "agent id or null",
+      "task_status": "READY | IN_PROGRESS | BLOCKED | REVIEW | DONE",
+      "state_lock_released": "boolean"
+    }
+  },
+  "review_envelope": {
+    "review_id": "string",
+    "created_at": "ISO-8601 timestamp",
+    "reviewer_agent": "agent id",
+    "implementation_agent": "agent id",
+    "task_id": "string",
+    "review_type": "ontology | architecture | model | retrieval | grouping | golden_set | red_team | release_gate",
+    "verdict": "PASS | CHANGES_REQUIRED | BLOCK",
+    "findings": [
+      {
+        "severity": "info | low | medium | high | safety_critical",
+        "category": "string",
+        "description": "string",
+        "evidence_ref": "string or null",
+        "required_action": "string or null"
+      }
+    ],
+    "counterexamples_added": ["string"],
+    "acceptance_criteria_verified": ["string"],
+    "may_transition_to_done": "boolean"
+  },
+  "experiment_envelope": {
+    "experiment_id": "string",
+    "owner_agent": "agent id",
+    "hypothesis": "string",
+    "stage": "S2 | S3 | S4 | S5 | S6 | S7 | S8",
+    "model_or_algorithm": "string",
+    "model_revision": "string or null",
+    "dataset": "string",
+    "dataset_revision": "string",
+    "language_slice": "all | ja_only | en_only | ja_en_mixed | code_plus_natural_language",
+    "config": {},
+    "metrics": {},
+    "result_summary": "string",
+    "decision_effect": "none | supports_change | rejects_change | needs_more_evidence"
+  },
+  "minimal_handoff_example": {
+    "handoff_id": "H-C001-001",
+    "created_at": "2026-09-07T20:45:00+09:00",
+    "from_agent": "ontology-schema",
+    "to_agent": "classifier-chief",
+    "task_id": "C001",
+    "task_status": "REVIEW",
+    "goal": "Freeze classifier ontology and work-relation boundaries.",
+    "scope": {
+      "included": ["semantic atom labels", "relation labels", "boundary examples"],
+      "excluded": ["TypeScript schema implementation", "model fine-tuning"]
+    },
+    "inputs_used": [],
+    "work_completed": ["Defined semantic labels", "Defined four relation labels"],
+    "artifacts": [],
+    "evidence": [],
+    "acceptance_criteria": [],
+    "decisions_applied": [],
+    "decision_proposals": [],
+    "risks": [],
+    "blockers": [],
+    "open_questions": [],
+    "recommended_next": [
+      {
+        "agent": "classifier-redteam",
+        "task": "C001 review",
+        "reason": "Ontology requires independent boundary attack before DONE."
+      }
+    ],
+    "state_update": {
+      "expected_previous_revision": 2,
+      "new_revision": 3,
+      "task_owner": "ontology-schema",
+      "task_status": "REVIEW",
+      "state_lock_released": true
+    }
+  }
+}
