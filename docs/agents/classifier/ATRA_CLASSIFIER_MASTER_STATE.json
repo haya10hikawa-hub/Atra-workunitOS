@@ -1,12 +1,12 @@
 {
   "schema_version": "1.0.0",
-  "state_revision": 1,
-  "last_updated": "2026-09-07T20:06:04+09:00",
+  "state_revision": 2,
+  "last_updated": "2026-09-07T20:19:04+09:00",
   "project": {
     "name": "Atra Work Reconstruction Classifier",
     "repo": "haya10hikawa-hub/Atra-workunitOS",
-    "branch": "codex/whole-system-verification-repair",
-    "head_at_creation": "e6f27049b869dd7fbf895fe8203b257f9d015191",
+    "branch": "codex/classifier-work-reconstruction",
+    "branch_origin_commit": "e288499f2f1f44fa0941b64cf7363b5988845408",
     "main_baseline": "eddbe55d4efa9cc71e4d1dc2dbd28fe00037b26c",
     "scope": "SourceRecordV1 -> WorkUnitCandidateV1"
   },
@@ -33,6 +33,11 @@
     "embedding": "Qwen/Qwen3-Embedding-8B",
     "reranker": "Qwen/Qwen3-Reranker-8B",
     "runtime": "AWS GPU + vLLM structured JSON"
+  },
+  "coding_agent_baseline": {
+    "model": "GPT-5.6 Sol",
+    "reasoning": "High",
+    "rule": "keep Phase-0 agents on the same coding model so differences come from role/prompt, not model drift"
   },
   "pipeline": [
     {"id":"S0","name":"SourceRecordV1","status":"PROVEN_BOUNDED"},
@@ -96,6 +101,11 @@
   },
   "current_handoff": {
     "start_parallel": ["ontology-schema:C001","model-infra:C004"],
+    "run_prompts": {
+      "chief": "docs/agents/classifier/prompts/RUN_PHASE0_PARALLEL.md",
+      "C001": "docs/agents/classifier/prompts/RUN_C001_ONTOLOGY.md",
+      "C004": "docs/agents/classifier/prompts/RUN_C004_MODEL_INFRA.md"
+    },
     "next_after_C001": "C002",
     "review_rule": "ontology/grouping/model-selection milestones require classifier-redteam or differently biased review",
     "do_not_repeat": "do not rerun whole-system audit; use existing report and focused gates"
