@@ -30,6 +30,7 @@ export type AtraWorkspaceViewModel = AtraWorkspaceModel & {
 export type DeriveAtraWorkspaceInput = {
   readonly workUnit: LauncherWorkUnit | null
   readonly selectedNodeId?: string | null
+  readonly actionFieldOpen?: boolean
 }
 
 const COMPOSE = ATRA_PROCESS_TEMPLATE.find((node) => node.output) ?? ATRA_PROCESS_TEMPLATE[0]!
@@ -67,11 +68,12 @@ export function deriveAtraWorkspaceViewModel(input: DeriveAtraWorkspaceInput): A
     },
     processNodes,
     actionField: {
+      visible: input.actionFieldOpen ?? true,
       path: output ? `${focusTemplate.label} / ${output.label}` : focusTemplate.label,
       outputTitle: output ? output.label.replace(/\s*\(v\d+\)\s*$/, "") : "Draft",
       linkedContext: [],
-      draftFilename: "editable.md",
-      localEditsOnly: true,
+      draftFilename: "candidate-preview.md",
+      readOnlyCandidatePreview: true,
       candidateOnly: true,
       humanReviewRequired: true,
       draftBlocks: markdownToDraftBlocks(draft.body),

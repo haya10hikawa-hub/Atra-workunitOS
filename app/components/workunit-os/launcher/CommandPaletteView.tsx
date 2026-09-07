@@ -81,7 +81,7 @@ export function CommandPaletteView(props: Props) {
             ) : null}
           </div>
           <div className={styles.resultSummaryRow}>
-            <button type="button">Show more results...⌄</button>
+            <span>All supplied results shown</span>
             <span>{resultCountLabel(props.workUnits.length)}</span>
           </div>
         </div>
@@ -121,7 +121,7 @@ export function CommandPaletteView(props: Props) {
       </div>
       <footer className={styles.footerRow}>
         <div className={styles.footerGroup}>
-          <span><kbd>↵</kbd> Enter = Open Detail</span>
+          <span><kbd>↵</kbd> Enter = Open Action Field</span>
           <span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span>
         </div>
         <div className={styles.footerGroup}>

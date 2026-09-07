@@ -145,6 +145,7 @@ test("ambient-cookie AST detector has executable positive controls", () => {
 })
 
 test("security headers apply globally and match the current hardening floor", async () => {
+  assert.equal(nextConfig.agentRules, false, "next dev must not rewrite the repository-owned AGENTS.md")
   assert.equal(nextConfig.poweredByHeader, false)
   const rules = (await nextConfig.headers?.()) ?? []
   assertGlobalHeaderFloor(rules as HeaderRule[])

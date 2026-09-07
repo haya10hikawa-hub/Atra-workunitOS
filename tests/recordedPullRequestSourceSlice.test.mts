@@ -689,6 +689,49 @@ test("NS-5: an export of one GitHub resource is refused by the other resource's 
   assert.ok(!reverse.ok)
   assert.equal(reverse.failureCode, "provider_resource_mismatch")
 
+  // Counterexample NS-5: merely naming the PR ref members must not let a mutated PR
+  // body cross into the issue namespace. The discriminator is retained-byte shape,
+  // not the caller's adapter choice, and arrays are not PR ref structures.
+  const realPrObject = providerObject(JSON.parse(prText) as Archive)
+  const arrayRefs = await acquireRecordedGitHubIssueCapture(
+    archiveWithObject(JSON.parse(prText) as Archive, {
+      ...realPrObject,
+      head: [],
+      base: [],
+    }),
+  )
+  assert.equal(arrayRefs.ok, false, "a PR body with array ref markers must not become an issue")
+  assert.ok(!arrayRefs.ok)
+  assert.equal(arrayRefs.failureCode, "provider_resource_mismatch")
+
+  // Counterexample NS-5: adding only the two ref-shaped keys to a real issue must
+  // not make it satisfy the PR namespace discriminator.
+  const realIssueObject = providerObject(JSON.parse(issueText) as Archive)
+  const forgedRefs = await acquireRecordedGitHubPullRequestCapture(
+    archiveWithObject(JSON.parse(issueText) as Archive, {
+      ...realIssueObject,
+      head: {},
+      base: {},
+    }),
+  )
+  assert.equal(forgedRefs.ok, false, "an issue body with forged empty refs must not become a pull request")
+  assert.ok(!forgedRefs.ok)
+  assert.equal(forgedRefs.failureCode, "provider_resource_mismatch")
+
+  // GitHub's `/issues/{number}` representation of a pull request carries a
+  // top-level `pull_request` link. Its presence is itself PR-only evidence and
+  // must not be allowed to mint the issue namespace, regardless of value shape.
+  const issueWithPullRequestMarker = await acquireRecordedGitHubIssueCapture(
+    archiveWithObject(JSON.parse(issueText) as Archive, {
+      ...realIssueObject,
+      pull_request: { url: "https://api.github.com/repos/example/example/pulls/1" },
+    }),
+  )
+  assert.equal(issueWithPullRequestMarker.ok, false,
+    "an issue body carrying GitHub's pull_request marker must not remain in the issue namespace")
+  assert.ok(!issueWithPullRequestMarker.ok)
+  assert.equal(issueWithPullRequestMarker.failureCode, "provider_resource_mismatch")
+
   // Non-vacuity: each module still accepts its own resource, so the refusals above discriminate by
   // resource and are not a module that refuses everything.
   assert.equal((await acquireRecordedGitHubPullRequestCapture(prText)).ok, true)

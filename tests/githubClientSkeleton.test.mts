@@ -10,6 +10,8 @@ import { realGitHubClient } from "../app/lib/workunitInbox/sources/github/realGi
 import { githubEventsToNormalizedToolSignals } from "../app/lib/workunitInbox/sources/github/toNormalizedToolSignal.ts"
 import { transformSignalsToInboxWorkUnits } from "../app/lib/workunitInbox/transform.ts"
 
+const mutableProcessEnv = process.env as Record<string, string | undefined>
+
 // ─── Mode Resolution ────────────────────────────────────────────
 
 test("resolveGitHubSourceMode defaults to fake", () => {
@@ -68,11 +70,12 @@ test("resolveGitHubClient returns fake for real_disabled", () => {
 test("real mode in production without token falls back to fake", () => {
   const nodeEnv = process.env.NODE_ENV
   try {
-    process.env.NODE_ENV = "production"
+    mutableProcessEnv.NODE_ENV = "production"
     const { client } = resolveGitHubClient("real")
     assert.equal(client, fakeGitHubClient)
   } finally {
-    process.env.NODE_ENV = nodeEnv
+    if (nodeEnv === undefined) delete mutableProcessEnv.NODE_ENV
+    else mutableProcessEnv.NODE_ENV = nodeEnv
   }
 })
 

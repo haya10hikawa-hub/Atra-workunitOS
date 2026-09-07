@@ -878,9 +878,9 @@ test("blocked precheck getters are read exactly once and value shifting cannot b
     ])
     const r = createBlockedRecorderAuditSummary(input as AnyInput)
     assert.equal(reads(), 1, "no_go_flags must be read exactly once")
+    for (const i of r.issues) assert.ok(!i.message.includes("validation_failed,"))
     assert.equal(r.ok, true, JSON.stringify(r.issues))
     if (r.ok) assert.deepEqual([...r.record.no_go_flags], ["validation_failed"])
-    for (const i of r.issues) assert.ok(!i.message.includes("validation_failed,"))
   }
   // status_counts: blocked evidence on first read, none on a second read.
   {

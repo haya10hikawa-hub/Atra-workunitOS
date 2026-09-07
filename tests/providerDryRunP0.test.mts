@@ -17,31 +17,31 @@ const controls = { featureFlagEnabled: true, globalKillSwitchOpen: true, tenantA
 // Phase 2C verifies the contract honors this via the preflight.
 
 test("P0: rejects forbidden approvalId in context", () => {
-  const bad: LLMContextPack = { ...base, ...{ approvalId: "secret" } as unknown }
+  const bad: LLMContextPack & { approvalId: string } = { ...base, approvalId: "secret" }
   const r = FAKE_DRY_RUN_PROVIDER.adapt({ contextPack: bad }, controls, REAL_LLM_PROVIDER_POLICY_REQUIRED)
   assert.equal(r.ok, false)
 })
 
 test("P0: rejects forbidden hash in context", () => {
-  const bad: LLMContextPack = { ...base, ...{ hash: "abc123" } as unknown }
+  const bad: LLMContextPack & { hash: string } = { ...base, hash: "abc123" }
   const r = FAKE_DRY_RUN_PROVIDER.adapt({ contextPack: bad }, controls, REAL_LLM_PROVIDER_POLICY_REQUIRED)
   assert.equal(r.ok, false)
 })
 
 test("P0: rejects forbidden tenantId in context", () => {
-  const bad: LLMContextPack = { ...base, ...{ tenantId: "t1" } as unknown }
+  const bad: LLMContextPack & { tenantId: string } = { ...base, tenantId: "t1" }
   const r = FAKE_DRY_RUN_PROVIDER.adapt({ contextPack: bad }, controls, REAL_LLM_PROVIDER_POLICY_REQUIRED)
   assert.equal(r.ok, false)
 })
 
 test("P0: rejects forbidden userId in context", () => {
-  const bad: LLMContextPack = { ...base, ...{ userId: "u1" } as unknown }
+  const bad: LLMContextPack & { userId: string } = { ...base, userId: "u1" }
   const r = FAKE_DRY_RUN_PROVIDER.adapt({ contextPack: bad }, controls, REAL_LLM_PROVIDER_POLICY_REQUIRED)
   assert.equal(r.ok, false)
 })
 
 test("P0: rejects forbidden role in context", () => {
-  const bad: LLMContextPack = { ...base, ...{ role: "admin" } as unknown }
+  const bad: LLMContextPack & { role: string } = { ...base, role: "admin" }
   const r = FAKE_DRY_RUN_PROVIDER.adapt({ contextPack: bad }, controls, REAL_LLM_PROVIDER_POLICY_REQUIRED)
   assert.equal(r.ok, false)
 })

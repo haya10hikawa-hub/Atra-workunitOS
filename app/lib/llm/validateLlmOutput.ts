@@ -13,6 +13,12 @@ import type { LlmProcessingResult } from "./types.ts"
 export const MAX_STRING_FIELD_LENGTH = 8_000
 export const MAX_ARRAY_FIELD_ENTRIES = 100
 
+const KNOWN_RISK_FLAGS = new Set([
+  "prompt_injection_detected", "source_content_includes_instruction", "raw_body_present",
+  "hallucinated_field_detected", "missing_source_evidence", "input_too_long",
+  "unexpected_output_structure", "sensitive_data_detected",
+])
+
 /**
  * Assert that a field exists, is a non-empty string, and is within bounds.
  */
@@ -50,6 +56,55 @@ export function assertStringArrayField(
   }
   if (value.length > maxEntries || value.some((v) => v.length > maxLength)) {
     warnings.push({ code: `oversized_${fieldName}`, message: `LLM output ${fieldName} exceeds bounds` })
+    return false
+  }
+  return true
+}
+
+/** Validate an optional model-produced string without accepting malformed values. */
+export function assertOptionalStringField(
+  value: unknown,
+  fieldName: string,
+  warnings: LlmProcessingResult<unknown>["warnings"],
+): value is string | undefined {
+  if (value === undefined) return true
+  if (typeof value !== "string") {
+    warnings.push({ code: `invalid_${fieldName}`, message: `LLM output has invalid ${fieldName}` })
+    return false
+  }
+  if (value.length > MAX_STRING_FIELD_LENGTH) {
+    warnings.push({ code: `oversized_${fieldName}`, message: `LLM output field exceeds max length: ${fieldName}` })
+    return false
+  }
+  return true
+}
+
+/** Validate a bounded string array where empty arrays are allowed. */
+export function assertBoundedStringArrayField(
+  value: unknown,
+  fieldName: string,
+  warnings: LlmProcessingResult<unknown>["warnings"],
+): value is string[] {
+  if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) {
+    warnings.push({ code: `invalid_${fieldName}`, message: `LLM output has invalid ${fieldName}` })
+    return false
+  }
+  if (value.length > MAX_ARRAY_FIELD_ENTRIES || value.some((v) => v.length > MAX_STRING_FIELD_LENGTH)) {
+    warnings.push({ code: `oversized_${fieldName}`, message: `LLM output ${fieldName} exceeds bounds` })
+    return false
+  }
+  return true
+}
+
+/** Validate risk flags strictly; unknown flags must not cross the trust boundary. */
+export function assertRiskFlagsField(
+  value: unknown,
+  fieldName: string,
+  warnings: LlmProcessingResult<unknown>["warnings"],
+): value is string[] {
+  if (!assertBoundedStringArrayField(value, fieldName, warnings)) return false
+  if (!value.every((flag) => KNOWN_RISK_FLAGS.has(flag))) {
+    warnings.push({ code: `invalid_${fieldName}`, message: `LLM output has unknown ${fieldName}` })
     return false
   }
   return true

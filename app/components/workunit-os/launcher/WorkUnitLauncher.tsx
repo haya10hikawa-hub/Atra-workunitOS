@@ -41,6 +41,7 @@ export function WorkUnitLauncher() {
   // default focus stage without a reset effect.
   const [nodeSelection, setNodeSelection] = useState<{ readonly workUnitId: string; readonly nodeId: string } | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [actionFieldOpen, setActionFieldOpen] = useState(true)
   const [query, setQuery] = useState("")
   const [activeIndex, setActiveIndex] = useState(0)
 
@@ -48,15 +49,26 @@ export function WorkUnitLauncher() {
   const effectiveNodeId =
     nodeSelection && nodeSelection.workUnitId === selectedWorkUnitId ? nodeSelection.nodeId : null
   const workspace = useMemo(
-    () => deriveAtraWorkspaceViewModel({ workUnit: selectedWorkUnit, selectedNodeId: effectiveNodeId }),
-    [selectedWorkUnit, effectiveNodeId],
+    () => deriveAtraWorkspaceViewModel({ workUnit: selectedWorkUnit, selectedNodeId: effectiveNodeId, actionFieldOpen }),
+    [selectedWorkUnit, effectiveNodeId, actionFieldOpen],
   )
 
   const filteredWorkUnits = useMemo(() => filterLauncherWorkUnits(workUnits, query), [workUnits, query])
   const clampedActiveIndex = clampLauncherActiveIndex(activeIndex, filteredWorkUnits.length)
 
   const handleSelectNode = (nodeId: string) => {
+    setActionFieldOpen(true)
     if (selectedWorkUnitId) setNodeSelection({ workUnitId: selectedWorkUnitId, nodeId })
+  }
+
+  const handleSelectWorkUnit = (workUnitId: string) => {
+    setSelectedWorkUnitId(workUnitId)
+    setActionFieldOpen(true)
+  }
+
+  const handleOpenActionField = () => {
+    setActionFieldOpen(true)
+    setPaletteOpen(false)
   }
 
   useEffect(() => {
@@ -82,8 +94,8 @@ export function WorkUnitLauncher() {
         const active = getActiveLauncherWorkUnit(filteredWorkUnits, clampedActiveIndex)
         if (!active) return
         event.preventDefault()
-        setSelectedWorkUnitId(active.id)
-        setPaletteOpen(false)
+        handleSelectWorkUnit(active.id)
+        handleOpenActionField()
         return
       }
       if (intent === "next") {
@@ -106,6 +118,7 @@ export function WorkUnitLauncher() {
         workspace={workspace}
         onSelectNode={handleSelectNode}
         onOpenPalette={() => setPaletteOpen(true)}
+        onCloseActionField={() => setActionFieldOpen(false)}
       />
       {paletteOpen ? (
         <div className={launcherStyles.overlay}>
@@ -119,8 +132,8 @@ export function WorkUnitLauncher() {
               setActiveIndex(0)
             }}
             onActiveIndexChange={setActiveIndex}
-            onSelectWorkUnit={setSelectedWorkUnitId}
-            onOpenActionField={() => setPaletteOpen(false)}
+            onSelectWorkUnit={handleSelectWorkUnit}
+            onOpenActionField={handleOpenActionField}
             onClose={() => setPaletteOpen(false)}
           />
         </div>

@@ -7,13 +7,19 @@ import type { InboxWorkUnitRow, WorkUnitFeedbackRow } from "../app/lib/persisten
 const tenantId = "test-tenant" as TenantId
 const ctx = { tenantId, db: null }
 const now = new Date().toISOString()
+const mutableProcessEnv = process.env as Record<string, string | undefined>
+
+function restoreNodeEnv(nodeEnv: string | undefined): void {
+  if (nodeEnv === undefined) delete mutableProcessEnv.NODE_ENV
+  else mutableProcessEnv.NODE_ENV = nodeEnv
+}
 
 // ─── Repository Resolver ────────────────────────────────────────
 
 test("in-memory bundle exposes all 7 repos", async () => {
   const envBackup = process.env.NODE_ENV
   try {
-    process.env.NODE_ENV = "development"
+    mutableProcessEnv.NODE_ENV = "development"
     const result = await resolveRepositories(tenantId, {
       env: { NODE_ENV: "development", ALLOW_IN_MEMORY_PERSISTENCE: "true" },
     })
@@ -27,20 +33,20 @@ test("in-memory bundle exposes all 7 repos", async () => {
     assert.ok(result.bundle.actionPreviews)
     assert.ok(result.bundle.approvalRecords)
   } finally {
-    process.env.NODE_ENV = envBackup
+    restoreNodeEnv(envBackup)
   }
 })
 
 test("production blocks in-memory even with flag", async () => {
   const envBackup = process.env.NODE_ENV
   try {
-    process.env.NODE_ENV = "production"
+    mutableProcessEnv.NODE_ENV = "production"
     const result = await resolveRepositories(tenantId, {
       env: { NODE_ENV: "production", ALLOW_IN_MEMORY_PERSISTENCE: "true" },
     })
     assert.equal(result.ok, false)
   } finally {
-    process.env.NODE_ENV = envBackup
+    restoreNodeEnv(envBackup)
   }
 })
 
@@ -50,7 +56,7 @@ test("workUnit repo create + findById", async () => {
   resetInMemoryReposForTests()
   const envBackup = process.env.NODE_ENV
   try {
-    process.env.NODE_ENV = "development"
+    mutableProcessEnv.NODE_ENV = "development"
     const result = await resolveRepositories(tenantId, {
       env: { NODE_ENV: "development", ALLOW_IN_MEMORY_PERSISTENCE: "true" },
     })
@@ -68,7 +74,7 @@ test("workUnit repo create + findById", async () => {
     assert.ok(found)
     assert.equal(found!.title, "Test")
   } finally {
-    process.env.NODE_ENV = envBackup
+    restoreNodeEnv(envBackup)
   }
 })
 
@@ -78,7 +84,7 @@ test("feedback repo create + findByWorkUnitId", async () => {
   resetInMemoryReposForTests()
   const envBackup = process.env.NODE_ENV
   try {
-    process.env.NODE_ENV = "development"
+    mutableProcessEnv.NODE_ENV = "development"
     const result = await resolveRepositories(tenantId, {
       env: { NODE_ENV: "development", ALLOW_IN_MEMORY_PERSISTENCE: "true" },
     })
@@ -99,7 +105,7 @@ test("feedback repo create + findByWorkUnitId", async () => {
     assert.equal(list.length, 1)
     assert.equal(list[0].feedback, "useful")
   } finally {
-    process.env.NODE_ENV = envBackup
+    restoreNodeEnv(envBackup)
   }
 })
 
@@ -109,7 +115,7 @@ test("integration connection repo upsert + findByProvider", async () => {
   resetInMemoryReposForTests()
   const envBackup = process.env.NODE_ENV
   try {
-    process.env.NODE_ENV = "development"
+    mutableProcessEnv.NODE_ENV = "development"
     const result = await resolveRepositories(tenantId, {
       env: { NODE_ENV: "development", ALLOW_IN_MEMORY_PERSISTENCE: "true" },
     })
@@ -124,7 +130,7 @@ test("integration connection repo upsert + findByProvider", async () => {
     assert.ok(conn)
     assert.equal(conn!.status, "fake")
   } finally {
-    process.env.NODE_ENV = envBackup
+    restoreNodeEnv(envBackup)
   }
 })
 
@@ -134,7 +140,7 @@ test("audit log repo append + listRecent", async () => {
   resetInMemoryReposForTests()
   const envBackup = process.env.NODE_ENV
   try {
-    process.env.NODE_ENV = "development"
+    mutableProcessEnv.NODE_ENV = "development"
     const result = await resolveRepositories(tenantId, {
       env: { NODE_ENV: "development", ALLOW_IN_MEMORY_PERSISTENCE: "true" },
     })
@@ -149,7 +155,7 @@ test("audit log repo append + listRecent", async () => {
     assert.ok(list.length > 0)
     assert.equal(list[0].eventKind, "workunit_created")
   } finally {
-    process.env.NODE_ENV = envBackup
+    restoreNodeEnv(envBackup)
   }
 })
 
@@ -159,7 +165,7 @@ test("usage repo recordEvent + getCurrentUsage", async () => {
   resetInMemoryReposForTests()
   const envBackup = process.env.NODE_ENV
   try {
-    process.env.NODE_ENV = "development"
+    mutableProcessEnv.NODE_ENV = "development"
     const result = await resolveRepositories(tenantId, {
       env: { NODE_ENV: "development", ALLOW_IN_MEMORY_PERSISTENCE: "true" },
     })
@@ -172,6 +178,6 @@ test("usage repo recordEvent + getCurrentUsage", async () => {
     const total = await result.bundle.usage.getCurrentUsage(ctx, tenantId as string, "workunit_generated")
     assert.equal(total, 3)
   } finally {
-    process.env.NODE_ENV = envBackup
+    restoreNodeEnv(envBackup)
   }
 })

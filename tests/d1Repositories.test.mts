@@ -4,7 +4,7 @@ import { FakeD1Database } from "./helpers/fakeD1.ts"
 import { D1ActionPreviewRepository } from "../app/lib/persistence/d1/actionPreviewRepository.ts"
 import { D1ApprovalRecordRepository } from "../app/lib/persistence/d1/approvalRecordRepository.ts"
 import type { TenantDbContext } from "../app/lib/persistence/types.ts"
-import type { TenantId } from "../app/lib/tenant/types.ts"
+import type { TenantId, UserId } from "../app/lib/tenant/types.ts"
 
 const tenantId = "test-tenant" as TenantId
 const ctx: TenantDbContext = { tenantId, db: null }
@@ -79,7 +79,7 @@ test("D1ApprovalRecordRepository: create + findById", async () => {
     targetHash: "h1".padEnd(64, "0"),
     payloadHash: "h2".padEnd(64, "0"),
     status: "approved" as const,
-    approvedByUserId: "user-pm" as Parameters<typeof repo.create>[0]["tenantId"],
+    approvedByUserId: "user-pm" as UserId,
     createdAt: new Date().toISOString(),
     approvedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),

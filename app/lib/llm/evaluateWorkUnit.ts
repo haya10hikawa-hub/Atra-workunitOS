@@ -9,6 +9,7 @@ import type { WorkUnitDraft } from "../domain/types.ts"
 import type { LlmProvider, WorkUnitEvaluationResult, LlmProcessingResult } from "./types.ts"
 import { buildWorkUnitEvaluationPrompt } from "./prompts.ts"
 import type { LlmModelRoute } from "./modelRouter.ts"
+import { assertBoundedStringArrayField, assertOptionalStringField } from "./validateLlmOutput.ts"
 
 /**
  * Evaluate a WorkUnitDraft for readiness.
@@ -59,13 +60,28 @@ export async function evaluateWorkUnit(
     })
     const raw = JSON.parse(response.content) as Record<string, unknown>
 
+    // Evaluation text is still untrusted model output. Reject malformed or
+    // oversized values and fall back to deterministic evaluation below.
+    if (raw.missingFields !== undefined && !assertBoundedStringArrayField(raw.missingFields, "missingFields", warnings)) {
+      return { ok: true, data: deterministicResult, warnings, stage: "evaluate_workunit" }
+    }
+    if (raw.warnings !== undefined && !assertBoundedStringArrayField(raw.warnings, "warnings", warnings)) {
+      return { ok: true, data: deterministicResult, warnings, stage: "evaluate_workunit" }
+    }
+    if (raw.suggestedNextStep !== undefined && !assertOptionalStringField(raw.suggestedNextStep, "suggestedNextStep", warnings)) {
+      return { ok: true, data: deterministicResult, warnings, stage: "evaluate_workunit" }
+    }
+
     const result: WorkUnitEvaluationResult = {
-      isExecutable: raw.isExecutable === true,
-      isComplete: raw.isComplete === true && draft.missingFields.length === 0,
-      missingFields: Array.isArray(raw.missingFields) ? raw.missingFields.filter((f): f is string => typeof f === "string") : draft.missingFields,
-      warnings: Array.isArray(raw.warnings) ? raw.warnings.filter((w): w is string => typeof w === "string") : [],
-      hallucinationRisk: isValidHallucinationRisk(raw.hallucinationRisk) ? raw.hallucinationRisk : deterministicResult.hallucinationRisk,
-      suggestedNextStep: typeof raw.suggestedNextStep === "string" ? raw.suggestedNextStep : deterministicResult.suggestedNextStep,
+      // LLM claims cannot elevate deterministic readiness or execution safety.
+      isExecutable: raw.isExecutable === true && deterministicResult.isExecutable,
+      isComplete: raw.isComplete === true && deterministicResult.isComplete,
+      missingFields: mergeUnique(deterministicResult.missingFields, (raw.missingFields as string[] | undefined) ?? []),
+      warnings: mergeUnique(deterministicResult.warnings, (raw.warnings as string[] | undefined) ?? []),
+      hallucinationRisk: stricterRisk(deterministicResult.hallucinationRisk, raw.hallucinationRisk),
+      suggestedNextStep: !deterministicResult.isExecutable
+        ? deterministicResult.suggestedNextStep
+        : (raw.suggestedNextStep as string | undefined) ?? deterministicResult.suggestedNextStep,
     }
 
     return { ok: true, data: result, warnings, stage: "evaluate_workunit" }
@@ -112,4 +128,17 @@ function evaluateDeterministic(draft: WorkUnitDraft): WorkUnitEvaluationResult {
 
 function isValidHallucinationRisk(value: unknown): value is WorkUnitEvaluationResult["hallucinationRisk"] {
   return value === "none" || value === "low" || value === "medium" || value === "high"
+}
+
+function mergeUnique(first: string[], second: string[]): string[] {
+  return [...new Set([...first, ...second])]
+}
+
+function stricterRisk(
+  deterministicRisk: WorkUnitEvaluationResult["hallucinationRisk"],
+  modelRisk: unknown,
+): WorkUnitEvaluationResult["hallucinationRisk"] {
+  if (!isValidHallucinationRisk(modelRisk)) return deterministicRisk
+  const rank = { none: 0, low: 1, medium: 2, high: 3 } as const
+  return rank[modelRisk] >= rank[deterministicRisk] ? modelRisk : deterministicRisk
 }

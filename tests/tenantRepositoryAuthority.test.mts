@@ -19,14 +19,21 @@ import {
 } from "../app/lib/persistence/repositoryResolver.ts"
 import { FakeD1Database } from "./helpers/fakeD1.ts"
 import type { TenantId } from "../app/lib/tenant/types.ts"
-import type { TenantDbResolver, TenantDbResolution } from "../app/lib/persistence/repositories.ts"
+import { TENANT_DATA_BINDING, type TenantDbResolver, type TenantDbResolution } from "../app/lib/persistence/repositories.ts"
 import type { D1DatabaseLike } from "../app/lib/persistence/d1/types.ts"
+import { CANONICAL_TENANT_SCHEMA_VERSION } from "../app/lib/persistence/tenantSchemaVersion.ts"
 
 const tA = "tenant-a" as TenantId
 const persistence = (control: D1DatabaseLike, tenant: D1DatabaseLike) =>
   ({ mode: "d1" as const, CONTROL_DB: control, TENANT_DB_DEFAULT: tenant })
 const fixedResolver = (resolution: TenantDbResolution): TenantDbResolver => ({ async resolveTenantDb() { return resolution } })
-const activeResolver = (db: D1DatabaseLike): TenantDbResolver => fixedResolver({ ok: true, ctx: { tenantId: tA, db } })
+const successfulResolution = (tenantId: TenantId, db: D1DatabaseLike | null): TenantDbResolution => ({
+  ok: true,
+  ctx: { tenantId, db },
+  binding: TENANT_DATA_BINDING,
+  schemaVersion: CANONICAL_TENANT_SCHEMA_VERSION,
+})
+const activeResolver = (db: D1DatabaseLike): TenantDbResolver => fixedResolver(successfulResolution(tA, db))
 
 // ─── 1. production D1 without a resolver fails ──────────────────
 
@@ -75,7 +82,7 @@ test("2b. production rejects the control DB returned as tenant storage", async (
   const control = new FakeD1Database(), tenant = new FakeD1Database()
   const result = await resolveProductionRepositories(tA, {
     persistence: persistence(control, tenant),
-    resolver: fixedResolver({ ok: true, ctx: { tenantId: tA, db: control } }),
+    resolver: fixedResolver(successfulResolution(tA, control)),
   })
   assert.equal(result.ok === false && result.error, "tenant_resolution_failed")
 })
@@ -84,7 +91,7 @@ test("2c. production fails closed on a context-tenant mismatch", async () => {
   const control = new FakeD1Database(), tenant = new FakeD1Database()
   const result = await resolveProductionRepositories(tA, {
     persistence: persistence(control, tenant),
-    resolver: fixedResolver({ ok: true, ctx: { tenantId: "other" as TenantId, db: tenant } }),
+    resolver: fixedResolver(successfulResolution("other" as TenantId, tenant)),
   })
   assert.equal(result.ok === false && result.error, "tenant_resolution_failed")
 })
@@ -133,7 +140,7 @@ test("4. every production resolution consults the resolver — a failing resolve
     { ok: false, reason: "tenant_not_found" } as const,
     { ok: false, reason: "database_not_found" } as const,
     { ok: false, reason: "database_invalid" } as const,
-    { ok: true, ctx: { tenantId: tA, db: null } } as const, // malformed ctx (null db)
+    successfulResolution(tA, null), // malformed ctx (null db)
   ]) {
     const result = await resolveProductionRepositories(tA, { persistence: persistence(control, tenant), resolver: fixedResolver(resolution) })
     assert.equal(result.ok, false, `resolution ${JSON.stringify(resolution)} must not yield a production bundle`)

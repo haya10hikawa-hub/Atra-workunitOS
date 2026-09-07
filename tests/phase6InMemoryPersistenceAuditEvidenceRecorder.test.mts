@@ -406,7 +406,7 @@ test("recordAuditEvent stores the captured validated field; the later getter val
 test("recordAuditEvent fails closed on a throwing event getter without echoing the thrown value", () => {
   const secret = "thrown-secret-must-not-leak"
   const event = { ...VALID_PUT_AUDIT_EVENT_FIXTURE }
-  delete event.payload_hash
+  Reflect.deleteProperty(event, "payload_hash")
   Object.defineProperty(event, "payload_hash", {
     enumerable: true,
     configurable: true,

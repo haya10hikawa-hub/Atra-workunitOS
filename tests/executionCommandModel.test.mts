@@ -164,8 +164,9 @@ test("previewRefs reduced to safe actionId + previewId only — no extra keys", 
 
 test("blockedReason is always non-null string when blocked", () => {
   const envelope = buildExecutionCommandEnvelope(baseInput({ approvalId: "ap:1" }))
-  assert.equal(typeof envelope.blockedReason, "string")
-  assert.ok(envelope.blockedReason.length > 0)
+  const blockedReason = envelope.blockedReason
+  assert.ok(typeof blockedReason === "string")
+  assert.ok(blockedReason.length > 0)
 })
 
 test("blockedReason mentions unavailability when approvalId is null", () => {

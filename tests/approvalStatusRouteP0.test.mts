@@ -11,6 +11,7 @@ import { seedDevControlWorkspace } from "./helpers/devControlWorkspace.ts"
 
 const tenantId = "dev-tenant" as TenantId
 const testSafeFutureExpiresAt = "2999-01-01T00:00:00.000Z"
+const mutableProcessEnv = process.env as Record<string, string | undefined>
 
 test("approval status route does not expose approvalId or hashes", async () => {
   await withPersistence(async () => {
@@ -49,7 +50,7 @@ async function withPersistence(testFn: () => Promise<void>) {
     PERSISTENCE_MODE: process.env.PERSISTENCE_MODE,
   }
   try {
-    process.env.NODE_ENV = "development"
+    mutableProcessEnv.NODE_ENV = "development"
     process.env.AUTH_ADAPTER = "dev"
     process.env.ALLOW_DEV_SESSION = "true"
     process.env.ALLOW_DEV_WORKSPACE_BOOTSTRAP = "true"

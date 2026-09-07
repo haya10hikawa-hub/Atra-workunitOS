@@ -315,12 +315,16 @@ export async function acquireRecordedGitHubPullRequestCapture(
   // module would mint the issue's own primary key into the pull request namespace, and no
   // reviewer holding the bytes could tell from the record that it had happened.
   //
-  // `head` and `base` are the check because they are definitional rather than incidental: a
-  // pull request proposes merging one ref into another, the pulls representation carries
-  // both, and the issues representation carries neither. This is a fail-closed guard, not a
-  // claim about GitHub's schema — it says the retained payload does not look like this
-  // resource, so acquisition refuses rather than relabelling it.
-  if (!isPlainObject(providerObject.head) || !isPlainObject(providerObject.base)) {
+  // `head` and `base` are definitional ref structures, while the remaining markers/types
+  // are established PR-only members in the reviewed retained schema. This is a fail-closed
+  // shape discriminator, not provider authentication: a third resource could imitate it.
+  const hasPullRequestShape = isPlainObject(providerObject.head)
+    && isPlainObject(providerObject.base)
+    && (typeof providerObject.merge_commit_sha === "string" || providerObject.merge_commit_sha === null)
+    && typeof providerObject.changed_files === "number"
+    && Number.isSafeInteger(providerObject.changed_files)
+    && providerObject.changed_files >= 0
+  if (!hasPullRequestShape) {
     return fail("provider_resource_mismatch")
   }
 

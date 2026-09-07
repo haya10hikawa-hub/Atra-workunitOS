@@ -21,8 +21,9 @@ import {
 import { createFakeTenantDbResolver } from "../app/lib/persistence/tenantDbResolver.ts"
 import { FakeD1Database } from "./helpers/fakeD1.ts"
 import type { TenantId } from "../app/lib/tenant/types.ts"
-import type { TenantDbResolution, TenantDbResolver } from "../app/lib/persistence/repositories.ts"
+import { TENANT_DATA_BINDING, type TenantDbResolution, type TenantDbResolver } from "../app/lib/persistence/repositories.ts"
 import type { D1DatabaseLike } from "../app/lib/persistence/d1/types.ts"
+import { CANONICAL_TENANT_SCHEMA_VERSION } from "../app/lib/persistence/tenantSchemaVersion.ts"
 import type { AppEnv } from "../app/types/cloudflare-env.ts"
 
 const T = "test-tenant" as TenantId
@@ -124,6 +125,14 @@ test("10. Cloudflare runtimeEnv with a resolver resolves to exactly ctx.db", asy
   assert.equal(result.ok, true)
   if (result.ok) assert.equal(result.bundle.ctx.db, tenantDb)
   // A resolver returning the control DB as tenant storage fails closed.
-  const bad = await resolveRepositories(T, { runtimeEnv: cfEnv(control, tenantDb), resolver: fixedResolver({ ok: true, ctx: { tenantId: T, db: control } }) })
+  const bad = await resolveRepositories(T, {
+    runtimeEnv: cfEnv(control, tenantDb),
+    resolver: fixedResolver({
+      ok: true,
+      ctx: { tenantId: T, db: control },
+      binding: TENANT_DATA_BINDING,
+      schemaVersion: CANONICAL_TENANT_SCHEMA_VERSION,
+    }),
+  })
   assert.equal(bad.ok, false)
 })

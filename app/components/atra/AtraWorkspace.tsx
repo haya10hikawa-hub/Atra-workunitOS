@@ -28,9 +28,10 @@ type AtraWorkspaceProps = {
   readonly workspace: AtraWorkspaceViewModel
   readonly onSelectNode: (id: string) => void
   readonly onOpenPalette: () => void
+  readonly onCloseActionField: () => void
 }
 
-export function AtraWorkspace({ workspace, onSelectNode, onOpenPalette }: AtraWorkspaceProps) {
+export function AtraWorkspace({ workspace, onSelectNode, onOpenPalette, onCloseActionField }: AtraWorkspaceProps) {
   const composeIndex = workspace.processNodes.findIndex((node) => node.output)
   const composeNode = composeIndex >= 0 ? workspace.processNodes[composeIndex]! : null
 
@@ -38,7 +39,7 @@ export function AtraWorkspace({ workspace, onSelectNode, onOpenPalette }: AtraWo
     <div className={styles.root}>
       <header className={styles.topbar}>
         <div className={styles.topLeft}>
-          <button type="button" className={styles.iconBtn} aria-label="Menu">{MenuIcon}</button>
+          <button type="button" className={styles.iconBtn} aria-label="Menu unavailable in this preview" title="Unavailable in this preview" disabled>{MenuIcon}</button>
           <span className={styles.logo}>Atra</span>
           <nav className={styles.breadcrumb} aria-label="Workspace breadcrumb">
             <span>Workspace</span>
@@ -52,18 +53,18 @@ export function AtraWorkspace({ workspace, onSelectNode, onOpenPalette }: AtraWo
           <kbd className={styles.paletteKbd}>⌘ K</kbd>
         </button>
         <div className={styles.topRight}>
-          <button type="button" className={styles.iconBtn} aria-label="Settings">{GearIcon}</button>
-          <button type="button" className={styles.iconBtn} aria-label="Help">{HelpIcon}</button>
-          <button type="button" className={styles.iconBtn} aria-label="Notifications">{BellIcon}</button>
+          <button type="button" className={styles.iconBtn} aria-label="Settings unavailable in this preview" title="Unavailable in this preview" disabled>{GearIcon}</button>
+          <button type="button" className={styles.iconBtn} aria-label="Help unavailable in this preview" title="Unavailable in this preview" disabled>{HelpIcon}</button>
+          <button type="button" className={styles.iconBtn} aria-label="Notifications unavailable in this preview" title="Unavailable in this preview" disabled>{BellIcon}</button>
         </div>
       </header>
 
-      <div className={styles.body}>
+      <div className={`${styles.body} ${workspace.actionField.visible ? "" : styles.bodyActionFieldClosed}`}>
         <aside className={styles.rail} aria-label="Workspace tools">
-          <button type="button" className={`${styles.railBtn} ${styles.railBtnActive}`} aria-label="Focus">{FocusIcon}</button>
-          <button type="button" className={styles.railBtn} aria-label="Fit view">{FitIcon}</button>
-          <button type="button" className={styles.railBtn} aria-label="Groups">{GridIcon}</button>
-          <button type="button" className={styles.railBtn} aria-label="Filter">{FilterIcon}</button>
+          <button type="button" className={`${styles.railBtn} ${styles.railBtnActive}`} aria-label="Focus unavailable in this preview" title="Unavailable in this preview" disabled>{FocusIcon}</button>
+          <button type="button" className={styles.railBtn} aria-label="Fit view unavailable in this preview" title="Unavailable in this preview" disabled>{FitIcon}</button>
+          <button type="button" className={styles.railBtn} aria-label="Groups unavailable in this preview" title="Unavailable in this preview" disabled>{GridIcon}</button>
+          <button type="button" className={styles.railBtn} aria-label="Filter unavailable in this preview" title="Unavailable in this preview" disabled>{FilterIcon}</button>
         </aside>
 
         <main className={styles.canvas} aria-label="Node Canvas">
@@ -124,18 +125,18 @@ export function AtraWorkspace({ workspace, onSelectNode, onOpenPalette }: AtraWo
           </div>
         </main>
 
+        {workspace.actionField.visible ? (
         <section className={styles.actionField} aria-label="Action Field">
           <header className={styles.afHeader}>
             <span className={styles.afTitle}>
               Action Field: <span className={styles.afPath}>{workspace.actionField.path}</span>
             </span>
-            <button type="button" className={styles.iconBtn} aria-label="Close Action Field">{CloseIcon}</button>
+            <button type="button" className={styles.iconBtn} aria-label="Close Action Field" onClick={onCloseActionField}>{CloseIcon}</button>
           </header>
 
           <article className={styles.afCard}>
             <div className={styles.afOutputRow}>
               <span className={styles.afOutputLabel}>Output: {workspace.actionField.outputTitle}</span>
-              <button type="button" className={styles.iconBtn} aria-label="Edit output">{PencilIcon}</button>
             </div>
             <div className={styles.afLinked}>
               <span>Linked Context:</span>
@@ -148,18 +149,18 @@ export function AtraWorkspace({ workspace, onSelectNode, onOpenPalette }: AtraWo
           <article className={styles.afCard}>
             <div className={styles.afDraftHead}>
               <span className={styles.afDraftLabel}>
-                Generated Draft — <span className={styles.afDraftFile}>{workspace.actionField.draftFilename}</span>
+                Candidate preview — read-only <span className={styles.afDraftFile}>{workspace.actionField.draftFilename}</span>
               </span>
-              <span className={styles.afBadge}>Local edits only</span>
+              <span className={styles.afBadge}>Read-only</span>
             </div>
             <div className={styles.afDraftBody}>
               {workspace.actionField.draftBlocks.map((block, index) => (
                 <DraftBlockView key={index} block={block} />
               ))}
-              <span className={styles.afCursor} aria-hidden="true" />
             </div>
           </article>
         </section>
+        ) : null}
       </div>
 
       <footer className={styles.statusbar}>
@@ -268,7 +269,6 @@ const GearIcon = <svg viewBox="0 0 24 24" width="16" height="16" {...stroke}><ci
 const HelpIcon = <svg viewBox="0 0 24 24" width="16" height="16" {...stroke}><circle cx="12" cy="12" r="9" /><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.8.4-1 .9-1 1.7M12 17h.01" /></svg>
 const BellIcon = <svg viewBox="0 0 24 24" width="16" height="16" {...stroke}><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6M10 20a2 2 0 0 0 4 0" /></svg>
 const CloseIcon = <svg viewBox="0 0 24 24" width="16" height="16" {...stroke}><path d="M6 6l12 12M18 6 6 18" /></svg>
-const PencilIcon = <svg viewBox="0 0 24 24" width="14" height="14" {...stroke}><path d="M14 5l5 5M4 20l1-4 11-11 4 4-11 11-4 1Z" /></svg>
 const FocusIcon = <svg viewBox="0 0 24 24" width="18" height="18" {...stroke}><circle cx="12" cy="12" r="3" /><path d="M12 3v3M12 18v3M3 12h3M18 12h3" /></svg>
 const FitIcon = <svg viewBox="0 0 24 24" width="18" height="18" {...stroke}><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4" /></svg>
 const GridIcon = <svg viewBox="0 0 24 24" width="18" height="18" {...stroke}><rect x="4" y="4" width="7" height="7" rx="1" /><rect x="13" y="4" width="7" height="7" rx="1" /><rect x="4" y="13" width="7" height="7" rx="1" /><rect x="13" y="13" width="7" height="7" rx="1" /></svg>

@@ -11,6 +11,7 @@ import type { SourceCandidate, WorkUnitDraft } from "../domain/types.ts"
 import type { LlmProvider, WorkUnitDraftGenerationOutput, LlmProcessingResult, RiskFlag } from "./types.ts"
 import { buildWorkUnitDraftGenerationPrompt } from "./prompts.ts"
 import { calculatePriorityScore, clampScore } from "./scoreWorkUnit.ts"
+import { assertBoundedStringArrayField, assertRiskFlagsField, validateWorkUnitDraftMinimum } from "./validateLlmOutput.ts"
 import type { LlmModelRoute } from "./modelRouter.ts"
 
 /**
@@ -93,6 +94,19 @@ function parseDraftOutput(
   try {
     const raw = JSON.parse(content) as Record<string, unknown>
 
+    if (!validateWorkUnitDraftMinimum(raw, warnings)) return null
+
+    for (const [field, value] of Object.entries({
+      missingFields: raw.missingFields,
+      riskFlags: raw.riskFlags,
+    })) {
+      if (value === undefined) continue
+      const valid = field === "riskFlags"
+        ? assertRiskFlagsField(value, field, warnings)
+        : assertBoundedStringArrayField(value, field, warnings)
+      if (!valid) return null
+    }
+
     if (typeof raw.title !== "string" || !raw.title.trim()) {
       warnings.push({ code: "missing_title", message: "LLM did not produce a title" })
       return null
@@ -102,15 +116,15 @@ function parseDraftOutput(
       title: raw.title as string,
       situation: typeof raw.situation === "string" ? raw.situation : "",
       problem: typeof raw.problem === "string" ? raw.problem : "",
-      actors: Array.isArray(raw.actors) ? raw.actors.filter((a): a is string => typeof a === "string") : [],
+      actors: raw.actors as string[],
       nextAction: typeof raw.nextAction === "string" ? raw.nextAction : "",
-      tasks: Array.isArray(raw.tasks) ? raw.tasks.filter((t): t is string => typeof t === "string") : [],
-      missingFields: Array.isArray(raw.missingFields) ? raw.missingFields.filter((f): f is string => typeof f === "string") : [],
+      tasks: raw.tasks as string[],
+      missingFields: (raw.missingFields as string[] | undefined) ?? [],
       suggestedImpact: typeof raw.suggestedImpact === "number" ? raw.suggestedImpact : 3,
       suggestedUrgency: typeof raw.suggestedUrgency === "number" ? raw.suggestedUrgency : 3,
       suggestedEffort: typeof raw.suggestedEffort === "number" ? raw.suggestedEffort : 3,
       suggestedActorWeight: typeof raw.suggestedActorWeight === "number" ? raw.suggestedActorWeight : 3,
-      riskFlags: Array.isArray(raw.riskFlags) ? raw.riskFlags.filter((f): f is string => typeof f === "string") as RiskFlag[] : [],
+      riskFlags: (raw.riskFlags as RiskFlag[] | undefined) ?? [],
     }
   } catch {
     warnings.push({ code: "parse_failed", message: "Failed to parse LLM JSON output" })

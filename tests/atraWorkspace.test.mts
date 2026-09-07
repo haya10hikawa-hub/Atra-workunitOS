@@ -21,6 +21,7 @@ const MODEL = readFileSync(join(process.cwd(), "app/lib/application/atra/atraWor
 const DERIVER = readFileSync(join(process.cwd(), "app/lib/application/atra/deriveAtraWorkspaceViewModel.ts"), "utf-8")
 const CSS = readFileSync(join(process.cwd(), "app/components/atra/Atra.module.css"), "utf-8")
 const LAUNCHER = readFileSync(join(process.cwd(), "app/components/workunit-os/launcher/WorkUnitLauncher.tsx"), "utf-8")
+const PALETTE = readFileSync(join(process.cwd(), "app/components/workunit-os/launcher/CommandPaletteView.tsx"), "utf-8")
 
 function sampleWorkUnit(over: Partial<LauncherWorkUnit> & { id: string }): LauncherWorkUnit {
   return {
@@ -59,7 +60,7 @@ test("Atra view model is candidate-only and human-review-required", () => {
   const m = deriveAtraWorkspaceViewModel({ workUnit: sampleWorkUnit({ id: "wu-1" }) })
   assert.equal(m.actionField.candidateOnly, true)
   assert.equal(m.actionField.humanReviewRequired, true)
-  assert.equal(m.actionField.localEditsOnly, true)
+  assert.equal(m.actionField.readOnlyCandidatePreview, true)
 })
 
 test("Atra view model emits no forbidden fields", () => {
@@ -76,9 +77,19 @@ test("Atra view model keeps the stable process-stage template", () => {
   const compose = m.processNodes.find((n) => n.id === "compose")!
   assert.equal(compose.state, "selected")
   assert.equal(compose.output?.label, "Slide Deck (v4)")
-  assert.deepEqual(compose.badges.map((b) => b.code), ["NO", "DR"])
+  assert.deepEqual(compose.badges, [])
   // Template is exported as a stable design constant.
   assert.equal(ATRA_PROCESS_TEMPLATE.length, 7)
+})
+
+test("a Calendar-only candidate does not project unrelated providers as source evidence", () => {
+  const m = deriveAtraWorkspaceViewModel({
+    workUnit: sampleWorkUnit({ id: "calendar-only", source: "Calendar" }),
+  })
+  assert.deepEqual(
+    m.processNodes.flatMap((node) => node.badges.map((badge) => badge.code)),
+    [],
+  )
 })
 
 test("Atra view model core objective is derived from the selected WorkUnit", () => {
@@ -92,19 +103,58 @@ test("Atra view model action field defaults to Compose / Slide Deck (v4)", () =>
   const m = deriveAtraWorkspaceViewModel({ workUnit: sampleWorkUnit({ id: "wu-1" }) })
   assert.equal(m.actionField.path, "Compose / Slide Deck (v4)")
   assert.equal(m.actionField.outputTitle, "Slide Deck")
-  assert.equal(m.actionField.draftFilename, "editable.md")
+  assert.equal(m.actionField.draftFilename, "candidate-preview.md")
   assert.ok(m.actionField.draftBlocks.length > 0)
+})
+
+test("Atra view model carries explicit Action Field visibility", () => {
+  const workUnit = sampleWorkUnit({ id: "wu-1" })
+  assert.equal(deriveAtraWorkspaceViewModel({ workUnit }).actionField.visible, true)
+  assert.equal(deriveAtraWorkspaceViewModel({ workUnit, actionFieldOpen: false }).actionField.visible, false)
 })
 
 // ─── Component: target UI strings ─────────────────────────────
 test("Atra component renders the target shell labels", () => {
   for (const label of [
     ">Atra<", "Workspace", "Command Palette", "Action Field", "Output:",
-    "Linked Context:", "Generated Draft", "Local edits only", "Safety Protocol",
+    "Linked Context:", "Candidate preview — read-only", "Safety Protocol",
     "Finalization Queue", "System Logs",
   ]) {
     assert.ok(COMPONENT.includes(label), `component should render ${label}`)
   }
+})
+
+test("Atra Action Field exposes a read-only candidate preview without an edit affordance", () => {
+  assert.equal(COMPONENT.includes('aria-label="Edit output"'), false)
+  assert.equal(COMPONENT.includes("styles.afCursor"), false)
+  assert.equal(COMPONENT.includes("Candidate preview — read-only"), true)
+})
+
+test("Atra Action Field closes by hiding its region and selection paths reopen it", () => {
+  assert.equal(COMPONENT.includes("workspace.actionField.visible ?"), true)
+  assert.equal(COMPONENT.includes("onCloseActionField"), true)
+  assert.equal(LAUNCHER.includes("setActionFieldOpen(false)"), true)
+  assert.equal(LAUNCHER.includes("setActionFieldOpen(true)"), true)
+  assert.equal(LAUNCHER.includes("actionFieldOpen"), true)
+})
+
+test("handlerless Atra header and rail controls are honestly unavailable", () => {
+  for (const label of ["Menu", "Settings", "Help", "Notifications", "Focus", "Fit view", "Groups", "Filter"]) {
+    assert.equal(COMPONENT.includes(`aria-label="${label} unavailable in this preview"`), true, label)
+  }
+  assert.equal((COMPONENT.match(/disabled/g) ?? []).length >= 8, true)
+  assert.equal(CSS.includes(".iconBtn:disabled"), true)
+  assert.equal(CSS.includes(".railBtn:disabled"), true)
+  assert.equal(COMPONENT.includes("onClick={onOpenPalette}"), true)
+  assert.equal(COMPONENT.includes("onClick={onCloseActionField}"), true)
+  assert.equal(COMPONENT.includes("onClick={props.onSelect}"), true)
+})
+
+test("Command Palette does not offer pagination it cannot perform", () => {
+  assert.equal(PALETTE.includes("Show more results"), false)
+  assert.equal(PALETTE.includes("All supplied results shown"), true)
+  assert.equal(PALETTE.includes("Enter = Open Detail"), false)
+  assert.equal(PALETTE.includes("Enter = Open Action Field"), true)
 })
 
 // ─── Safety: no execution / forbidden routes / forbidden data ─
@@ -197,6 +247,12 @@ test("Action Field column width is clamped (bounded), not fixed to viewport drif
   const body = cssBlock(".body")
   assert.ok(body.includes("grid-template-columns"))
   assert.ok(body.includes("clamp("), "Action Field column must be clamped")
+})
+
+test("closed Action Field layout wins the responsive body rule", () => {
+  assert.ok(CSS.includes(".body.bodyActionFieldClosed {"), "closed layout needs higher specificity")
+  const closed = cssBlock(".body.bodyActionFieldClosed")
+  assert.match(closed, /grid-template-columns:\s*56px minmax\(0, 1fr\)/)
 })
 
 test("typography stays in px (no viewport-scaled font sizes)", () => {

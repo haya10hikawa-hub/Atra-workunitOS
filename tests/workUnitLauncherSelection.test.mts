@@ -4,6 +4,7 @@ import { deriveActionFieldEditorDraft, deriveLauncherReadinessCards } from "../a
 import { filterForbiddenPaletteCommands } from "../app/lib/application/launcher/forbiddenCommandFilter.ts"
 import { getLauncherKeyIntent, nextLauncherIndex } from "../app/lib/application/launcher/keyboardNavigationModel.ts"
 import { getSafePaletteCommands } from "../app/lib/application/launcher/paletteCommandRegistry.ts"
+import { resolveSourceAppIcon } from "../app/lib/application/launcher/sourceAppIconModel.ts"
 import { deriveWorkUnitTreeMap } from "../app/lib/application/launcher/workUnitTreeModel.ts"
 import {
   clampLauncherActiveIndex,
@@ -24,6 +25,7 @@ const workUnits: LauncherWorkUnit[] = [
     kind: "review waiting",
     priority: "high",
     ownerLabel: "PM",
+    sourceIcon: resolveSourceAppIcon({ sourceProvider: "github", title: "Review request" }),
   },
   {
     id: "wu-2",
@@ -36,6 +38,7 @@ const workUnits: LauncherWorkUnit[] = [
     kind: "missed response",
     priority: "medium",
     ownerLabel: "PM",
+    sourceIcon: resolveSourceAppIcon({ sourceProvider: "team", title: "Team follow-up" }),
   },
 ]
 

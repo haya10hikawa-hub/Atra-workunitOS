@@ -107,7 +107,7 @@ test("D1AuditLogRepository: append + listRecent", async () => {
   const repo = new D1AuditLogRepository(db)
   const row: AuditLogRow = {
     id: id("audit"), tenantId: ctx.tenantId, eventKind: "workunit_created",
-    actorId: "user-1", workUnitId: id("wu"), occurredAt: now,
+    actorId: "user-1" as NonNullable<AuditLogRow["actorId"]>, workUnitId: id("wu"), occurredAt: now,
   }
   await repo.append(ctx, row)
   const list = await repo.listRecent(ctx, 10)

@@ -54,11 +54,12 @@ export type AtraDraftBlock =
   | { readonly kind: "note"; readonly text: string }
 
 export type AtraActionField = {
+  readonly visible: boolean
   readonly path: string
   readonly outputTitle: string
   readonly linkedContext: readonly string[]
   readonly draftFilename: string
-  readonly localEditsOnly: true
+  readonly readOnlyCandidatePreview: true
   readonly draftBlocks: readonly AtraDraftBlock[]
   readonly candidateOnly: true
   readonly humanReviewRequired: true
@@ -85,13 +86,13 @@ export type AtraProcessTemplateNode = {
 }
 
 export const ATRA_PROCESS_TEMPLATE: readonly AtraProcessTemplateNode[] = [
-  templateNode("orient", "Orient", [badge("DB", "database"), badge("SL", "slack")]),
+  templateNode("orient", "Orient", []),
   templateNode("plan", "Plan", []),
-  { id: "compose", label: "Compose", badges: [badge("NO", "notion"), badge("DR", "drive")], output: ATRA_SLIDE_DECK_OUTPUT },
-  templateNode("verify", "Verify", [badge("SL", "slack")]),
-  templateNode("resolve", "Resolve", [badge("GH", "github"), badge("EM", "email")]),
+  { id: "compose", label: "Compose", badges: [], output: ATRA_SLIDE_DECK_OUTPUT },
+  templateNode("verify", "Verify", []),
+  templateNode("resolve", "Resolve", []),
   templateNode("review", "Review", []),
-  templateNode("intake", "", [badge("CA", "calendar")]),
+  templateNode("intake", "", []),
 ]
 
 /** Map a known 2-letter source code to its tone (used to color inline source-code spans). */
@@ -107,8 +108,4 @@ export const ATRA_TOKEN_TONE: Readonly<Record<string, AtraBadgeTone>> = {
 
 function templateNode(id: string, label: string, badges: readonly AtraSourceBadge[]): AtraProcessTemplateNode {
   return { id, label, badges }
-}
-
-function badge(code: string, tone: AtraBadgeTone): AtraSourceBadge {
-  return { code, tone }
 }

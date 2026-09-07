@@ -6,34 +6,68 @@ import {
   classifyCandidateOnlyMockBoundaryResult,
   createBlockedCandidateOnlyDecompositionClassifierResult,
 } from "../app/lib/application/llmProvider/candidateOnlyDecompositionClassifier.ts"
+import type { CandidateOnlyMockBoundaryHarnessResult } from "../app/lib/application/llmProvider/candidateOnlyMockBoundaryHarness.ts"
 
 const SRC = readFileSync(join(import.meta.dirname!, "../app/lib/application/llmProvider/candidateOnlyDecompositionClassifier.ts"), "utf-8")
 
 // Local fixtures — no runtime imports from 4F/4G/4H
-function mockHarness(opts?: Partial<Record<string, unknown>>): Record<string, unknown> {
+type MockHarnessOptions = {
+  readonly decision?: CandidateOnlyMockBoundaryHarnessResult["routing"]["decision"]
+  readonly providerBlocked?: boolean
+  readonly text?: string
+}
+
+function mockHarness(opts: MockHarnessOptions = {}): CandidateOnlyMockBoundaryHarnessResult {
   return {
+    phase: "phase_4f_candidate_only_mock_boundary_harness",
+    flowSegment: "mock_boundary_to_routing_gate_to_candidate_only_result",
     candidateOnly: true,
     liveIntegrationAllowed: false,
     externalExecutionAllowed: false,
     approvalCreationAllowed: false,
     executionCreationAllowed: false,
     routing: {
-      decision: opts?.decision ?? "route_to_dry_run_adapter",
+      decision: opts.decision ?? "route_to_dry_run_adapter",
       selectedAdapterId: "dry_run_provider_adapter",
       reason: "dry_run_adapter_allowed",
-    },
-    provider: {
-      adapterId: "dry_run_provider_adapter",
-      mode: "dry_run",
-      blocked: opts?.providerBlocked ?? (opts?.blocked ?? false),
-      candidateOnly: opts?.providerCandidateOnly ?? true,
+      candidateOnly: true,
       liveIntegrationAllowed: false,
       externalExecutionAllowed: false,
       approvalCreationAllowed: false,
       executionCreationAllowed: false,
-      textCandidate: opts?.text ?? "[DRY_RUN_CANDIDATE_ONLY] No live provider was called.",
     },
+    provider: {
+      adapterId: "dry_run_provider_adapter",
+      mode: "dry_run",
+      blocked: opts.providerBlocked ?? false,
+      candidateOnly: true,
+      liveIntegrationAllowed: false,
+      externalExecutionAllowed: false,
+      approvalCreationAllowed: false,
+      executionCreationAllowed: false,
+      textCandidate: opts.text ?? "[DRY_RUN_CANDIDATE_ONLY] No live provider was called.",
+      diagnostics: [],
+    },
+    productionPipelineConnected: false,
+    uiConnected: false,
+    sourceSignalConnected: false,
+    contextPackConnected: false,
+    exclusionScannerConnected: false,
+    decompositionClassifierConnected: false,
+    actionFieldConnected: false,
+    humanReviewConnected: false,
   }
+}
+
+function corruptCandidateOnlyInvariant(
+  fixture: CandidateOnlyMockBoundaryHarnessResult,
+  target: "boundary" | "provider",
+): CandidateOnlyMockBoundaryHarnessResult {
+  const corrupted = structuredClone(fixture)
+  Object.defineProperty(target === "boundary" ? corrupted : corrupted.provider, "candidateOnly", {
+    value: false,
+  })
+  return corrupted
 }
 
 const dryRun = mockHarness()
@@ -80,10 +114,8 @@ test("non-empty unknown textCandidate classifies as clarification_needed", () =>
 
 // ─── Broken candidateOnly contract ────────────────────────────
 
-import type { CandidateOnlyMockBoundaryHarnessResult } from "../app/lib/application/llmProvider/candidateOnlyMockBoundaryHarness.ts"
-
 test("mockBoundary.candidateOnly false classifies as blocked_candidate", () => {
-  const unsafe = { ...dryRun, candidateOnly: false } as unknown as CandidateOnlyMockBoundaryHarnessResult
+  const unsafe = corruptCandidateOnlyInvariant(dryRun, "boundary")
   const r = classifyCandidateOnlyMockBoundaryResult(unsafe)
   assert.equal(r.candidateType, "blocked_candidate")
   assert.equal(r.decision, "block_candidate_type")
@@ -91,7 +123,7 @@ test("mockBoundary.candidateOnly false classifies as blocked_candidate", () => {
 })
 
 test("mockBoundary.provider.candidateOnly false classifies as blocked_candidate", () => {
-  const unsafe = { ...dryRun, provider: { ...dryRun.provider, candidateOnly: false } } as unknown as CandidateOnlyMockBoundaryHarnessResult
+  const unsafe = corruptCandidateOnlyInvariant(dryRun, "provider")
   const r = classifyCandidateOnlyMockBoundaryResult(unsafe)
   assert.equal(r.candidateType, "blocked_candidate")
   assert.equal(r.decision, "block_candidate_type")
@@ -99,13 +131,13 @@ test("mockBoundary.provider.candidateOnly false classifies as blocked_candidate"
 })
 
 test("mockBoundary.candidateOnly false does not classify as workunit_candidate even if text matches", () => {
-  const unsafe = { ...dryRun, candidateOnly: false } as unknown as CandidateOnlyMockBoundaryHarnessResult
+  const unsafe = corruptCandidateOnlyInvariant(dryRun, "boundary")
   const r = classifyCandidateOnlyMockBoundaryResult(unsafe)
   assert.notEqual(r.candidateType, "workunit_candidate")
 })
 
 test("mockBoundary.provider.candidateOnly false does not classify as workunit_candidate even if text matches", () => {
-  const unsafe = { ...dryRun, provider: { ...dryRun.provider, candidateOnly: false } } as unknown as CandidateOnlyMockBoundaryHarnessResult
+  const unsafe = corruptCandidateOnlyInvariant(dryRun, "provider")
   const r = classifyCandidateOnlyMockBoundaryResult(unsafe)
   assert.notEqual(r.candidateType, "workunit_candidate")
 })
@@ -151,7 +183,7 @@ test("output is deterministic", () => {
 
 test("returned object is fresh per call", () => {
   const a = classifyCandidateOnlyMockBoundaryResult(dryRun)
-  ;(a as unknown as Record<string, boolean>).liveIntegrationAllowed = true
+  Object.defineProperty(a, "liveIntegrationAllowed", { value: true })
   assert.equal(classifyCandidateOnlyMockBoundaryResult(dryRun).liveIntegrationAllowed, false)
 })
 

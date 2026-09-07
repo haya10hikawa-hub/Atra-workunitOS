@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // This repository owns its AGENTS.md. Keep `next dev` from appending
+  // generated agent instructions to a tracked authority file.
+  agentRules: false,
   output: "standalone",
   poweredByHeader: false,
   async headers() {

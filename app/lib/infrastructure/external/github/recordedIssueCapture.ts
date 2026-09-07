@@ -117,6 +117,13 @@ const CAPTURED_FROM_KEYS = [
 
 const RETAINED_CONTENT_KEYS = ["retention", "bytesBase64"] as const
 
+// These members are pull-request-only markers in the reviewed GitHub REST shapes.
+// The issue adapter rejects their presence regardless of value/type so a mutated PR
+// body cannot be relabelled merely because its ref members are malformed.
+const PULL_REQUEST_ONLY_KEYS = [
+  "head", "base", "merge_commit_sha", "changed_files", "pull_request",
+] as const
+
 const MAX_CAPTURE_ID = 200
 const MAX_TENANT_PARTITION = 200
 /** 8 MiB of base64. A capture larger than this is refused before it is decoded. */
@@ -270,11 +277,10 @@ export async function acquireRecordedGitHubIssueCapture(
   // assertion. Handing a pull request export to this module would mint the pull request's
   // own primary key into the issue namespace.
   //
-  // Stated as a refusal of the other resource's structure rather than as a required issue
-  // member: `head` and `base` are definitional of a pull request and absent from an issue
-  // representation, so refusing them needs no claim about which members GitHub guarantees
-  // on every issue. A fail-closed guard, not a schema assertion.
-  if (isPlainObject(providerObject.head) && isPlainObject(providerObject.base)) {
+  // Refuse the reviewed pull-request-only discriminator keys by presence, regardless of
+  // their values. This is intentionally stricter than checking for two well-formed refs:
+  // malformed PR markers still must not cross into the issue namespace.
+  if (PULL_REQUEST_ONLY_KEYS.some((key) => Object.hasOwn(providerObject, key))) {
     return fail("provider_resource_mismatch")
   }
 

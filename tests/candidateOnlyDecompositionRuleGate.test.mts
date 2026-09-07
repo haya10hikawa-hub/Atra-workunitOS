@@ -122,7 +122,7 @@ test("serialized result has no forbidden fields", () => {
 test("output is deterministic", () => { assert.deepEqual(gate(workunit), gate(workunit)) })
 test("returned object is fresh per call", () => {
   const a = gate(workunit)
-  ;(a as unknown as Parameters<typeof evaluateCandidateOnlyDecompositionRuleGate>[0]).liveIntegrationAllowed = true
+  ;(a as unknown as { liveIntegrationAllowed: boolean }).liveIntegrationAllowed = true
   assert.equal(gate(workunit).liveIntegrationAllowed, false)
 })
 

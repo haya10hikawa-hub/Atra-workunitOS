@@ -433,11 +433,10 @@ test("result mutation attempts cannot change ok, issues length, entries, or orde
   } catch {
     /* expected: frozen object in strict mode */
   }
-  const mutable = result.issues as { push: (x: unknown) => void; pop: () => void; splice: (a: number, b: number) => void }
   for (const op of [
-    () => mutable.push({ code: "x", field: "y", message: "x:y" }),
-    () => mutable.pop(),
-    () => mutable.splice(0, 1),
+    () => Reflect.apply(Array.prototype.push, result.issues, [{ code: "x", field: "y", message: "x:y" }]),
+    () => Reflect.apply(Array.prototype.pop, result.issues, []),
+    () => Reflect.apply(Array.prototype.splice, result.issues, [0, 1]),
   ]) {
     try {
       op()

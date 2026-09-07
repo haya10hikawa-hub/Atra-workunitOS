@@ -124,7 +124,7 @@
   "launcherCompositionSourceHashes": {
     "app/page.tsx": "8e83d9fab112a19e92d29b2e86c58664de46b35e1fe96b6131fa8c299b074aea",
     "app/components/workunit-os/WorkUnitOSDashboard.tsx": "3e20aa0df1b068fae4342f67cfb7750f63c2485e57fbe134961efdea56d28476",
-    "app/components/workunit-os/launcher/WorkUnitLauncher.tsx": "1a06c4d0f56d8b83c7f20b3856d50287178895f80ff084118c1ff2f35fb708c2"
+    "app/components/workunit-os/launcher/WorkUnitLauncher.tsx": "af41cb427b82aa1432d12ab0bb35a3decdeba559ce23d0832ff5370e132738ce"
   },
   "inboxRoute": {
     "status": 200,

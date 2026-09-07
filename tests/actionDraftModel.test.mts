@@ -39,8 +39,9 @@ test("GitHub draft has editable title/body", () => {
 })
 
 test("Email draft has editable subject/body/recipients", () => {
-  const r = detectToolRequirements(wu({ sourceProvider: "email" }))
-  const drafts = buildActionDrafts(wu({ sourceProvider: "email" }), [r.email])
+  const emailWorkUnit = wu({ sourceProvider: "github", nextAction: "Email the customer" })
+  const r = detectToolRequirements(emailWorkUnit)
+  const drafts = buildActionDrafts(emailWorkUnit, [r.email])
   const draft = drafts.drafts.find((d) => d.tool === "email")
   assert.ok(draft)
   assert.ok(draft!.editableFields.some((f) => f.key === "subject"))
@@ -48,8 +49,9 @@ test("Email draft has editable subject/body/recipients", () => {
 })
 
 test("Database draft includes safety notes", () => {
-  const r = detectToolRequirements(wu({ sourceProvider: "notion" }))
-  const drafts = buildActionDrafts(wu({ sourceProvider: "notion" }), [r.database])
+  const databaseWorkUnit = wu({ sourceProvider: "github", nextAction: "Upsert the project record" })
+  const r = detectToolRequirements(databaseWorkUnit)
+  const drafts = buildActionDrafts(databaseWorkUnit, [r.database])
   const draft = drafts.drafts.find((d) => d.tool === "database")
   assert.ok(draft, "Database draft should exist")
   assert.ok(draft!.safetyNotes.length >= 2, `Got ${draft?.safetyNotes.length} notes: ${JSON.stringify(draft?.safetyNotes)}`)

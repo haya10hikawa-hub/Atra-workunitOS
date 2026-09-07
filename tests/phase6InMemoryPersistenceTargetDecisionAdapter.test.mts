@@ -411,7 +411,7 @@ test("putTargetDecisionCandidate stores the captured validated field; the later 
 test("putTargetDecisionCandidate fails closed on a throwing record getter without echoing the thrown value", () => {
   const secret = "thrown-secret-must-not-leak"
   const record = { ...VALID_TARGET_DECISION_RECORD_FIXTURE }
-  delete record.payload_hash
+  Reflect.deleteProperty(record, "payload_hash")
   Object.defineProperty(record, "payload_hash", {
     enumerable: true,
     configurable: true,

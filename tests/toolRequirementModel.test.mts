@@ -30,7 +30,7 @@ test("Slack source → Slack required", () => {
 })
 
 test("Database is always blocked", () => {
-  const r = detectToolRequirements(wu({ sourceProvider: "notion" }))
+  const r = detectToolRequirements(wu({ sourceProvider: "github", nextAction: "Upsert the project record" }))
   assert.equal(r.database.necessity, "blocked")
 })
 

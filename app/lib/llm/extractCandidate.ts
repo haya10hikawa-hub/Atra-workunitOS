@@ -10,6 +10,7 @@ import type { SourceCandidate } from "../domain/types.ts"
 import type { LlmProvider, SanitizedSignal, CandidateExtractionOutput, LlmProcessingResult, RiskFlag } from "./types.ts"
 import { buildCandidateExtractionPrompt } from "./prompts.ts"
 import type { LlmModelRoute } from "./modelRouter.ts"
+import { assertBoundedStringArrayField, assertOptionalStringField, assertRiskFlagsField, assertStringField } from "./validateLlmOutput.ts"
 
 /**
  * Extract a SourceCandidate from a SanitizedSignal.
@@ -87,23 +88,21 @@ function parseExtractionOutput(
     const raw = JSON.parse(content) as Record<string, unknown>
 
     // Validate required fields
-    if (typeof raw.extractedSummary !== "string" || !raw.extractedSummary.trim()) {
-      warnings.push({ code: "missing_summary", message: "LLM did not produce a summary" })
-      return null
+    if (!assertStringField(raw.extractedSummary, "summary", warnings)) return null
+    if (!assertBoundedStringArrayField(raw.detectedActors === undefined ? [] : raw.detectedActors, "detectedActors", warnings)) return null
+    for (const [key, value] of Object.entries({ detectedProblem: raw.detectedProblem, detectedDeadline: raw.detectedDeadline, detectedIntent: raw.detectedIntent })) {
+      if (!assertOptionalStringField(value, key, warnings)) return null
     }
+    if (raw.riskFlags !== undefined && !assertRiskFlagsField(raw.riskFlags, "riskFlags", warnings)) return null
 
     return {
       extractedSummary: raw.extractedSummary as string,
-      detectedActors: Array.isArray(raw.detectedActors)
-        ? raw.detectedActors.filter((a): a is string => typeof a === "string")
-        : [],
+      detectedActors: raw.detectedActors as string[] | undefined ?? [],
       detectedProblem: typeof raw.detectedProblem === "string" ? raw.detectedProblem : undefined,
       detectedDeadline: typeof raw.detectedDeadline === "string" ? raw.detectedDeadline : undefined,
       detectedIntent: typeof raw.detectedIntent === "string" ? raw.detectedIntent : undefined,
       confidence: typeof raw.confidence === "number" ? raw.confidence : 0.5,
-      riskFlags: Array.isArray(raw.riskFlags)
-        ? raw.riskFlags.filter((f): f is string => typeof f === "string") as RiskFlag[]
-        : [],
+      riskFlags: (raw.riskFlags as RiskFlag[] | undefined) ?? [],
     }
   } catch {
     warnings.push({ code: "parse_failed", message: "Failed to parse LLM JSON output" })

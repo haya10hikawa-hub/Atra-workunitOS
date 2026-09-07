@@ -237,6 +237,20 @@ test("extractSourceCandidate returns invalid_llm_output for bad JSON", async () 
   if (!result.ok) assert.equal(result.error, "invalid_llm_output")
 })
 
+test("extractSourceCandidate fails closed for oversized optional strings and malformed arrays", async () => {
+  const signal = createExternalSignal({ id: "sig-bounded", tenantId, sourceType: "slack", sourceRef: { source: "slack", externalId: "bounded", capturedAt: new Date().toISOString() }, metadata: { title: "Bounded" } })
+  const result = await extractSourceCandidate(createMockLlmProvider({ extract_candidate: {
+    extractedSummary: "ok", detectedActors: ["PM"], detectedProblem: "x".repeat(8_001), confidence: 0.5,
+  } }), sanitizeForLlm(signal), tenantId)
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.ok(result.warnings.some((warning) => warning.code === "oversized_detectedProblem"))
+
+  const malformed = await extractSourceCandidate(createMockLlmProvider({ extract_candidate: {
+    extractedSummary: "ok", detectedActors: ["PM", 42], confidence: 0.5,
+  } }), sanitizeForLlm(signal), tenantId)
+  assert.equal(malformed.ok, false)
+})
+
 // ─── WorkUnit Draft Generation ──────────────────────────────────
 
 test("generateWorkUnitDraftFromCandidate produces draft with correct trust level", async () => {
@@ -266,6 +280,32 @@ test("generateWorkUnitDraftFromCandidate produces draft with correct trust level
   }
 })
 
+test("generateWorkUnitDraftFromCandidate fails closed for parseable title-only output", async () => {
+  const signal = createExternalSignal({
+    id: "sig-title-only",
+    tenantId,
+    sourceType: "slack",
+    sourceRef: { source: "slack", externalId: "msg-title-only", capturedAt: new Date().toISOString() },
+    metadata: { title: "Review request", actor: "PM" },
+  })
+  const candidateResult = await extractSourceCandidate(
+    createMockLlmProvider(STANDARD_MOCK_RESPONSES),
+    sanitizeForLlm(signal),
+    tenantId,
+  )
+  assert.equal(candidateResult.ok, true)
+  if (!candidateResult.ok) return
+
+  const result = await generateWorkUnitDraftFromCandidate(
+    createMockLlmProvider({ generate_workunit_draft: { title: "Review request" } }),
+    candidateResult.data,
+    tenantId,
+  )
+
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.equal(result.error, "invalid_llm_output")
+})
+
 test("WorkUnit draft never has reviewed/approved/executed status", async () => {
   const signal = createExternalSignal({
     id: "sig-11",
@@ -291,6 +331,18 @@ test("WorkUnit draft never has reviewed/approved/executed status", async () => {
     assert.notEqual(result.data.trustLevel, "approved")
     assert.notEqual(result.data.trustLevel, "executed")
   }
+})
+
+test("generateWorkUnitDraftFromCandidate rejects oversized and overlong model arrays", async () => {
+  const signal = createExternalSignal({ id: "sig-draft-bounded", tenantId, sourceType: "slack", sourceRef: { source: "slack", externalId: "draft-bounded", capturedAt: new Date().toISOString() }, metadata: { title: "Bounded", actor: "PM" } })
+  const candidateResult = await extractSourceCandidate(createMockLlmProvider(STANDARD_MOCK_RESPONSES), sanitizeForLlm(signal), tenantId)
+  assert.equal(candidateResult.ok, true)
+  if (!candidateResult.ok) return
+  const base = { title: "x", situation: "s", problem: "p", actors: ["PM"], nextAction: "n", tasks: ["t"], suggestedImpact: 3, suggestedUrgency: 3, suggestedEffort: 3, suggestedActorWeight: 3 }
+  const oversized = await generateWorkUnitDraftFromCandidate(createMockLlmProvider({ generate_workunit_draft: { ...base, missingFields: ["x".repeat(8_001)] } }), candidateResult.data, tenantId)
+  assert.equal(oversized.ok, false)
+  const overlong = await generateWorkUnitDraftFromCandidate(createMockLlmProvider({ generate_workunit_draft: { ...base, missingFields: Array.from({ length: 101 }, () => "x") } }), candidateResult.data, tenantId)
+  assert.equal(overlong.ok, false)
 })
 
 // ─── Deterministic Scoring ──────────────────────────────────────
@@ -389,6 +441,34 @@ test("evaluateWorkUnit marks incomplete drafts correctly", async () => {
     assert.equal(result.data.isComplete, false)
     assert.equal(result.data.isExecutable, false)
     assert.equal(result.data.hallucinationRisk, "high")
+  }
+})
+
+test("evaluateWorkUnit bounds model arrays and cannot elevate deterministic readiness", async () => {
+  const draft = {
+    id: "draft-bounded", tenantId, sourceCandidateIds: [], title: "Title", situation: "Situation", problem: "Problem", actors: ["Unknown"], urgency: 3, impact: 3, effort: 3, priorityScore: 3, nextAction: "Do the thing", tasks: ["Task"], missingFields: [], status: "draft" as const, trustLevel: "draft" as const, createdBy: "system" as const, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  }
+  const result = await evaluateWorkUnit(createMockLlmProvider({ evaluate_workunit: { isExecutable: true, isComplete: true, missingFields: [], warnings: ["x".repeat(8_001)], hallucinationRisk: "low", suggestedNextStep: "Go" } }), draft)
+  assert.equal(result.ok, true)
+  if (result.ok) {
+    assert.equal(result.data.isExecutable, false)
+    assert.ok(result.data.warnings.length > 0)
+  }
+})
+
+test("evaluateWorkUnit preserves deterministic findings when model claims completion", async () => {
+  const draft = {
+    id: "draft-grounded", tenantId, sourceCandidateIds: [], title: "Title", situation: "Situation", problem: "Problem", actors: ["Unknown"], urgency: 3, impact: 3, effort: 3, priorityScore: 3, nextAction: "Do the thing", tasks: ["Task"], missingFields: [], status: "draft" as const, trustLevel: "draft" as const, createdBy: "system" as const, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  }
+  const result = await evaluateWorkUnit(createMockLlmProvider({ evaluate_workunit: {
+    isExecutable: true, isComplete: true, missingFields: [], warnings: [], hallucinationRisk: "low", suggestedNextStep: "Done",
+  } }), draft)
+  assert.equal(result.ok, true)
+  if (result.ok) {
+    assert.ok(result.data.missingFields.includes("Actors"))
+    assert.ok(result.data.warnings.includes("Actors are unknown"))
+    assert.equal(result.data.hallucinationRisk, "medium")
+    assert.equal(result.data.suggestedNextStep, "Fill missing fields before proceeding")
   }
 })
 

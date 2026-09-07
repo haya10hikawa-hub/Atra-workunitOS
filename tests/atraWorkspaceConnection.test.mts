@@ -100,14 +100,15 @@ test("Action Field draft derives from the existing actionFieldEditorDraftModel",
 })
 
 // 8
-test("Action Field draft surface is local-only (no backend/execution call)", () => {
+test("Action Field draft surface is a read-only candidate preview (no backend/execution call)", () => {
   for (const src of [COMPONENT, DERIVER]) {
     assert.equal(src.includes("fetch("), false)
     assert.equal(src.includes("/api/"), false)
     assert.equal(src.includes("onSubmit"), false)
     assert.equal(src.includes("XMLHttpRequest"), false)
   }
-  assert.ok(COMPONENT.includes("Local edits only"))
+  assert.ok(COMPONENT.includes("Candidate preview — read-only"))
+  assert.equal(COMPONENT.includes("Local edits only"), false)
 })
 
 // 9
@@ -149,7 +150,7 @@ test("forbidden fields are not present in the Atra view model", () => {
 
 // 15
 test("visual shell labels remain present", () => {
-  for (const label of ["Atra", "Workspace", "Command Palette", "Action Field", "Local edits only"]) {
+  for (const label of ["Atra", "Workspace", "Command Palette", "Action Field", "Candidate preview — read-only"]) {
     assert.ok(COMPONENT.includes(label), `missing label: ${label}`)
   }
 })
