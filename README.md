@@ -1,17 +1,22 @@
-# WorkUnit OS
+# Atra workunitOS Repository
 
 > [!IMPORTANT]
-> **Product state:** Atra V0 is frozen. Existing implementation and research are
-> preserved while the next product direction is re-evaluated from first
-> principles. See [`PRODUCT_STATE.md`](PRODUCT_STATE.md).
+> This repository preserves the frozen Atra V0 implementation. Current product
+> direction is unresolved, and [`PRODUCT_STATE.md`](PRODUCT_STATE.md) is the sole
+> product-state authority.
 
-AI work OS for converting scattered work signals into reviewable WorkUnit Nodes and safe Action Field work.
+Existing WorkUnit, Graph, Action Field, and related code records historical/current
+implementation state only. It does not authorize future product work or continuation
+of the V0 roadmap.
 
-## Overview
+## Repository Orientation
 
-WorkUnit OS ingests work signals from multiple sources (Slack, GitHub, Calendar), normalizes them into WorkUnit candidates, and provides a safe preparation loop: draft → preview → human/server approval → dry-run verification. Real external execution is intentionally disabled in the current release.
+The frozen V0 implementation ingests work signals from multiple sources (Slack,
+GitHub, Calendar), normalizes them into WorkUnit candidates, and provides a safe
+preparation loop: draft → preview → human/server approval → dry-run
+verification. Real external execution is disabled in this implementation.
 
-## Current Internal Alpha Capabilities
+## Frozen V0 Implementation Snapshot
 
 - **WorkUnit Launcher / Graph foundation** — multi-source signal ingestion (mock GitHub, Slack, Calendar) feeding WorkUnit candidates
 - **Action Preview** — server-generated preview with SHA-256 hashes (hashes never returned to browser)
@@ -37,7 +42,9 @@ WorkUnit OS ingests work signals from multiple sources (Slack, GitHub, Calendar)
 - Approval hashes (`targetHash`, `payloadHash`) are **never returned to the browser**.
 - `tenantId`, `actorUserId`, `role` are **server-derived** — never trusted from client.
 
-## What Is Not Implemented Yet
+## Absent From The Frozen V0 Implementation
+
+This list is descriptive only. It is not a roadmap or commitment.
 
 - OAuth integration
 - Token storage / vault
@@ -399,10 +406,3 @@ must never be committed.
 - `*.swp` and `*.swo` editor temp files are gitignored
 - Generated build artifacts must be restored/cleaned before each commit
 - All imports use `.ts` extensions (required by `--experimental-strip-types`)
-
-## Roadmap
-
-- Mock/internal execution model foundation (non-external)
-- Docs tree reorganization
-- Production auth hardening
-- Limited, approved, auditable external execution design
