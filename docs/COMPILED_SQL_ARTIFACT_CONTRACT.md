@@ -194,7 +194,7 @@ Future query results must restore provenance before they can support human revie
 `human_review_required` is preserved from the source Safe Query Plan and is set whenever the
 decision rubric requires it: sensitive or personal data, redaction, aggregation,
 contradiction, missing information, or any result that would affect priority, risk, action
-readiness, or promotion readiness (per [`DECISION_RUBRIC.md`](./DECISION_RUBRIC.md) and
+readiness, or promotion readiness (per [`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md) and
 [`SAFE_QUERY_PLAN_CONTRACT.md`](./SAFE_QUERY_PLAN_CONTRACT.md) §14).
 
 ## 15. Validation Rules

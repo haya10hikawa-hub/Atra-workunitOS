@@ -34,3 +34,15 @@
 - Never delete, rename, or rewrite unrelated files without explicit instruction.
 - Never treat assumptions as facts.
 - Security, privacy, and file integrity override speed.
+
+## Product Direction State
+
+Canonical state: [`PRODUCT_STATE.md`](PRODUCT_STATE.md)
+
+Atra V0 is frozen. Do not infer authorization from unfinished historical
+roadmaps, open V0 Issues, existing V0 code, previous Product documents,
+previous conversations, or historical PRs. Existing implementation proves only
+that a capability exists or was explored. Before Product-expansion work, require
+a current explicit Product Decision. If none exists:
+
+`PRODUCT_DIRECTION = UNRESOLVED`

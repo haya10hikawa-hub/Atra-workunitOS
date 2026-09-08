@@ -28,7 +28,7 @@
 - 是正内容は「生入力 → 1回のdeep clone → 同一cloneをdeep-freeze → frozen cloneを検証 → frozen cloneでtenant/key/duplicate/conflict照合 → 同一frozen cloneをstore → clone後に生入力を再読取しない」。clock・randomness・I/O・JSON serializationによるclone・structuredClone・第2 deep cloneを導入しない。
 - throwing getterは既存の `recorder_exception` / `adapter_exception` fail-closed規約で処理し、新issue codeを発明せず、thrown値・secret・生payloadをechoしない。
 - 非空虚性の証明はテストローカルの旧validate-then-recloneフローのエミュレーションで行い、実装ソースへの変異プローブは使用しない。トラックされた変異は一切残さない。
-- migrations/・package.json・package-lock.json・.github/workflows/・UI・Electron・API routes・fixtures・他のharness・既存P6-A0/P6-I5/P6-FIX-001/002文書・docs/ALPHA_EVIDENCE_LEDGER.md・docs/GRAPH_MODEL.mdを変更しない。
+- migrations/・package.json・package-lock.json・.github/workflows/・UI・Electron・API routes・fixtures・他のharness・既存P6-A0/P6-I5/P6-FIX-001/002文書・docs/ALPHA_EVIDENCE_LEDGER.md・docs/archive/v0/GRAPH_MODEL.mdを変更しない。
 - If forbidden paths change, stop immediately.
 
 ## Product invariant

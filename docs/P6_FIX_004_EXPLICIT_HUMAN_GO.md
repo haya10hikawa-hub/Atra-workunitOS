@@ -27,7 +27,7 @@
 - **validator success remains non-authorizing** — Validation Success ≠ Authorization ≠ Persistence Permission ≠ Evidence Ledger Append ≠ Graph Model Write。`ok: true` is descriptive only。
 - **#116 deny-list consolidation is not included** / **#121 consistency umbrella is not included** — これらは各自のパッチで扱う。
 - 共有ガードは `new Date` / `Date.parse` / `Temporal` / locale / timezone変換 / 外部日付ライブラリ / JSON serialization / 正規化を使用せず、純パース + 整数範囲検査のみ。clock・randomness・I/O・環境アクセスを持たない leaf。
-- migrations/・package.json・package-lock.json・.github/workflows/・UI・Electron・API routes・linkageモジュール・fixtures・harnesses・types.ts・constructors・既存P6-A0/P6-I5/P6-FIX-001..003文書・docs/ALPHA_EVIDENCE_LEDGER.md・docs/GRAPH_MODEL.md を変更しない。
+- migrations/・package.json・package-lock.json・.github/workflows/・UI・Electron・API routes・linkageモジュール・fixtures・harnesses・types.ts・constructors・既存P6-A0/P6-I5/P6-FIX-001..003文書・docs/ALPHA_EVIDENCE_LEDGER.md・docs/archive/v0/GRAPH_MODEL.md を変更しない。
 - If forbidden paths change, stop immediately.
 
 ## Product invariant

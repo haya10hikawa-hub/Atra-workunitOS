@@ -1,5 +1,10 @@
 # WorkUnit OS
 
+> [!IMPORTANT]
+> **Product state:** Atra V0 is frozen. Existing implementation and research are
+> preserved while the next product direction is re-evaluated from first
+> principles. See [`PRODUCT_STATE.md`](PRODUCT_STATE.md).
+
 AI work OS for converting scattered work signals into reviewable WorkUnit Nodes and safe Action Field work.
 
 ## Overview

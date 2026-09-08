@@ -7,7 +7,7 @@ produced by the [`HUMAN_DECISION_GATE.md`](./HUMAN_DECISION_GATE.md) from a vali
 Review Record ([`EVIDENCE_REVIEW_RECORD_CONTRACT.md`](./EVIDENCE_REVIEW_RECORD_CONTRACT.md))
 and a valid LLM Judgment Record
 ([`LLM_JUDGMENT_RECORD_CONTRACT.md`](./LLM_JUDGMENT_RECORD_CONTRACT.md)). Grounded in
-[`DECISION_RUBRIC.md`](./DECISION_RUBRIC.md) and
+[`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md) and
 [`EVIDENCE_STANDARD.md`](./EVIDENCE_STANDARD.md). Documentation and a static test only.
 
 ---

@@ -4,7 +4,7 @@ Status: Reviewed per-provider profile. Scope: **GitHub pull requests only**.
 
 Subordinate to:
 
-- `docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md` — Product / Roadmap Authority
+- `docs/archive/v0/PHASE1_VALUE_GATE_PROGRAM.md` — Product / Roadmap Authority
 - `docs/architecture/SOURCE_RECORD_V1_SEMANTICS.md` — the generic B1-A / B2-P1 semantics this profile must satisfy
 
 This document addresses two of the provider profile gates named in `SOURCE_RECORD_V1_SEMANTICS.md`

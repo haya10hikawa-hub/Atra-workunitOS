@@ -18,9 +18,9 @@ import path from "node:path"
 
 const root = process.cwd()
 
-const DOCTRINE = path.join(root, "docs/ATRA_DOCTRINE.md")
+const DOCTRINE = path.join(root, "docs/archive/v0/ATRA_DOCTRINE.md")
 const INTAKE = path.join(root, "docs/INFORMATION_INTAKE_POLICY.md")
-const RUBRIC = path.join(root, "docs/DECISION_RUBRIC.md")
+const RUBRIC = path.join(root, "docs/archive/v0/DECISION_RUBRIC.md")
 
 const read = (p: string): string => (existsSync(p) ? readFileSync(p, "utf8") : "")
 const doctrine = read(DOCTRINE)
@@ -33,7 +33,7 @@ const requireAll = (haystack: string, needles: string[], label: string): void =>
 
 // ── Files exist ──────────────────────────────────────────────
 
-test("1. docs/ATRA_DOCTRINE.md exists", () => {
+test("1. docs/archive/v0/ATRA_DOCTRINE.md exists", () => {
   assert.equal(existsSync(DOCTRINE), true)
   assert.ok(doctrine.length > 0)
 })
@@ -43,7 +43,7 @@ test("2. docs/INFORMATION_INTAKE_POLICY.md exists", () => {
   assert.ok(intake.length > 0)
 })
 
-test("3. docs/DECISION_RUBRIC.md exists", () => {
+test("3. docs/archive/v0/DECISION_RUBRIC.md exists", () => {
   assert.equal(existsSync(RUBRIC), true)
   assert.ok(rubric.length > 0)
 })

@@ -33,7 +33,7 @@ import { isCodeFilePath } from "../scripts/lib/typescriptModuleGraph.mjs"
 
 const rootDir = fileURLToPath(new URL("../", import.meta.url))
 
-const PRODUCT_AUTHORITY_DOC = "docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md"
+const PRODUCT_AUTHORITY_DOC = "docs/archive/v0/PHASE1_VALUE_GATE_PROGRAM.md"
 const SEMANTICS_DOC = "docs/architecture/SOURCE_RECORD_V1_SEMANTICS.md"
 
 // The ratified P1-1 exit criterion: exactly these capabilities close P1-1, and no others. The set is

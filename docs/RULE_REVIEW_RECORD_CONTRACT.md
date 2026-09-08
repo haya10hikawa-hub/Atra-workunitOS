@@ -190,7 +190,7 @@ human_review_required must be explicit.
 Human review is required when review_outcome is warn, fail, or no_go.
 
 `human_review_required` is also preserved from the source artifacts whenever the decision
-rubric requires it (per [`DECISION_RUBRIC.md`](./DECISION_RUBRIC.md)); a pass outcome never
+rubric requires it (per [`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md)); a pass outcome never
 clears a human review requirement inherited from the source Safe Query Plan or Compiled SQL
 Artifact.
 

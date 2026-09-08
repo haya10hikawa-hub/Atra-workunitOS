@@ -196,7 +196,7 @@ A Query Result Record must not be treated as truth by default when source rows c
 
 conflict_state must be explicit.
 
-These triggers follow [`DECISION_RUBRIC.md`](./DECISION_RUBRIC.md); a Query Result Record
+These triggers follow [`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md); a Query Result Record
 never clears a human review requirement inherited from its source Rule Review Record.
 
 ## 15. Validation Rules

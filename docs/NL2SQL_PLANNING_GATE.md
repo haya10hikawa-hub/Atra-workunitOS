@@ -152,7 +152,7 @@ Provenance must be restored before future query results can support WorkUnit rev
 When tenant scope, schema references, or sensitivity handling are unclear, the gate outputs
 `clarification_needed` rather than proceeding. Human review is required when the information
 need touches sensitive data, personal data, redaction, aggregation, contradiction, or
-missing information (per [`DECISION_RUBRIC.md`](./DECISION_RUBRIC.md)).
+missing information (per [`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md)).
 
 ## 15. Failure and No-Go Conditions
 

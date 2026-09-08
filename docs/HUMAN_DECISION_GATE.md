@@ -9,7 +9,7 @@ queue. Closes the query spine's terminal: the three human queues
 (`ready_for_rule_review`-era rule review, `ready_for_human_evidence_review`,
 `ready_for_human_judgment_review`) now have a human-authored decision artifact to consume
 them — the **Human Decision Record**. Grounded in
-[`DECISION_RUBRIC.md`](./DECISION_RUBRIC.md),
+[`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md),
 [`EVIDENCE_STANDARD.md`](./EVIDENCE_STANDARD.md), and
 [`PROVENANCE_MODEL.md`](./PROVENANCE_MODEL.md). Also discharges, at the recording level, the
 Evidence Acceptance recording gate that

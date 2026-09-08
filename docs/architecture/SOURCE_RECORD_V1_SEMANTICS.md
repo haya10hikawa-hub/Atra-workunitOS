@@ -4,7 +4,7 @@ Status: Ratified semantic clarification of an already-declared record. Not an au
 
 Subordinate to:
 
-- `docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md` — Product / Roadmap Authority
+- `docs/archive/v0/PHASE1_VALUE_GATE_PROGRAM.md` — Product / Roadmap Authority
 - `docs/architecture/CANONICAL_WORKUNIT_PIPELINE_REFACTOR_PROGRAM.md` — subordinate Technical / Domain Architecture Authority
 
 ## 1. Authority Position
@@ -32,7 +32,7 @@ check provider nativeness or content provenance: it cannot know a provider's con
 semantics are therefore an obligation on whatever later, separately authorized WorkUnit produces
 a record — not a property the generic validator can enforce.
 
-P1-1 status is unchanged by this clarification: `PARTIAL` at the head this clarification was ratified at. Phase status is not this document's to state; the current value lives in `docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md`, and §7 records where later WorkUnits moved it.
+P1-1 status is unchanged by this clarification: `PARTIAL` at the head this clarification was ratified at. Phase status is not this document's to state; the current value lives in `docs/archive/v0/PHASE1_VALUE_GATE_PROGRAM.md`, and §7 records where later WorkUnits moved it.
 
 ## 2. Identity Semantics
 
@@ -209,7 +209,7 @@ The qualifier "beyond Phase-1 experimental use" governs all three verbs in the f
 persisting, correlating **and** deduplicating. Correlating on `providerObjectKey` within bounded
 Phase-1 experimental use does not reopen this exception. Ratified as
 `P1_2_DOES_NOT_REOPEN_PHASE1_IDENTITY_EXCEPTIONS` in
-`docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md`, after the sentence was misread the other way.
+`docs/archive/v0/PHASE1_VALUE_GATE_PROGRAM.md`, after the sentence was misread the other way.
 
 **What is unchanged.** The generic semantics in sections 2 and 3 are untouched by this exception.
 The lifetime-immutability requirement in section 2 remains the rule for every provider, including
@@ -495,4 +495,4 @@ claim about the current tree.
 | raw provider payload retention | Retention exists, inline and immutable, under `acquisitions/` |
 | expanding the canonical record declaration allowlist | Unchanged. No new canonical record was declared. The record's `provider` field changed type — from the application `SourceType` to the canonical `SourceIdentityNamespace` — under §4.3, and that union's membership has since moved twice as providers were reviewed: `github` was resolved into `github_issue` and `github_pull_request`, and `gmail` into `gmail_message`. The field set, order, optionality and identity tuple are unchanged, and no field was added |
 | starting P1-2, or `CorrelationGroupV1` / `WorkUnitCandidateV1` / `WorkUnitCorrectionV1` | Unchanged. None exists |
-| marking P1-1 complete | **Crossed by the Product Authority, not by this document.** Under `ATRA_PM_P1_1_EXIT_AND_P1_2_ENTRY_RATIFIED` the PM ratified a P1-1 exit criterion and evaluated P1-1 against it. The tree is unchanged by that ratification — still two provider resources of one provider, one acquisition mode, no persistence and no consumer beyond production; each of those was classified `NOT_REQUIRED_FOR_P1_1` or `DEFERRED` rather than delivered. P1-1's status is declared in `docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md` and never here |
+| marking P1-1 complete | **Crossed by the Product Authority, not by this document.** Under `ATRA_PM_P1_1_EXIT_AND_P1_2_ENTRY_RATIFIED` the PM ratified a P1-1 exit criterion and evaluated P1-1 against it. The tree is unchanged by that ratification — still two provider resources of one provider, one acquisition mode, no persistence and no consumer beyond production; each of those was classified `NOT_REQUIRED_FOR_P1_1` or `DEFERRED` rather than delivered. P1-1's status is declared in `docs/archive/v0/PHASE1_VALUE_GATE_PROGRAM.md` and never here |

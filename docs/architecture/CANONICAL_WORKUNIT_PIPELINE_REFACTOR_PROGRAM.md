@@ -17,7 +17,7 @@ Execution boundary: WU-00 only. No production path, schema, migration, or provid
 
 ## Authority Position
 
-This document is the ratified subordinate Technical / Domain Architecture Authority. The Primary Product / Roadmap Authority is `docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md`, ratified by the human PM as `ATRA_PHASE1_PLAN_AUTHORITY_RATIFIED_WITH_MODIFICATIONS`.
+This document is the ratified subordinate Technical / Domain Architecture Authority. The Primary Product / Roadmap Authority is `docs/archive/v0/PHASE1_VALUE_GATE_PROGRAM.md`, ratified by the human PM as `ATRA_PHASE1_PLAN_AUTHORITY_RATIFIED_WITH_MODIFICATIONS`.
 
 The split is exact:
 
@@ -240,7 +240,7 @@ The remaining WU-01 scope — candidate, correction, review, reviewed WorkUnit a
 
 ### Phase-1 semantic ratification is not code authorization
 
-The human PM has since ratified three of the seven proposal names as Phase-1 semantic targets, under decision C recorded in `docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md`. That ratification names the intended semantic authority. It does **not** authorize any TypeScript declaration, path, or schema.
+The human PM has since ratified three of the seven proposal names as Phase-1 semantic targets, under decision C recorded in `docs/archive/v0/PHASE1_VALUE_GATE_PROGRAM.md`. That ratification names the intended semantic authority. It does **not** authorize any TypeScript declaration, path, or schema.
 
 | Name | Product status | Code status at this head |
 | --- | --- | --- |

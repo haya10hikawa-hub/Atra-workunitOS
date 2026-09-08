@@ -71,7 +71,7 @@ Wave 1(P0/P1ブロッカー)は空 — 本監査でP0/P1所見はゼロ。低重
 
 ## 7. Per-patch forbidden files(パッチ別禁止ファイル)
 
-全パッチ共通: migrations/、package.json、package-lock.json、.github/workflows/、UI、Electron、app/lib/persistence/、app/lib/security/、docs/ALPHA_EVIDENCE_LEDGER.md、docs/GRAPH_MODEL.md、P6-I5R契約リスト(linkageのP6-I5R §9固定部)。個別: P6-FIX-001はapp/全域禁止。P6-FIX-002はvalidators/types/index/harness禁止。P6-FIX-003はapp/全域禁止。P6-FIX-004はconstructors/harness/linkage禁止。P6-FIX-005はlinkage契約リスト禁止。P6-FIX-006はpersistenceTargetDecision/persistenceAuditEvidence禁止。P6-FIX-007は項目外ファイル禁止。
+全パッチ共通: migrations/、package.json、package-lock.json、.github/workflows/、UI、Electron、app/lib/persistence/、app/lib/security/、docs/ALPHA_EVIDENCE_LEDGER.md、docs/archive/v0/GRAPH_MODEL.md、P6-I5R契約リスト(linkageのP6-I5R §9固定部)。個別: P6-FIX-001はapp/全域禁止。P6-FIX-002はvalidators/types/index/harness禁止。P6-FIX-003はapp/全域禁止。P6-FIX-004はconstructors/harness/linkage禁止。P6-FIX-005はlinkage契約リスト禁止。P6-FIX-006はpersistenceTargetDecision/persistenceAuditEvidence禁止。P6-FIX-007は項目外ファイル禁止。
 
 ## 8. Per-patch tests(パッチ別テスト)
 

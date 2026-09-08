@@ -23,7 +23,7 @@ loop is No-Go. This file must be created before the implementation files and the
 - The task will not modify any existing P6-I5K through P6-I5R artifact.
 - The task will not modify `tests/fixtures/` or `tests/harness/`.
 - The task will not modify `docs/ALPHA_EVIDENCE_LEDGER.md`.
-- The task will not modify `docs/GRAPH_MODEL.md`.
+- The task will not modify `docs/archive/v0/GRAPH_MODEL.md`.
 - The task will not modify API routes, UI, Electron runtime, migrations, packages, or workflows.
 - No Evidence Ledger append is allowed.
 - No Evidence Ledger writer is allowed.

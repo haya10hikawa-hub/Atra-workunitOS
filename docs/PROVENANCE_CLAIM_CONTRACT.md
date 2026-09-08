@@ -694,7 +694,7 @@ material**. The claim vocabulary must not overwrite it.
 | `docs/PROVENANCE_MODEL.md` | Provenance record fields, `source_type`, `trust_level`, transformation history | **Closest neighbor.** `evidenceClass` is the claim-level analogue of `source_type` and does **not** replace `source_type` or `trust_level` (§5.1) |
 | `docs/EVIDENCE_REVIEW_RECORD_CONTRACT.md` | The record of a **review** of evidence | Implementation/review assurance material — a different kind of object entirely |
 | `docs/ALPHA_EVIDENCE_LEDGER.md` | A human-readable **review record**, explicitly "not a database" | Operational assurance material; the proposed claim ledger is a product-data concept and must not be confused with it |
-| `docs/GRAPH_MODEL.md` | The conceptual node/edge model | **Documentation, not a runtime graph database** — that document itself states the graph is not a runtime graph database `[CONTRACT]` |
+| `docs/archive/v0/GRAPH_MODEL.md` | The conceptual node/edge model | **Documentation, not a runtime graph database** — that document itself states the graph is not a runtime graph database `[CONTRACT]` |
 | `docs/RELATIONSHIP_SCHEMA.md` | Relationship types and required properties | Conceptual relationship vocabulary; claims and bindings do not replace it |
 
 ### Field Mapping To `PROVENANCE_MODEL.md` `[PROPOSAL]`

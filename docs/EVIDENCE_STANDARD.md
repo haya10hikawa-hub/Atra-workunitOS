@@ -4,9 +4,9 @@
 
 Defines, at the product level, what counts as evidence in Atra — the material that may
 support, weaken, contradict, or qualify a human decision about a WorkUnit. Builds on the
-P6.1 constitution ([`ATRA_DOCTRINE.md`](./ATRA_DOCTRINE.md),
+P6.1 constitution ([`ATRA_DOCTRINE.md`](./archive/v0/ATRA_DOCTRINE.md),
 [`INFORMATION_INTAKE_POLICY.md`](./INFORMATION_INTAKE_POLICY.md),
-[`DECISION_RUBRIC.md`](./DECISION_RUBRIC.md)) and pairs with
+[`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md)) and pairs with
 [`PROVENANCE_MODEL.md`](./PROVENANCE_MODEL.md). Documentation and a static test only — it
 adds no runtime evidence storage and enables no capability.
 
@@ -132,7 +132,7 @@ resolved or explicitly accepted.
 
 Evidence organizes the decision; it never makes it. LLM confidence cannot skip Human
 Review. When evidence is insufficient, contradictory, or third-party-only for a
-high-impact decision, human review is required (per [`DECISION_RUBRIC.md`](./DECISION_RUBRIC.md)).
+high-impact decision, human review is required (per [`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md)).
 
 ## 13. Non-authorization Statement
 

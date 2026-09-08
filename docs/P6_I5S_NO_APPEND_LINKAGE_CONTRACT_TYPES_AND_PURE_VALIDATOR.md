@@ -25,7 +25,7 @@ linkage, summary emitter, audit runtime, persistence, durable storage, repositor
 database schema, D1/SQL, ApprovalStore integration, P7.1 TSP wiring, StartHub runtime, external action
 execution, and Formal WorkUnit promotion. No existing `recorderAuditSummary` file, no P6-I5K..P6-I5R
 artifact, no `tests/fixtures/`, no `tests/harness/`, no `docs/ALPHA_EVIDENCE_LEDGER.md`, and no
-`docs/GRAPH_MODEL.md` change.
+`docs/archive/v0/GRAPH_MODEL.md` change.
 
 ## 3. Implemented Files
 

@@ -26,7 +26,7 @@
 - throwing getterは既存の `constructor_exception` fail-closed規約で処理し、新issue codeを発明せず、thrown値をechoしない。
 - **deeper nested getter protection is not granted** — コンテナ内部の遅延getterに対する深い防御は既存snapshot契約の範囲外であり、本パッチでは付与しない(「テストが証明しないこと」に記録する)。
 - 非空虚性の証明はテストローカルの旧二重読取フローのエミュレーションで行い、実装ソースへの変異プローブは使用しない。トラックされた変異は一切残さない。
-- migrations/・package.json・package-lock.json・.github/workflows/・UI・Electron・API routes・既存P6-A0監査文書・既存P6-I5実装文書・docs/ALPHA_EVIDENCE_LEDGER.md・docs/GRAPH_MODEL.mdを変更しない。
+- migrations/・package.json・package-lock.json・.github/workflows/・UI・Electron・API routes・既存P6-A0監査文書・既存P6-I5実装文書・docs/ALPHA_EVIDENCE_LEDGER.md・docs/archive/v0/GRAPH_MODEL.mdを変更しない。
 - If forbidden paths change, stop immediately.
 
 ## Product invariant

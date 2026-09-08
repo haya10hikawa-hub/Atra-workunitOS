@@ -27,7 +27,7 @@ UI
 ### Canonical (active)
 | Path | Role |
 |------|------|
-| `docs/CANONICAL_DECISION_INDEX.md` | Product UI source of truth: WorkUnit Launcher + WorkUnit Graph + Action Field |
+| `docs/archive/v0/CANONICAL_DECISION_INDEX.md` | Product UI source of truth: WorkUnit Launcher + WorkUnit Graph + Action Field |
 | `app/page.tsx` | Root page: renders `WorkUnitOSDashboard` only |
 | `app/components/workunit-os/WorkUnitOSDashboard.tsx` | Current UI entry; implementation name may lag canonical UI terms |
 | `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.tsx` | Current legacy/dashboard-named implementation shell; not product terminology source of truth |

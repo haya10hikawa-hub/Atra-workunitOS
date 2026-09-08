@@ -5,7 +5,7 @@ Status: Reviewed per-provider profile. Scope: **Gmail messages only**, and withi
 
 Subordinate to:
 
-- `docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md` — Product / Roadmap Authority
+- `docs/archive/v0/PHASE1_VALUE_GATE_PROGRAM.md` — Product / Roadmap Authority
 - `docs/architecture/SOURCE_RECORD_V1_SEMANTICS.md` — the generic B1-A / B2-P1 semantics this profile must satisfy
 
 This document addresses exactly two of the provider profile gates named in
@@ -288,7 +288,7 @@ for live provider reads or credentials, or a precedent any further provider or p
 **Bounded Phase-1 correlation does not reopen it.** The qualifier "beyond bounded Phase-1
 experimental use" governs all three verbs in the seventh trigger — persisting, correlating **and**
 deduplicating — exactly as ratified for GitHub under `P1_2_DOES_NOT_REOPEN_PHASE1_IDENTITY_EXCEPTIONS`
-in `docs/architecture/PHASE1_VALUE_GATE_PROGRAM.md`.
+in `docs/archive/v0/PHASE1_VALUE_GATE_PROGRAM.md`.
 
 ## 5. Content-scope profile — `gmail.message.rest.raw-rfc2822-octets` v1
 

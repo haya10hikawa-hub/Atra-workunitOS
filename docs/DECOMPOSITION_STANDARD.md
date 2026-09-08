@@ -5,9 +5,9 @@
 Defines, at the product level, what decomposition means in Atra: how a goal-relevant Signal
 becomes candidate decision units carrying explicit evidence, provenance, missing
 information, risks, dependencies, conflicts, and human-review requirements. Builds on the
-P6.1 constitution ([`ATRA_DOCTRINE.md`](./ATRA_DOCTRINE.md),
+P6.1 constitution ([`ATRA_DOCTRINE.md`](./archive/v0/ATRA_DOCTRINE.md),
 [`INFORMATION_INTAKE_POLICY.md`](./INFORMATION_INTAKE_POLICY.md),
-[`DECISION_RUBRIC.md`](./DECISION_RUBRIC.md)) and the P6.2 evidence foundation
+[`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md)) and the P6.2 evidence foundation
 ([`EVIDENCE_STANDARD.md`](./EVIDENCE_STANDARD.md),
 [`PROVENANCE_MODEL.md`](./PROVENANCE_MODEL.md)), and pairs with
 [`TYPED_DECOMPOSITION_OBJECT.md`](./TYPED_DECOMPOSITION_OBJECT.md). Documentation and a

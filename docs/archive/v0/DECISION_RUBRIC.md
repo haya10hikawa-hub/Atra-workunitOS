@@ -5,7 +5,7 @@
 Defines how Atra evaluates importance, urgency, risk, and the need for human review — and
 where the hard boundaries sit for drafts, previews, approvals, and external actions. Child
 of [`ATRA_DOCTRINE.md`](./ATRA_DOCTRINE.md); applies to input classified by
-[`INFORMATION_INTAKE_POLICY.md`](./INFORMATION_INTAKE_POLICY.md). Documentation and a
+[`INFORMATION_INTAKE_POLICY.md`](../../INFORMATION_INTAKE_POLICY.md). Documentation and a
 static test only — no runtime behavior change.
 
 ---
@@ -111,7 +111,7 @@ This matrix maps onto existing enforcement: Level 6+ is held No-Go by the extern
 kill switch (default off) and the approval gates (four-eyes, one-time-use,
 preview↔approval binding); the fail-closed LLM provider boundary separately keeps
 real-LLM enablement No-Go. Raising any level requires its own
-capability gate ([`NEXT_CAPABILITY_GATE.md`](./NEXT_CAPABILITY_GATE.md)) and a recorded
+capability gate ([`NEXT_CAPABILITY_GATE.md`](../../NEXT_CAPABILITY_GATE.md)) and a recorded
 human decision.
 
 ## 8. External Action Boundary

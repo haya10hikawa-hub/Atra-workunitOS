@@ -74,7 +74,7 @@ Hopper の知能コアは、`Understand -> Merge -> Rank` の3段階で構成す
 
 Hopper は、広すぎる初期構想をそのまま実装する代わりに、最初に必要な「判断データ」を集めるための導入レイヤーである。
 
-ベクトル処理と判断学習の詳細仕様は [HOPPER_VECTOR_ALGORITHM.md](/Users/hayato/next.js/my_app/ai_editor/HOPPER_VECTOR_ALGORITHM.md) を参照する。
+ベクトル処理と判断学習の詳細仕様は [HOPPER_VECTOR_ALGORITHM.md](../../research/HOPPER_VECTOR_ALGORITHM.md) を参照する。
 
 ## 6. WorkUnit モデル
 
