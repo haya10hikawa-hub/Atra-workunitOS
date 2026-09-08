@@ -1,5 +1,7 @@
 # Rule Review Record Contract
 
+**Classification: REFERENCE — CURRENT TECHNICAL ARTIFACT; NO PRODUCT AUTHORITY.** Frozen V0 links are historical provenance only.
+
 **Phase:** P6.10. **Baseline:** `main` @ `0fe6d60`.
 
 Defines the shape of a Rule Review Record: the non-executing object produced by the
@@ -189,8 +191,8 @@ human_review_required must be explicit.
 
 Human review is required when review_outcome is warn, fail, or no_go.
 
-`human_review_required` is also preserved from the source artifacts whenever the decision
-rubric requires it (per [`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md)); a pass outcome never
+`human_review_required` is also preserved from the source artifacts whenever this contract
+requires it; a pass outcome never
 clears a human review requirement inherited from the source Safe Query Plan or Compiled SQL
 Artifact.
 

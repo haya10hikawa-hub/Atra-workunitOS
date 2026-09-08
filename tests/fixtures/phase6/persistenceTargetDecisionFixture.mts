@@ -12,7 +12,7 @@
  *
  * The only import is the Phase 6 Persistence Target Decision module surface. The
  * capability and purity boundaries are described in
- * docs/P6_I5D_TEST_ONLY_TARGET_DECISION_FIXTURE.md, not inside this source.
+ * docs/legacy/P6_I5D_TEST_ONLY_TARGET_DECISION_FIXTURE.md, not inside this source.
  */
 
 import {

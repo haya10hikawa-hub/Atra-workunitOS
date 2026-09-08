@@ -1,5 +1,7 @@
 # DATA_MODEL.md
 
+**Status: CANONICAL — CURRENT V0 PERSISTENCE CONTRACT ONLY.** This schema does not define or authorize the next product.
+
 # WorkUnit OS Data Model
 
 ## 1. Architecture Overview

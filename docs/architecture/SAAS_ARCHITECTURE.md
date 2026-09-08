@@ -1,5 +1,7 @@
 # SaaS Architecture
 
+**Status: CANONICAL — CURRENT PRODUCT-INDEPENDENT TECHNICAL INVARIANTS ONLY.** This document does not define product direction; see [`PRODUCT_STATE.md`](../../PRODUCT_STATE.md).
+
 ## Layered Architecture
 
 ## Dependency ownership rule
@@ -19,8 +21,7 @@ UI
 This refactor keeps behavior unchanged and documents the boundary for future phases.
 ┌─────────────────────────────────────────┐
 │              Frontend (React)            │
-│  WorkUnit Launcher + WorkUnit Graph      │
-│  Action Field                            │
+│  Current V0 WorkUnit UI shell            │
 ├─────────────────────────────────────────┤
 │              API Layer (Next.js)          │
 │  /api/workunit/inbox                     │
@@ -55,14 +56,12 @@ This refactor keeps behavior unchanged and documents the boundary for future pha
 
 ## Current auth foundation state
 
-- The canonical product UI direction is WorkUnit Launcher + WorkUnit Graph + Action Field.
-- `WorkUnitOSDashboard` and `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.tsx` are current implementation names, not product terminology source of truth.
-- The UI must open WorkUnits through Launcher/search, show Node relationships in the WorkUnit Graph, and expand the selected Node into the right-side Action Field.
+- `WorkUnitOSDashboard` and `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.tsx` are current frozen-V0 implementation paths, not future product direction.
 - The current shell reads live WorkUnit rows from `/api/workunit/inbox` and reads integration status plus recent audit events through `application/dashboard/dashboardDataClient.ts`.
 - The inbox route can persist sanitized generated WorkUnits when repositories are available.
 - Feedback writes persist feedback, update WorkUnit status, append audit, and record usage.
 - Integration status reads persisted connection metadata and records usage.
-- The Action Field must remain a work surface, not an execution surface.
+- The current right-side workspace cannot authorize or trigger execution.
 - Preview requests use the selected real WorkUnit to derive a safe preview group via `selectedWorkUnitPreviewModel.ts`; preview creation is unavailable when no safe selected WorkUnit context exists.
 - Action Preview / Approval remains wired through existing APIs. Hashes are server-only in browser-facing responses.
 - A tenant-scoped approval status endpoint (`GET /api/workunit/:id/approval/status`) returns safe metadata without exposing hashes or tenant internals.

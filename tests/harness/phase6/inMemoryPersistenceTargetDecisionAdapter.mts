@@ -12,7 +12,7 @@
  * Every candidate is validated with the P6-I5B validator before it is accepted,
  * is scoped to a single tenant, and must select the one fixed target class. The
  * capability and purity boundaries are described in
- * docs/P6_I5E_IN_MEMORY_TEST_ONLY_TARGET_DECISION_ADAPTER.md, not inside this
+ * docs/legacy/P6_I5E_IN_MEMORY_TEST_ONLY_TARGET_DECISION_ADAPTER.md, not inside this
  * source.
  *
  * The only import is the Phase 6 Persistence Target Decision module surface.

@@ -47,7 +47,8 @@ Observed Job
 
 ## Historical reference
 
-`docs/archive/v0/`
+`docs/archive/v0/` is historical context only and does not authorize current or future
+implementation, capability enablement, approval, or product decisions.
 
 ## Current authority
 

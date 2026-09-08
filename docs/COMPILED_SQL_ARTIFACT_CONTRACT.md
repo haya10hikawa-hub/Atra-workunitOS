@@ -1,5 +1,7 @@
 # Compiled SQL Artifact Contract
 
+**Classification: REFERENCE — CURRENT TECHNICAL ARTIFACT; NO PRODUCT AUTHORITY.** Frozen V0 links are historical provenance only.
+
 **Phase:** P6.9. **Baseline:** `main` @ `bf90ff4`.
 
 Defines the shape of a Compiled SQL Artifact: the non-executed object produced by the
@@ -194,8 +196,8 @@ Future query results must restore provenance before they can support human revie
 `human_review_required` is preserved from the source Safe Query Plan and is set whenever the
 decision rubric requires it: sensitive or personal data, redaction, aggregation,
 contradiction, missing information, or any result that would affect priority, risk, action
-readiness, or promotion readiness (per [`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md) and
-[`SAFE_QUERY_PLAN_CONTRACT.md`](./SAFE_QUERY_PLAN_CONTRACT.md) §14).
+readiness, or promotion readiness, as constrained by this contract and
+[`SAFE_QUERY_PLAN_CONTRACT.md`](./SAFE_QUERY_PLAN_CONTRACT.md) §14.
 
 ## 15. Validation Rules
 

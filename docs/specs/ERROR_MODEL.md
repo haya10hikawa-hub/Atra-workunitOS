@@ -1,5 +1,7 @@
 # ERROR_MODEL.md
 
+**Status: CANONICAL — CURRENT V0 IMPLEMENTATION CONTRACT ONLY.** Product authority: NONE.
+
 # WorkUnit OS Error Model
 
 ## 1. Purpose

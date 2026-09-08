@@ -1,5 +1,7 @@
 # Branch Protection Policy — `main`
 
+**Status: PLAN — FUTURE / NOT IMPLEMENTED.** Verify live GitHub settings before use. Product authority: NONE.
+
 Security P4. This document defines the branch protection / required-checks policy
 for `main` so GitHub enforces the **CI Safety Gate** (Security P3) before any merge.
 It is the human-actionable companion to [`CI_SAFETY_GATE.md`](./CI_SAFETY_GATE.md).

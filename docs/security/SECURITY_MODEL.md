@@ -1,5 +1,7 @@
 # Security Model
 
+**Status: CANONICAL — CURRENT PRODUCT-INDEPENDENT SECURITY INVARIANTS.** Product authority: NONE.
+
 ## Trust Architecture
 
 WorkUnit OS has a strict trust boundary model. Nothing from the client,
@@ -8,7 +10,7 @@ external sources, or AI output is trusted by default.
 ### Trust Levels
 
 ```
-Untrusted Source → Sanitized Candidate → WorkUnit Draft → Server Approval → Execution
+Untrusted Source → Sanitized Candidate → WorkUnit Draft → Server Approval → Separate Runtime Authorization Gate
 ```
 
 Each level carries a different trust:
@@ -19,7 +21,9 @@ Each level carries a different trust:
 | Sanitized Candidate | Low | Extracted metadata only — no raw body |
 | WorkUnit Draft | Medium | AI/system-generated, human-reviewable |
 | Server Approval | High | Server-side record, not client flag |
-| Execution | Controlled | Server-generated, approved, audited |
+| Runtime authorization | Controlled | Server-generated, exact-bound, non-executing receipt |
+
+Approval is necessary but never sufficient for execution. This security model owns that current technical invariant.
 
 ### What Is Never Trusted
 
@@ -33,7 +37,7 @@ Each level carries a different trust:
 
 - Client code does not own `tenantId`, `actorUserId`, approval hashes, approval status, or tokens.
 - Preview / Approval requests are assembled in `app/lib/application/actionField/dashboardPreviewClient.ts`.
-- The Action Field is a work surface. It must not expose raw provider payloads or execution-looking controls.
+- The current right-side workspace must not expose raw provider payloads or execution-looking controls.
 - Current UI data reads happen through `app/lib/application/dashboard/dashboardDataClient.ts` and `adoptedDashboardViewModel.ts`; UI components still do not import repositories, route internals, or raw external clients.
 - Preview groups are derived from selected real WorkUnits via `app/lib/application/dashboard/selectedWorkUnitPreviewModel.ts`; the mapper never includes client-owned hashes, status, tenant, role, or tokens.
 - Server errors from preview creation are mapped to safe user-facing messages (`mapSafePreviewError`) in the current UI component; raw server error JSON is never displayed.
@@ -46,7 +50,7 @@ Each level carries a different trust:
 - Execution readiness is a model-level value via `executionReadinessModel.ts`, but the UI must not expose execution-looking controls in WorkUnit Launcher, WorkUnit Graph, Command Palette, Tool Pin, or editable Action Field text. No real execution is triggered; no `/api/workunit/tools` calls from UI for real external execution.
 - A safe Execution Command envelope may be built via `executionCommandModel.ts` for internal transparency only. Approval ID is NOT rendered. No hashes, tenant/user/role, tokens, secrets, or raw payloads are exposed. The envelope is read-only metadata and does not trigger execution.
 - Approval actions use the existing `dashboardPreviewClient.ts` helper and the existing `POST /approval` endpoint; no client-owned fields are sent.
-- Legacy standalone Action Field modules remain for compatibility but are not the canonical UI path.
+- Legacy standalone Action Field modules remain for compatibility but are not future product authority.
 
 ## Session and Authentication
 

@@ -1,14 +1,14 @@
 # Human Decision Record Contract
 
+**Classification: REFERENCE — CURRENT TECHNICAL ARTIFACT; NO PRODUCT AUTHORITY.** Frozen V0 links are historical provenance only.
+
 **Phase:** P6.14. **Baseline:** `main` @ `1c34375`.
 
 Defines the shape of a Human Decision Record: the non-executing, human-authored object
 produced by the [`HUMAN_DECISION_GATE.md`](./HUMAN_DECISION_GATE.md) from a valid Evidence
 Review Record ([`EVIDENCE_REVIEW_RECORD_CONTRACT.md`](./EVIDENCE_REVIEW_RECORD_CONTRACT.md))
 and a valid LLM Judgment Record
-([`LLM_JUDGMENT_RECORD_CONTRACT.md`](./LLM_JUDGMENT_RECORD_CONTRACT.md)). Grounded in
-[`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md) and
-[`EVIDENCE_STANDARD.md`](./EVIDENCE_STANDARD.md). Documentation and a static test only.
+([`LLM_JUDGMENT_RECORD_CONTRACT.md`](./LLM_JUDGMENT_RECORD_CONTRACT.md)). Documentation and a static test only.
 
 ---
 

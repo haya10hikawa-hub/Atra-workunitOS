@@ -62,7 +62,7 @@ function stripComments(src) {
 }
 
 // ── Inputs ──────────────────────────────────────────────────────
-const checklist = read("docs/PHASE_7A_ALPHA_RELEASE_SAFETY_CHECKLIST.md") ?? ""
+const checklist = read("docs/legacy/PHASE_7A_ALPHA_RELEASE_SAFETY_CHECKLIST.md") ?? ""
 const matrixRaw = read("docs/release/ALPHA_RELEASE_MATRIX.json") ?? "{}"
 const pkg = read("package.json") ?? "{}"
 let matrix = {}

@@ -4,7 +4,7 @@
 
 The constitutional definition of Atra / WorkUnit OS: who it is for, what it may do, and
 what it must never do. This document is the parent of
-[`INFORMATION_INTAKE_POLICY.md`](../../INFORMATION_INTAKE_POLICY.md) (what comes in) and
+[`INFORMATION_INTAKE_POLICY.md`](./INFORMATION_INTAKE_POLICY.md) (what comes in) and
 [`DECISION_RUBRIC.md`](./DECISION_RUBRIC.md) (how it is judged). It is documentation and a
 static test only — it changes no runtime behavior and enables no capability.
 
@@ -126,4 +126,4 @@ This doctrine authorizes no capability. It does not authorize real LLM enablemen
 external execution, OAuth/token storage, production deployment, publishing, release
 creation, release tags, artifact upload, database implementation, API routes, UI changes,
 or Electron authority expansion. Every capability remains governed by its own gate
-([`NEXT_CAPABILITY_GATE.md`](../../NEXT_CAPABILITY_GATE.md)) with a recorded human decision.
+([`NEXT_CAPABILITY_GATE.md`](./NEXT_CAPABILITY_GATE.md)) with a recorded human decision.

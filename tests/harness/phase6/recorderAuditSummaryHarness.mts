@@ -14,7 +14,7 @@
  *
  * Failure paths use stable non-echoing issue objects (`code:field` messages) or
  * generic non-echoing errors only. The capability and purity boundaries are
- * described in docs/P6_I5O_TEST_ONLY_RECORDER_AUDIT_SUMMARY_HARNESS.md, not
+ * described in docs/legacy/P6_I5O_TEST_ONLY_RECORDER_AUDIT_SUMMARY_HARNESS.md, not
  * inside this source.
  *
  * The only imports are the P6-I5N fixture module and the Phase 6 Recorder

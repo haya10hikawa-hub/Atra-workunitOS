@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { test } from "node:test";
 
-const RECORD_PATH = "docs/PHASE6_IMPLEMENTATION_DECISION_RECORD.md";
-const PLAYBOOK_PATH = "docs/PHASE6_LOOP_ENGINEERING_PLAYBOOK.md";
+const RECORD_PATH = "docs/legacy/PHASE6_IMPLEMENTATION_DECISION_RECORD.md";
+const PLAYBOOK_PATH = "docs/legacy/PHASE6_LOOP_ENGINEERING_PLAYBOOK.md";
 
 const record = existsSync(RECORD_PATH) ? readFileSync(RECORD_PATH, "utf8") : "";
 const playbook = existsSync(PLAYBOOK_PATH) ? readFileSync(PLAYBOOK_PATH, "utf8") : "";

@@ -2,6 +2,8 @@
 
 # WorkUnit OS — Directory Structure and Dependency Ownership
 
+**Status: REFERENCE — CURRENT IMPLEMENTATION ONLY.** Directory shape does not define the next product; see [`PRODUCT_STATE.md`](../PRODUCT_STATE.md).
+
 ## 1. Current structure summary
 
 Current active structure is still hybrid:
@@ -111,13 +113,13 @@ Forbidden:
 - API routes containing raw SQL directly
 - client code creating `tenantId`, `actorUserId`, approval hashes, approval status, or tokens
 
-## 5. Canonical ownership table
+## 5. Current implementation ownership table
 
 | Concern | Canonical module / area | Notes |
 |--------|--------------------------|-------|
-| Canonical UI direction | `docs/archive/v0/CANONICAL_DECISION_INDEX.md` | WorkUnit Launcher + WorkUnit Graph + Action Field |
-| Current UI shell | `app/components/workunit-os/WorkUnitOSDashboard.tsx` | Active page entry; implementation name may lag canonical UI terms |
-| Current visual implementation | `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.tsx` | Legacy/dashboard-named implementation path; not product terminology source of truth |
+| Product state | `PRODUCT_STATE.md` | Product direction and form are unresolved |
+| Current UI shell | `app/components/workunit-os/WorkUnitOSDashboard.tsx` | Frozen V0 page entry; not future product authority |
+| Current visual implementation | `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.tsx` | Frozen V0 implementation path; not product terminology authority |
 | Current Action Field implementation | `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.tsx` | Right-side Action Field area in current implementation |
 | UI fetch client | `app/lib/application/dashboard/dashboardDataClient.ts` | Reads `/api/workunit/inbox`, `/api/integrations/status`, `/api/audit/recent` |
 | UI view-model | `app/lib/application/dashboard/adoptedDashboardViewModel.ts` | Maps real API data into current shell; empty/loading/error states do not fabricate live WorkUnits |
@@ -154,7 +156,7 @@ Transitional modules still in repository:
 - `app/components/workunit-os/{WorkUnitExplorerPane,DecompositionConsole,DecisionTracePanel,ActionFieldEntryPanel}.tsx`
   - retained old shell components; no longer rendered from the root page
 
-These remain to avoid breaking the current MVP while canonical ownership moves to `app/lib/application/actionField/`. Product UI direction is defined in `docs/archive/v0/CANONICAL_DECISION_INDEX.md`.
+These remain to avoid breaking the current V0 implementation while technical ownership moves to `app/lib/application/actionField/`. They do not define future product UI; see `PRODUCT_STATE.md`.
 
 Phase 1 reduction adds `scripts/report-legacy-surface.mjs` and `tests/architectureLegacySurface.test.mts` to track this surface before deletion.
 

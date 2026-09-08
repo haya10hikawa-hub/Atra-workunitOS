@@ -1,5 +1,7 @@
 # Runtime Authorization Gate Contract (P6-FIX-012, Issue #145)
 
+**Status: CANONICAL — CURRENT PRODUCT-INDEPENDENT SAFETY CONTRACT.** Product authority: NONE.
+
 The final gate that turns a **verified Approval Chain Linkage** plus a
 **runtime-eligible Human Decision** into an opaque `authorized_not_executed`
 receipt — and only after an **exact-binding atomic ApprovalStore claim** wins.

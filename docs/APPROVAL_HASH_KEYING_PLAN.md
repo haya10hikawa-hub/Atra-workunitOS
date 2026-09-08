@@ -1,5 +1,7 @@
 # Approval Hash Keying Plan
 
+**Status: PLAN — FUTURE / NOT IMPLEMENTED.** Product authority: NONE.
+
 **Phase:** P6.0. **Baseline:** `main` @ `287515c`.
 
 A planning document describing **how** approval-hash binding could move from unkeyed hashing

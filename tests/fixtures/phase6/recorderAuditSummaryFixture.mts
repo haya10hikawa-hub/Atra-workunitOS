@@ -15,7 +15,7 @@
  *
  * The only import is the Phase 6 Recorder Audit Summary module surface. The
  * capability and purity boundaries are described in
- * docs/P6_I5N_TEST_ONLY_RECORDER_AUDIT_SUMMARY_FIXTURE.md, not inside this
+ * docs/legacy/P6_I5N_TEST_ONLY_RECORDER_AUDIT_SUMMARY_FIXTURE.md, not inside this
  * source.
  */
 

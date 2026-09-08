@@ -19,8 +19,8 @@ import path from "node:path"
 
 const root = process.cwd()
 
-const STANDARD = path.join(root, "docs/DECOMPOSITION_STANDARD.md")
-const TYPED = path.join(root, "docs/TYPED_DECOMPOSITION_OBJECT.md")
+const STANDARD = path.join(root, "docs/archive/v0/DECOMPOSITION_STANDARD.md")
+const TYPED = path.join(root, "docs/archive/v0/TYPED_DECOMPOSITION_OBJECT.md")
 
 const read = (p: string): string => (existsSync(p) ? readFileSync(p, "utf8") : "")
 const standard = read(STANDARD)
@@ -32,12 +32,12 @@ const requireAll = (haystack: string, needles: string[], label: string): void =>
 
 // ── Files exist ──────────────────────────────────────────────
 
-test("1. docs/DECOMPOSITION_STANDARD.md exists", () => {
+test("1. docs/archive/v0/DECOMPOSITION_STANDARD.md exists", () => {
   assert.equal(existsSync(STANDARD), true)
   assert.ok(standard.length > 0)
 })
 
-test("2. docs/TYPED_DECOMPOSITION_OBJECT.md exists", () => {
+test("2. docs/archive/v0/TYPED_DECOMPOSITION_OBJECT.md exists", () => {
   assert.equal(existsSync(TYPED), true)
   assert.ok(typed.length > 0)
 })
@@ -229,10 +229,10 @@ test("16. TYPED_DECOMPOSITION_OBJECT contains all object kinds", () => {
 
 test("17. TYPED_DECOMPOSITION_OBJECT contains evidence + provenance reference rules", () => {
   requireAll(typed, [
-    "Evidence references must point to provenance-bearing evidence defined by docs/EVIDENCE_STANDARD.md.",
+    "Evidence references must point to provenance-bearing evidence defined by docs/archive/v0/EVIDENCE_STANDARD.md.",
     "A Typed Decomposition Object must not treat model confidence as evidence.",
     "Unsupported claims must be marked unsupported and must not raise action readiness.",
-    "Provenance references must point to provenance records defined by docs/PROVENANCE_MODEL.md.",
+    "Provenance references must point to provenance records defined by docs/archive/v0/PROVENANCE_MODEL.md.",
     "Every Typed Decomposition Object must be tenant-scoped.",
     "Raw retrieved text without provenance must not be used as evidence.",
   ], "TYPED evidence/provenance rules")

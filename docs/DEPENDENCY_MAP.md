@@ -2,9 +2,11 @@
 
 # WorkUnit OS — Architecture Dependency Map
 
+**Status: REFERENCE — CURRENT IMPLEMENTATION ONLY.** This map does not define product direction; see [`PRODUCT_STATE.md`](../PRODUCT_STATE.md).
+
 ## 0. Dependency direction
 
-Canonical direction:
+Current technical dependency direction:
 
 ```txt
 UI
@@ -18,19 +20,18 @@ UI
 
 ## 0.1 First-read context map
 
-- `docs/CONTEXT_INDEX.md` is the first-read file for AI agents.
+- `PRODUCT_STATE.md` and `docs/current/README.md` are first-read; `docs/CONTEXT_INDEX.md` routes implementation tasks.
 - It lists canonical files by task, files to avoid by default, and minimal context bundles.
 - Architecture reduction work should update the context index before expanding feature scope.
 
 ## 1. UI Layer
 
-### Canonical (active)
+### Active implementation
 | Path | Role |
 |------|------|
-| `docs/archive/v0/CANONICAL_DECISION_INDEX.md` | Product UI source of truth: WorkUnit Launcher + WorkUnit Graph + Action Field |
 | `app/page.tsx` | Root page: renders `WorkUnitOSDashboard` only |
-| `app/components/workunit-os/WorkUnitOSDashboard.tsx` | Current UI entry; implementation name may lag canonical UI terms |
-| `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.tsx` | Current legacy/dashboard-named implementation shell; not product terminology source of truth |
+| `app/components/workunit-os/WorkUnitOSDashboard.tsx` | Current frozen-V0 UI entry; not future product authority |
+| `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.tsx` | Current frozen-V0 implementation shell; not product terminology authority |
 | `app/components/workunit-os/adopted/AdoptedWorkUnitDashboard.module.css` | Current implementation CSS Module |
 
 ### Deprecated / reference only
@@ -41,7 +42,7 @@ UI
 | `app/components/workunit-os/{IntegrationStatusPanel,AuditLogPanel}.tsx` | Pre-adoption operations panels; the adopted shell now uses its own compact status/audit rendering |
 | `app/components/workunitInbox/{WorkUnitInbox,WorkUnitDetail}.tsx` | Compatibility exports for the legacy standalone inbox/detail UI |
 
-### Canonical Action Field ownership
+### Current Action Field implementation ownership
 | Path | Role |
 |------|------|
 | `app/lib/application/actionField/dashboardPreviewClient.ts` | Canonical client-safe Preview / Approval UI client |

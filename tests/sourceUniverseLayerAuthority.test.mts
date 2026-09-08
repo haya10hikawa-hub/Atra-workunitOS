@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url"
 
 const rootDir = fileURLToPath(new URL("../", import.meta.url))
 
-const UNIVERSE_DOC = "docs/architecture/ATRA_SOURCE_UNIVERSE.md"
+const UNIVERSE_DOC = "docs/research/ATRA_SOURCE_UNIVERSE.md"
 const SEMANTICS_DOC = "docs/architecture/SOURCE_RECORD_V1_SEMANTICS.md"
 const PRODUCT_AUTHORITY_DOC = "docs/archive/v0/PHASE1_VALUE_GATE_PROGRAM.md"
 const DOCTRINE_DOC = "docs/archive/v0/ATRA_DOCTRINE.md"
@@ -559,7 +559,7 @@ test("source universe: it is subordinate and authorizes nothing", async () => {
   const doc = await read(UNIVERSE_DOC)
 
   assertDeclares(doc, [
-    "Status: Subordinate product-domain reference. Not a roadmap, not a phase plan, not a gate.",
+    "Status: RESEARCH — unresolved, reusable V0-derived hypotheses. Not Product Authority.",
     "RUNTIME_IMPLEMENTATION = 0",
     "IMPLEMENTATION_NEXT    = NO",
     "Where this document disagrees with any of them, they govern and this document is the defect.",
@@ -571,11 +571,9 @@ test("source universe: it is subordinate and authorizes nothing", async () => {
   assert.ok(flatten(doc).includes("P1-2 entry needs **two independent providers**"),
     "the ratified entry condition must stay stated as the thing compositions do not change")
 
-  // The Product Authority keeps its exclusive role. The structural scan for a competing Primary
-  // Product / Roadmap Authority lives in phase1AuthoritySync.test.mts and covers this file too; what
-  // is pinned here is the positive statement that phase order is owned elsewhere.
-  assert.ok(flatten(doc).includes(`\`${path.basename(PRODUCT_AUTHORITY_DOC)}\` owns phase order`),
-    "phase order must stay attributed to the Product Authority")
+  // Phase order remains explicitly historical and confined to frozen V0 authority.
+  assert.ok(flatten(doc).includes(`Within frozen V0, \`${path.basename(PRODUCT_AUTHORITY_DOC)}\` owned phase order`),
+    "phase order must stay confined to frozen V0 authority")
 
   // Cross-document references have to resolve, and the sections cited have to exist. A bare filename
   // for a file that lives one directory up is the cheap version of citing an authority that is not

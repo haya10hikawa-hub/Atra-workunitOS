@@ -32,7 +32,7 @@ This document is the single Primary Product / Roadmap Authority. It owns:
 - the Phase-1 critical path
 - deferred scope
 
-`docs/architecture/CANONICAL_WORKUNIT_PIPELINE_REFACTOR_PROGRAM.md` is the ratified subordinate Technical / Domain Architecture Authority. It is subordinate to this document on sequencing and product priority, and it remains authoritative for single canonical product-data truth, record ownership, projection boundaries, composition and dependency rules, the `Candidate != ReviewedWorkUnit` / `Preview != Approval` / `Approval != Execution` boundaries, the architecture ratchets, and bounded WorkUnit review discipline.
+`docs/archive/v0/CANONICAL_WORKUNIT_PIPELINE_REFACTOR_PROGRAM.md` is the ratified subordinate Technical / Domain Architecture Authority. It is subordinate to this document on sequencing and product priority, and it remains authoritative for single canonical product-data truth, record ownership, projection boundaries, composition and dependency rules, the `Candidate != ReviewedWorkUnit` / `Preview != Approval` / `Approval != Execution` boundaries, the architecture ratchets, and bounded WorkUnit review discipline.
 
 ### What is not Product Authority
 
@@ -457,7 +457,7 @@ Classification here is a record, not a mutation authorization. GitHub metadata w
 The human PM ratified the Verification-driven Integration Plan as Primary Product / Roadmap Authority, with modifications:
 
 - The Verification-driven Integration Plan's own historical `Status` values and dates are **not** authority. This document is the repository-controlled expression of that plan.
-- `docs/architecture/CANONICAL_WORKUNIT_PIPELINE_REFACTOR_PROGRAM.md` is confirmed as subordinate Technical / Domain Architecture Authority.
+- `docs/archive/v0/CANONICAL_WORKUNIT_PIPELINE_REFACTOR_PROGRAM.md` is confirmed as subordinate Technical / Domain Architecture Authority.
 - Issue #207 is `REQUIREMENTS_INPUT`; its schedule is superseded.
 - The existing asset classifications recorded in the ledger above were ratified.
 - The ratification does **not** authorize executing WU-03 through WU-10.

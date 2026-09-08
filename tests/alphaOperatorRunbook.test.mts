@@ -16,9 +16,9 @@ import path from "node:path"
 
 const root = process.cwd()
 
-const RUNBOOK = path.join(root, "docs/ALPHA_OPERATOR_RUNBOOK.md")
-const PROTOCOL = path.join(root, "docs/MANUAL_REVIEW_PROTOCOL.md")
-const SIGNOFF = path.join(root, "docs/ALPHA_SIGNOFF_TEMPLATE.md")
+const RUNBOOK = path.join(root, "docs/legacy/ALPHA_OPERATOR_RUNBOOK.md")
+const PROTOCOL = path.join(root, "docs/legacy/MANUAL_REVIEW_PROTOCOL.md")
+const SIGNOFF = path.join(root, "docs/legacy/ALPHA_SIGNOFF_TEMPLATE.md")
 
 const read = (p: string): string => (existsSync(p) ? readFileSync(p, "utf8") : "")
 const runbook = read(RUNBOOK)
@@ -27,17 +27,17 @@ const signoff = read(SIGNOFF)
 
 // ── Files exist ──────────────────────────────────────────────
 
-test("1. docs/ALPHA_OPERATOR_RUNBOOK.md exists", () => {
+test("1. docs/legacy/ALPHA_OPERATOR_RUNBOOK.md exists", () => {
   assert.equal(existsSync(RUNBOOK), true)
   assert.ok(runbook.length > 0)
 })
 
-test("2. docs/MANUAL_REVIEW_PROTOCOL.md exists", () => {
+test("2. docs/legacy/MANUAL_REVIEW_PROTOCOL.md exists", () => {
   assert.equal(existsSync(PROTOCOL), true)
   assert.ok(protocol.length > 0)
 })
 
-test("3. docs/ALPHA_SIGNOFF_TEMPLATE.md exists", () => {
+test("3. docs/legacy/ALPHA_SIGNOFF_TEMPLATE.md exists", () => {
   assert.equal(existsSync(SIGNOFF), true)
   assert.ok(signoff.length > 0)
 })

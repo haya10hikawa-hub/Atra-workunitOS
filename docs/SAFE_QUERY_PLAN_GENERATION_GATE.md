@@ -1,5 +1,7 @@
 # Safe Query Plan Generation Gate
 
+**Classification: REFERENCE — CURRENT TECHNICAL ARTIFACT; NO PRODUCT AUTHORITY.** Frozen V0 links are historical provenance only.
+
 **Phase:** P6.8. **Baseline:** `main` @ `d694587`.
 
 Defines how a valid Query Intent ([`QUERY_INTENT_CONTRACT.md`](./QUERY_INTENT_CONTRACT.md))
@@ -218,5 +220,8 @@ A Safe Query Plan must not authorize external execution.
 
 This Safe Query Plan Generation Gate authorizes no SQL generation, no SQL execution, no D1 execution, no SQL compilation, no free-form SQL generation, no runtime query planner, no runtime Safe Query Plan generation, no database access, no LLM-controlled database access, no GraphRAG implementation, no vectorization, no real LLM enablement, no external execution, no Formal WorkUnit promotion, and no automated decision-making.
 
-Enforcement in code is governed by separate, future gates
-([`NEXT_CAPABILITY_GATE.md`](./NEXT_CAPABILITY_GATE.md)) with recorded human decisions.
+Any future implementation or capability enablement requires a new explicit CURRENT
+technical/safety decision and applicable implementation and verification gates.
+
+The archived V0 `NEXT_CAPABILITY_GATE` is historical context only and does not authorize
+current or future implementation.

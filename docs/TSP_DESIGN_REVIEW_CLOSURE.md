@@ -1,5 +1,7 @@
 # TSP Design Review Closure
 
+**Status: PLAN — FUTURE / NOT IMPLEMENTED.** Product authority: NONE.
+
 **Phase:** P7.0 (security lane). **Baseline:** `main` @ `1c2c920`.
 
 Closes the design review of the TenantSecretProvider (TSP) that the P6.0 gate
@@ -269,5 +271,8 @@ External actions remain disabled unless a later implementation and enablement ga
 
 This TSP Design Review Closure authorizes no TenantSecretProvider implementation, no secret storage, no KMS integration, no HMAC implementation, no ApprovalStore runtime change, no approval verification runtime change, no external action enablement, no real LLM enablement, no deployment, and no automated decision-making.
 
-Enforcement in code is governed by separate, future gates
-([`NEXT_CAPABILITY_GATE.md`](./NEXT_CAPABILITY_GATE.md)) with recorded human decisions.
+Any future implementation or capability enablement requires a new explicit CURRENT
+technical/safety decision and applicable implementation and verification gates.
+
+The archived V0 `NEXT_CAPABILITY_GATE` is historical context only and does not authorize
+current or future implementation.

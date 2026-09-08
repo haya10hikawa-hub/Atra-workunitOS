@@ -17,8 +17,8 @@ import path from "node:path"
 
 const root = process.cwd()
 
-const EXIT = path.join(root, "docs/ALPHA_EXIT_CRITERIA.md")
-const GATE = path.join(root, "docs/NEXT_CAPABILITY_GATE.md")
+const EXIT = path.join(root, "docs/legacy/ALPHA_EXIT_CRITERIA.md")
+const GATE = path.join(root, "docs/archive/v0/NEXT_CAPABILITY_GATE.md")
 
 const read = (p: string): string => (existsSync(p) ? readFileSync(p, "utf8") : "")
 const exit = read(EXIT)
@@ -30,12 +30,12 @@ const requireAll = (haystack: string, needles: string[], label: string): void =>
 
 // ── Files exist ──────────────────────────────────────────────
 
-test("1. docs/ALPHA_EXIT_CRITERIA.md exists", () => {
+test("1. docs/legacy/ALPHA_EXIT_CRITERIA.md exists", () => {
   assert.equal(existsSync(EXIT), true)
   assert.ok(exit.length > 0)
 })
 
-test("2. docs/NEXT_CAPABILITY_GATE.md exists", () => {
+test("2. docs/archive/v0/NEXT_CAPABILITY_GATE.md exists", () => {
   assert.equal(existsSync(GATE), true)
   assert.ok(gate.length > 0)
 })

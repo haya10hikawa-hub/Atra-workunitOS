@@ -26,9 +26,9 @@ function requireAll(doc: string, label: string, needles: readonly string[]): voi
   }
 }
 
-const GO = "../docs/P6_I5_EXPLICIT_HUMAN_GO.md"
-const GATE = "../docs/P6_I5_PERSISTENCE_IMPLEMENTATION_GATE.md"
-const RECORD = "../docs/P6_I5_PERSISTENCE_RECORD_CONTRACT.md"
+const GO = "../docs/legacy/P6_I5_EXPLICIT_HUMAN_GO.md"
+const GATE = "../docs/legacy/P6_I5_PERSISTENCE_IMPLEMENTATION_GATE.md"
+const RECORD = "../docs/legacy/P6_I5_PERSISTENCE_RECORD_CONTRACT.md"
 
 // ─── Files exist ────────────────────────────────────────────────
 

@@ -1,10 +1,11 @@
 # Current WorkUnit UI Implementation
 
+**Status: REFERENCE — FROZEN V0 IMPLEMENTATION ONLY.** Product direction and form are unresolved in [`PRODUCT_STATE.md`](../../../../PRODUCT_STATE.md).
+
 ## Ownership
 - Current implementation shell for WorkUnit OS.
 - `WorkUnitOSDashboard.tsx` renders this shell.
-- Product UI source of truth is `docs/archive/v0/CANONICAL_DECISION_INDEX.md`: WorkUnit Launcher + WorkUnit Graph + Action Field.
-- Do not treat dashboard naming in this folder as product terminology.
+- This folder records current implementation ownership; it is not product terminology or future UI authority.
 
 ## Allowed imports
 - React hooks.
@@ -26,9 +27,9 @@
 ## Legacy warnings
 - Do not import `app/components/workunitInbox/*`.
 - Do not import `app/components/legacy/workunitInbox/*`.
-- Do not revive old pre-v0 panes as the product UI direction.
+- Do not present current or pre-v0 panes as future product direction.
 
 ## Common mistakes
-- Introducing UI patterns that conflict with WorkUnit Launcher, WorkUnit Graph, or right-side Action Field.
+- Treating maintenance of this V0 shell as a product-direction decision.
 - Reading raw provider payloads in the component.
 - Sending tenant, role, hash, approval status, or token fields from the client.

@@ -103,7 +103,7 @@ function requiredSet(doc: string, token: string): string[] | null {
   const match = new RegExp(`^${token} = (.+)$`, "m").exec(doc)
   return match === null ? null : match[1].trim().split(/\s+/)
 }
-const ARCHITECTURE_AUTHORITY_DOC = "docs/architecture/CANONICAL_WORKUNIT_PIPELINE_REFACTOR_PROGRAM.md"
+const ARCHITECTURE_AUTHORITY_DOC = "docs/archive/v0/CANONICAL_WORKUNIT_PIPELINE_REFACTOR_PROGRAM.md"
 const ALLOWLIST_SOURCE = "tests/architectureBoundaries.test.mts"
 
 // The three names decision C ratified as Phase-1 semantic targets. Ratified as *names*; not

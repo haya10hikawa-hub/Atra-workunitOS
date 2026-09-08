@@ -17,7 +17,7 @@
 ## WorkUnit OS Organization
 
 - Treat AI agents as an organization, not a single chat tool.
-- Preserve the split: `Source Hopper -> Sanitized Candidate -> WorkUnit Graph / Action Field -> WorkUnit candidate -> Execution Prep`.
+- When maintaining frozen V0 code, preserve its existing split: `Source Hopper -> Sanitized Candidate -> WorkUnit Graph / Action Field -> WorkUnit candidate -> Execution Prep`. This is not future product direction.
 - PM decisions override agent suggestions.
 - Use written handoffs: Goal, Current State, Decisions, Next Action, Risks.
 

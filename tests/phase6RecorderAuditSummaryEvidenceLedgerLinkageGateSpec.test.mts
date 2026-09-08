@@ -46,8 +46,8 @@ function pinProse(doc: string, label: string, needles: readonly string[]): void 
   }
 }
 
-const GO = "../docs/P6_I5Q_EXPLICIT_HUMAN_GO.md"
-const SPEC = "../docs/P6_I5Q_RECORDER_AUDIT_SUMMARY_EVIDENCE_LEDGER_LINKAGE_GATE_SPEC.md"
+const GO = "../docs/legacy/P6_I5Q_EXPLICIT_HUMAN_GO.md"
+const SPEC = "../docs/legacy/P6_I5Q_RECORDER_AUDIT_SUMMARY_EVIDENCE_LEDGER_LINKAGE_GATE_SPEC.md"
 
 // ─── Files exist ────────────────────────────────────────────────
 
@@ -138,10 +138,10 @@ test("gate spec references Graph Model doc only as out-of-scope / No-Go", () => 
 
 test("referenced doctrine and lane docs exist on disk", () => {
   for (const rel of [
-    "../docs/ALPHA_EVIDENCE_LEDGER.md",
+    "../docs/legacy/ALPHA_EVIDENCE_LEDGER.md",
     "../docs/archive/v0/GRAPH_MODEL.md",
-    "../docs/P6_I5P_RECORDER_AUDIT_SUMMARY_LANE_READINESS_REVIEW.md",
-    "../docs/P6_I5K_RECORDER_AUDIT_SUMMARY_SPEC.md",
+    "../docs/legacy/P6_I5P_RECORDER_AUDIT_SUMMARY_LANE_READINESS_REVIEW.md",
+    "../docs/legacy/P6_I5K_RECORDER_AUDIT_SUMMARY_SPEC.md",
     "../app/lib/phase6/recorderAuditSummary/validators.ts",
   ]) {
     assert.ok(existsSync(abs(rel)), `${rel} must exist on disk`)
@@ -379,7 +379,7 @@ test("explicit human Go records the docs-only scope and non-authorization bounda
     "This task is docs-only + static-test.",
     "The task will create only the three allowed files.",
     "The task will not modify `app/`.",
-    "The task will not modify `docs/ALPHA_EVIDENCE_LEDGER.md`.",
+    "The task will not modify `docs/legacy/ALPHA_EVIDENCE_LEDGER.md`.",
     "The task will not modify `docs/archive/v0/GRAPH_MODEL.md`.",
     "No Evidence Ledger append is allowed.",
     "No Graph Model write is allowed.",

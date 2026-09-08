@@ -1,5 +1,7 @@
 # D1 Read-only Execution Gate
 
+**Classification: REFERENCE — CURRENT TECHNICAL ARTIFACT; NO PRODUCT AUTHORITY.** This artifact grants no product or execution permission.
+
 **Phase:** P6.11. **Baseline:** `main` @ `5fda748`.
 
 Defines how a valid Rule Review Record
@@ -70,8 +72,8 @@ D1 Read-only Execution is **not**:
   missing human decision, or sensitive targets resolve to clarification or No-Go, never to
   execution.
 - Even after every check passes, this gate is a description: actual enablement requires a
-  separate recorded human decision per
-  [`NEXT_CAPABILITY_GATE.md`](./NEXT_CAPABILITY_GATE.md).
+  new explicit CURRENT technical/safety decision and applicable implementation and
+  verification gates.
 
 Fixed rules, always:
 
@@ -249,8 +251,7 @@ A query result from denied schema is No-Go.
 A query result must not be treated as truth by default when source rows conflict.
 
 This is the step that satisfies the evidence predicate of
-[`READ_ONLY_QUERY_PLANNING_SPEC.md`](./READ_ONLY_QUERY_PLANNING_SPEC.md) and
-[`EVIDENCE_STANDARD.md`](./EVIDENCE_STANDARD.md): result provenance is captured here or the
+[`READ_ONLY_QUERY_PLANNING_SPEC.md`](./READ_ONLY_QUERY_PLANNING_SPEC.md): result provenance is captured here or the
 result never becomes evidence.
 
 ## 15. Failure and No-Go Conditions
@@ -299,5 +300,8 @@ A Query Result Record must not authorize Formal WorkUnit promotion.
 
 This D1 Read-only Execution Gate authorizes no runtime D1 execution, no unrestricted SQL execution, no mutation execution, no open database access, no free-form SQL execution, no LLM-controlled database access, no external execution, no approval, no GraphRAG implementation, no vectorization, no real LLM enablement, no Formal WorkUnit promotion, and no automated decision-making.
 
-Enforcement in code is governed by separate, future gates
-([`NEXT_CAPABILITY_GATE.md`](./NEXT_CAPABILITY_GATE.md)) with recorded human decisions.
+Any future implementation or capability enablement requires a new explicit CURRENT
+technical/safety decision and applicable implementation and verification gates.
+
+The archived V0 `NEXT_CAPABILITY_GATE` is historical context only and does not authorize
+current or future implementation.

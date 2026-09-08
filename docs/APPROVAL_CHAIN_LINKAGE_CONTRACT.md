@@ -1,5 +1,7 @@
 # Approval Chain Linkage Contract
 
+**Status: CANONICAL — CURRENT PRODUCT-INDEPENDENT SAFETY CONTRACT.** Product authority: NONE.
+
 **Phase:** P6-FIX-011 (Issue #144). **Module:** `app/lib/phase6/approvalLinkage/`.
 
 Defines the pure, non-authorizing `ApprovalLinkageRecord`: immutable historical evidence

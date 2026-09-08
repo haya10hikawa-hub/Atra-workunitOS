@@ -16,8 +16,8 @@ import path from "node:path"
 
 const root = process.cwd()
 
-const DRYRUN = path.join(root, "docs/ALPHA_RC_DRY_RUN.md")
-const PKG = path.join(root, "docs/ALPHA_PACKAGE_VERIFICATION.md")
+const DRYRUN = path.join(root, "docs/legacy/ALPHA_RC_DRY_RUN.md")
+const PKG = path.join(root, "docs/legacy/ALPHA_PACKAGE_VERIFICATION.md")
 
 const read = (p: string): string => (existsSync(p) ? readFileSync(p, "utf8") : "")
 const dry = read(DRYRUN)
@@ -25,12 +25,12 @@ const pkg = read(PKG)
 
 // ── Files exist ──────────────────────────────────────────────
 
-test("1. docs/ALPHA_RC_DRY_RUN.md exists", () => {
+test("1. docs/legacy/ALPHA_RC_DRY_RUN.md exists", () => {
   assert.equal(existsSync(DRYRUN), true)
   assert.ok(dry.length > 0)
 })
 
-test("2. docs/ALPHA_PACKAGE_VERIFICATION.md exists", () => {
+test("2. docs/legacy/ALPHA_PACKAGE_VERIFICATION.md exists", () => {
   assert.equal(existsSync(PKG), true)
   assert.ok(pkg.length > 0)
 })

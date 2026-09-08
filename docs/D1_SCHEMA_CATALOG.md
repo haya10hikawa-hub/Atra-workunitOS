@@ -1,5 +1,7 @@
 # D1 Schema Catalog
 
+**Classification: REFERENCE — CURRENT TECHNICAL ARTIFACT; NO PRODUCT AUTHORITY.** Frozen V0 links are historical provenance only.
+
 **Phase:** P6.6. **Baseline:** `main` @ `651ff8e`.
 
 A documentation-only inventory of Atra's known Cloudflare D1 tables and columns, recording
@@ -129,8 +131,7 @@ against them (enforced outside the LLM per the query-planning spec).
 ## 11. Evidence and Provenance Relevance
 
 Each entry declares whether its data can be evidence (`evidence_relevance`) and whether it
-carries provenance (`provenance_relevance`), consistent with
-[`EVIDENCE_STANDARD.md`](./EVIDENCE_STANDARD.md) and [`PROVENANCE_MODEL.md`](./PROVENANCE_MODEL.md).
+carries provenance (`provenance_relevance`), as defined by this current catalog.
 A column is evidence-relevant only if a query result from it could carry restorable
 provenance.
 
@@ -193,5 +194,8 @@ A catalog is evaluated on:
 
 This D1 Schema Catalog authorizes no migration, no database implementation, no runtime schema registry, no query execution, no NL2SQL execution, no GraphRAG implementation, no vectorization, no real LLM enablement, no external execution, and no automated decision-making.
 
-Enforcement in code is governed by separate, future gates
-([`NEXT_CAPABILITY_GATE.md`](./NEXT_CAPABILITY_GATE.md)) with recorded human decisions.
+Any future implementation or capability enablement requires a new explicit CURRENT
+technical/safety decision and applicable implementation and verification gates.
+
+The archived V0 `NEXT_CAPABILITY_GATE` is historical context only and does not authorize
+current or future implementation.

@@ -1,5 +1,7 @@
 # Canonical Identity Independence Contract
 
+**Status: CANONICAL — CURRENT PRODUCT-INDEPENDENT SAFETY CONTRACT.** Product authority: NONE.
+
 **Phase:** P6-FIX-010 (Issue #143). **Modules:** `app/lib/phase6/canonicalIdentity/`,
 `app/lib/phase6/identityIndependence/`.
 

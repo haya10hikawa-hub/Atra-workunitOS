@@ -9,7 +9,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { readFile } from "node:fs/promises"
 
-const DOC = "docs/PHASE_7A_ALPHA_RELEASE_SAFETY_CHECKLIST.md"
+const DOC = "docs/legacy/PHASE_7A_ALPHA_RELEASE_SAFETY_CHECKLIST.md"
 const MATRIX = "docs/release/ALPHA_RELEASE_MATRIX.json"
 const APPROVAL_REPO = "app/lib/persistence/d1/approvalRecordRepository.ts"
 const WORKUNIT_REPO = "app/lib/persistence/d1/workUnitRepository.ts"

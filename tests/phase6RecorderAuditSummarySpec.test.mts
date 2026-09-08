@@ -29,10 +29,10 @@ function requireAll(doc: string, label: string, needles: readonly string[]): voi
   }
 }
 
-const GO = "../docs/P6_I5K_EXPLICIT_HUMAN_GO.md"
-const SPEC = "../docs/P6_I5K_RECORDER_AUDIT_SUMMARY_SPEC.md"
-const CONTRACT = "../docs/P6_I5K_RECORDER_AUDIT_SUMMARY_CONTRACT.md"
-const TYPES_VALIDATORS = "../docs/P6_I5L_RECORDER_AUDIT_SUMMARY_TYPES_VALIDATORS.md"
+const GO = "../docs/legacy/P6_I5K_EXPLICIT_HUMAN_GO.md"
+const SPEC = "../docs/legacy/P6_I5K_RECORDER_AUDIT_SUMMARY_SPEC.md"
+const CONTRACT = "../docs/legacy/P6_I5K_RECORDER_AUDIT_SUMMARY_CONTRACT.md"
+const TYPES_VALIDATORS = "../docs/legacy/P6_I5L_RECORDER_AUDIT_SUMMARY_TYPES_VALIDATORS.md"
 
 // ─── Files exist ────────────────────────────────────────────────
 

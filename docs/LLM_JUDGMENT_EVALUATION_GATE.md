@@ -1,5 +1,7 @@
 # LLM Judgment Evaluation Gate
 
+**Classification: REFERENCE — CURRENT TECHNICAL ARTIFACT; NO PRODUCT AUTHORITY.** Frozen V0 links are historical provenance only.
+
 **Phase:** P6.13. **Baseline:** `main` @ `dcf6007`.
 
 Defines when and how an LLM may inspect reviewed evidence to produce a **bounded,
@@ -7,10 +9,7 @@ non-authorizing** judgment artifact. Discharges the forward reference repeated a
 query spine — "Future LLM judgment may inspect evidence only after a separate LLM judgment
 evaluation gate" ([`D1_READ_ONLY_EXECUTION_GATE.md`](./D1_READ_ONLY_EXECUTION_GATE.md) §16,
 [`EVIDENCE_REVIEW_GATE.md`](./EVIDENCE_REVIEW_GATE.md) §16). Consumes the Evidence Review
-Record ([`EVIDENCE_REVIEW_RECORD_CONTRACT.md`](./EVIDENCE_REVIEW_RECORD_CONTRACT.md)) and is
-grounded in [`EVIDENCE_STANDARD.md`](./EVIDENCE_STANDARD.md),
-[`PROVENANCE_MODEL.md`](./PROVENANCE_MODEL.md), and
-[`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md). Pairs with
+Record ([`EVIDENCE_REVIEW_RECORD_CONTRACT.md`](./EVIDENCE_REVIEW_RECORD_CONTRACT.md)). Pairs with
 [`LLM_JUDGMENT_RECORD_CONTRACT.md`](./LLM_JUDGMENT_RECORD_CONTRACT.md). Documentation and a
 static test only.
 
@@ -338,5 +337,8 @@ Future action authorization must remain separate.
 
 This LLM Judgment Evaluation Gate authorizes no truth assignment, no automated decision-making, no approval, no action authorization, no external action execution, no Formal WorkUnit promotion, no runtime LLM enablement, no real LLM provider integration, no GraphRAG implementation, no vectorization, no runtime evidence storage, no runtime provenance storage, no database access, no D1 execution, no SQL execution, no deployment, and no automated decision-making.
 
-Enforcement in code is governed by separate, future gates
-([`NEXT_CAPABILITY_GATE.md`](./NEXT_CAPABILITY_GATE.md)) with recorded human decisions.
+Any future implementation or capability enablement requires a new explicit CURRENT
+technical/safety decision and applicable implementation and verification gates.
+
+The archived V0 `NEXT_CAPABILITY_GATE` is historical context only and does not authorize
+current or future implementation.

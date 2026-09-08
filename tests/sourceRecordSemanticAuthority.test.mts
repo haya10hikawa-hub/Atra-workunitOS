@@ -656,7 +656,7 @@ test("R6: only the reviewed slice produces, adapts, digests or profiles a Source
     "No persistence path exists",
     "ATRA_PM_P1_1_EXIT_AND_P1_2_ENTRY_RATIFIED",
     "no persistence and no consumer beyond production",
-    "declared in `docs/archive/v0/PHASE1_VALUE_GATE_PROGRAM.md` and never here",
+    "archived V0 history and does not authorize current product direction",
   ], `${SEMANTICS_DOC} superseding record`)
 })
 

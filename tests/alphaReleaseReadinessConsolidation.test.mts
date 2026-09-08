@@ -11,7 +11,7 @@ import assert from "node:assert/strict"
 import { readFile } from "node:fs/promises"
 import { execFileSync } from "node:child_process"
 
-const DOC = "docs/ALPHA_RELEASE_READINESS.md"
+const DOC = "docs/legacy/ALPHA_RELEASE_READINESS.md"
 const SUMMARY = "docs/release/ALPHA_READINESS_SUMMARY.json"
 const MATRIX = "docs/release/ALPHA_RELEASE_MATRIX.json"
 const GATE = "scripts/alpha-safety-gate.mjs"

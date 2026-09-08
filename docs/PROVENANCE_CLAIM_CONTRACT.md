@@ -1,11 +1,15 @@
 # Provenance Claim Contract
 
+**Classification: PLAN — FUTURE / NOT IMPLEMENTED.** Product authority: NONE.
+
 **Status:** PROPOSED CONTRACT — HUMAN REVIEW REQUIRED
 **Phase:** HTPE H0
 **Runtime implementation:** NONE
 **Persistence:** NOT AUTHORIZED
 **Authority promotion:** NOT AUTHORIZED
 **Formation dependency:** ACTIVE_UNMERGED_CHANGE
+
+**Current invariant source:** [`docs/current/PROVENANCE_INVARIANTS.md`](./current/PROVENANCE_INVARIANTS.md)
 
 **Baseline:** `main` @ `2669f2ea5da052e801cb3a49251c96a34ec20939`.
 
@@ -21,7 +25,7 @@ inherits the tag of the nearest enclosing tagged block or section heading.
 | Tag | Meaning |
 | --- | --- |
 | `[FACT]` | Verified in this repository at the baseline commit, with an exact path or ref. |
-| `[CONTRACT]` | An existing, already-accepted repository authority. Binding today. |
+| `[CONTRACT]` | A current invariant restated from a current canonical document. Binding today. |
 | `[PROPOSAL]` | Proposed by the HTPE plan. **Not accepted.** Not implemented. |
 | `[HYPOTHESIS]` | A planning belief that has not been validated against the repository. |
 | `[PRODUCT_DECISION_REQUIRED]` | Deliberately unresolved. No default is implied. |
@@ -29,10 +33,10 @@ inherits the tag of the nearest enclosing tagged block or section heading.
 
 `[PROPOSAL]` never becomes `[CONTRACT]` by appearing in this document, by being merged as
 documentation, or by being cited elsewhere. Promotion requires a separate human-gated
-review. Conversely, nothing here downgrades an existing repository authority: where this
-document and a `[CONTRACT]` source disagree, the `[CONTRACT]` source wins and this document
-is the defect. Type shapes are illustrative only, marked `[PROPOSAL — NOT IMPLEMENTED]`, and
-exist nowhere in the codebase.
+review. Every `[CONTRACT]` statement in this plan is subordinate to
+`docs/current/PROVENANCE_INVARIANTS.md` or another current technical/security authority.
+Archived and legacy documents are never `[CONTRACT]` sources. Type shapes are illustrative
+only, marked `[PROPOSAL — NOT IMPLEMENTED]`, and exist nowhere in the codebase.
 
 ## 1. Purpose And Non-Goals
 
@@ -247,12 +251,11 @@ reviewed decision. Naming a predicate in discussion does not accept it.
 
 `evidenceClass` records **how a claim came to exist**. It is a closed union.
 
-**Normative:** evidence class is *not* trust, and it is *not* authority.
-`docs/PROVENANCE_MODEL.md` §9 already establishes exactly this distinction for provenance —
-source type records *where* information came from, trust level records *how far* it has been
-verified `[CONTRACT]`. `evidenceClass` is the claim-level analogue of source type. It does
-**not** replace, rename, or override `source_type` or `trust_level`, which remain owned by
-`docs/PROVENANCE_MODEL.md` §5 and §6.
+**Normative:** evidence class is *not* trust, and it is *not* authority. Source identity
+records origin; neither origin nor an evidence-class label establishes truth or permission.
+This is current invariant 1 in `docs/current/PROVENANCE_INVARIANTS.md` `[CONTRACT]`.
+`evidenceClass` is a proposed claim-level classification and does not establish a current
+field relationship to any frozen V0 provenance vocabulary.
 
 ### 5.2 The Closed Proposed Vocabulary `[PROPOSAL]`
 
@@ -270,8 +273,8 @@ verified `[CONTRACT]`. `evidenceClass` is the claim-level analogue of source typ
 - **`attested_source`** records that source material was validated; it does **not**
   automatically establish claim-specific authority.
 - **`asserted_provider`** records that an assertion was made. Assertion is not canonical
-  truth — mirroring `third_party_text`, "never promoted to 'true' by default"
-  (`docs/EVIDENCE_STANDARD.md` §7, `docs/PROVENANCE_MODEL.md` §9) `[CONTRACT]`.
+  truth and is never promoted to fact by default, under current invariant 2
+  (`docs/current/PROVENANCE_INVARIANTS.md`) `[CONTRACT]`.
 - **`derived_rule`** must cite the **exact rule id, rule version, and input claims**. A
   derived claim that cannot name its inputs is not reproducible and is therefore invalid.
 - **`inferred_llm`** is always proposal-only and is never promoted automatically, under any
@@ -391,9 +394,8 @@ implies mutation of an immutable record. Claims are appended, never updated.
 ### 7.4 Immutability And Correction `[PROPOSAL]`
 
 Correction is additive: a correcting claim is a new record and the corrected claim is
-retained and visible. This is the claim-level continuation of `transformation_history`,
-which `docs/PROVENANCE_MODEL.md` §7 requires be "appended, never overwritten", and of §10's
-rule that contradictions stay visible "with both sides' origins intact" `[CONTRACT]`.
+retained and visible. Contradictions retain both sides' origins under current invariant 3
+(`docs/current/PROVENANCE_INVARIANTS.md`) `[CONTRACT]`.
 
 ### 7.5 The Ordering Boundary `[CONTRACT]`
 
@@ -570,9 +572,8 @@ DerivedState {
 2. **Stored state must be reproducible** from its `sourceClaimIds` plus the exact
    `ruleVersion`. Reproducibility is the definition of validity here.
 3. **Minority and conflicting claims must not disappear through summarization.** A derived
-   state that silently drops the dissenting claim has fabricated agreement — extending the
-   rule that contradictions stay visible with both sides intact
-   (`docs/PROVENANCE_MODEL.md` §10) `[CONTRACT]`.
+   state that silently drops the dissenting claim has fabricated agreement. Current
+   invariant 3 requires both origins to remain visible `[CONTRACT]`.
 4. **Omitted and unresolved dimensions must be explicit.** `omittedDimensions` = what the
    rule deliberately did not consider; `unresolvedDimensions` = what it could not resolve.
    Neither may be represented as absence of a problem.
@@ -670,12 +671,9 @@ repository, no `schemaVersion` change.
 7. a dedicated **persistence-gate ADR** must be **approved by the human owner**;
 8. the migration must ship in a **separate PR**.
 
-These match the existing persistence readiness criteria, which already require redaction
-policy, schema version, idempotency key strategy, duplicate handling, rollback strategy, and
-audit strategy each be decided, with "explicit human review before implementation"
-(`docs/P6_I5_PERSISTENCE_IMPLEMENTATION_GATE.md` §9) `[CONTRACT]`. The target class remains
-governed by `docs/P6_I5A_PERSISTENCE_TARGET_DECISION.md`, whose selected initial target is
-an in-memory test-only store `[CONTRACT]`.
+These requirements are stated directly by current invariant 7 in
+`docs/current/PROVENANCE_INVARIANTS.md` `[CONTRACT]`. No current persistence target is
+selected. Any V0 target choice is historical and grants no present implementation permission.
 
 ### 14.3 Proposed Tables `[PROPOSAL]`
 
@@ -683,49 +681,55 @@ Every table implied by this vocabulary — a claim ledger, a binding ledger, a d
 cache — is classified **PROPOSAL — NOT AUTHORIZED**. This document deliberately contains no
 executable SQL and no DDL.
 
-## 15. Naming Distinction
+## 15. Current Naming Distinction And Historical Context
 
-The word "evidence" is already used in this repository for **operational assurance
-material**. The claim vocabulary must not overwrite it.
+The word "evidence" is used in current technical documents for **operational assurance
+material**. This proposal must not overwrite current terminology.
 
-| Existing document | What it owns | Relationship to this contract |
+Current reference: `docs/EVIDENCE_REVIEW_RECORD_CONTRACT.md` describes a review record. Its
+technical status is independent of any archived product model.
+
+### 15.1 Historical Context Only
+
+Every archive/legacy citation in this table is non-normative historical context. These
+documents supply no current fields, rules, ownership, governance, or authorization.
+
+| Historical document | What V0 described | Non-normative use here |
 | --- | --- | --- |
-| `docs/EVIDENCE_STANDARD.md` | What counts as evidence for a product judgment; roles, strength, contradiction handling | This contract layers claims **on top of** it; it does not redefine evidence |
-| `docs/PROVENANCE_MODEL.md` | Provenance record fields, `source_type`, `trust_level`, transformation history | **Closest neighbor.** `evidenceClass` is the claim-level analogue of `source_type` and does **not** replace `source_type` or `trust_level` (§5.1) |
-| `docs/EVIDENCE_REVIEW_RECORD_CONTRACT.md` | The record of a **review** of evidence | Implementation/review assurance material — a different kind of object entirely |
-| `docs/ALPHA_EVIDENCE_LEDGER.md` | A human-readable **review record**, explicitly "not a database" | Operational assurance material; the proposed claim ledger is a product-data concept and must not be confused with it |
-| `docs/archive/v0/GRAPH_MODEL.md` | The conceptual node/edge model | **Documentation, not a runtime graph database** — that document itself states the graph is not a runtime graph database `[CONTRACT]` |
-| `docs/RELATIONSHIP_SCHEMA.md` | Relationship types and required properties | Conceptual relationship vocabulary; claims and bindings do not replace it |
+| `docs/archive/v0/EVIDENCE_STANDARD.md` | V0 product-judgment evidence roles and strength | Terminology history only |
+| `docs/archive/v0/PROVENANCE_MODEL.md` | V0 provenance fields and transformation history | Comparison history only |
+| `docs/legacy/ALPHA_EVIDENCE_LEDGER.md` | A historical human-readable review record | Operational history only |
+| `docs/archive/v0/GRAPH_MODEL.md` | V0 conceptual node/edge model | Product-model history only |
+| `docs/archive/v0/RELATIONSHIP_SCHEMA.md` | V0 relationship types and properties | Vocabulary history only |
 
-### Field Mapping To `PROVENANCE_MODEL.md` `[PROPOSAL]`
+### 15.2 Historical V0 Field Comparison `[HYPOTHESIS]`
 
-This contract **refines** the P6.2 provenance record and replaces none of it. Its eleven
-required fields (`docs/PROVENANCE_MODEL.md` §4) map as follows.
+The frozen V0 provenance model listed eleven fields. The comparison below preserves design
+history only. It supplies no required current field and does not constrain a future model.
 
-| Existing required field | HTPE counterpart | Relationship |
+| Historical V0 field | Proposed HTPE counterpart | Unresolved comparison |
 | --- | --- | --- |
-| `source_id` | provider-native source identity (§3.2) | refines |
-| `source_type` | `evidenceClass` (§5) | **orthogonal** — analogue, not replacement (§5.1) |
-| `source_uri_or_reference` | `evidenceRef` (§3.2, §4.3) | refines |
-| `obtained_at` | `observedAt` **and** `recordedAt` (§7.1) | **refines, does not replace** — one instant split into two independent axes; not a third time vocabulary |
-| `tenant_id` | `tenantId` (§4.3) | same rule — context-derived, never caller-supplied |
-| `actor_or_system` | `actor` binding (§6.2) | refines — a binding adds its own basis and evidence class |
-| `trust_level` | **none** | **orthogonal** — sole authority for how far something is verified; `evidenceClass` never substitutes for it |
-| `transformation_history` | claim append/correction chain (§7.4) | refines — same append-only rule |
-| `redaction_state` | none | not applicable at claim level — stays on the provenance record |
-| `retention_class` | none | **owns** — claim retention is a value-range decision on this field, **not** a new field (§17 #1) |
-| `evidence_role` | F1C `SourceRole` is a **separate** vocabulary (§6.4 item 5) | **`[PRODUCT_DECISION_REQUIRED]`** — the relationship is unresolved and must not be merged by assumption |
+| `source_id` | provider-native source identity (§3.2) | Historical analogy only |
+| `source_type` | `evidenceClass` (§5) | Relationship unresolved |
+| `source_uri_or_reference` | `evidenceRef` (§3.2, §4.3) | Historical analogy only |
+| `obtained_at` | `observedAt` and `recordedAt` (§7.1) | Proposed split; not current |
+| `tenant_id` | `tenantId` (§4.3) | Proposed mapping; not current |
+| `actor_or_system` | `actor` binding (§6.2) | Proposed mapping; not current |
+| `trust_level` | none | Relationship unresolved |
+| `transformation_history` | claim append/correction chain (§7.4) | Historical analogy only |
+| `redaction_state` | none | Relationship unresolved |
+| `retention_class` | none | Current retention decision unresolved |
+| `evidence_role` | F1C `SourceRole` (§6.4 item 5) | Relationship unresolved |
 
 **Normative distinctions:**
 
 - **Implementation/review evidence is operational assurance material** — it evidences that
   work was done correctly; it is not a proposition about the user's world.
-- **Product claims represent source-derived or human-derived propositions** about the user's
-  world; they are not assurance material.
-- **Graph-model documentation is not a runtime graph database**, and this contract does not
-  make it one.
-- The new claim vocabulary **must not overwrite existing evidence terminology.** Where a term
-  is already owned by a document above, this contract defers to that document.
+- Proposed claims would represent source-derived or human-derived propositions; this is not
+  an accepted product model.
+- Historical graph documentation supplies no runtime database requirement.
+- New terminology must not overwrite current technical terminology. Historical documents
+  provide context only and are never normative dependencies.
 
 ## 16. Active-Unmerged Dependency Disclosure `[ACTIVE_UNMERGED_CHANGE]`
 
@@ -758,7 +762,7 @@ wording, or omission elsewhere. Listing a decision is not making it.
 | --- | --- | --- |
 | 1 | **Claim retention** | Determining the value range of the **existing** `retention_class` field, not creating a new one (§15). Changes the storage model and legal posture. |
 | 2 | **Compaction** | Any compaction risks violating §2.2 rule 1 (canonical layers are never discarded). |
-| 3 | **Rollback and recovery** | Required by the existing persistence gate before implementation. |
+| 3 | **Rollback and recovery** | Required by current provenance invariant 7 before implementation. |
 | 4 | **Tenant deletion** | Cascade semantics over an append-only ledger are not obvious. |
 | 5 | **Project definition** | L4 is deferred (§11.3); defining it here would prejudge it. |
 | 6 | **Attention: storage vs. read-time computation** | Currently proposed as read-time only (§2.2 rule 3); materializing it is a separate decision. |
@@ -769,11 +773,13 @@ wording, or omission elsewhere. Listing a decision is not making it.
 | 11 | **Alpha vs. HTPE resource arbitration** | Which program gets capacity is an owner decision. |
 | 12 | **Formation-plan-to-`main` merge strategy** | Blocks any real integration (§16). |
 
-## 18. Rejected And Deferred Alternatives
+## 18. Historical V0 Planning Alternatives
 
-These record the **planning** decisions as they currently stand `[PROPOSAL]`.
+These preserve frozen V0 planning dispositions as historical context `[HYPOTHESIS]`. They
+do not select a current foundation, endpoint, product form, or roadmap; all remain unresolved
+under `PRODUCT_STATE.md`.
 
-| Decision | Item |
+| Historical V0 disposition | Item |
 | --- | --- |
 | **Selected foundation** | Closed canonical Claim Ledger |
 | **Selected long-term direction** | Reduced-scope hierarchical derived state (informally "B+") |
@@ -786,9 +792,8 @@ These record the **planning** decisions as they currently stand `[PROPOSAL]`.
 | **Deferred** | Persistent Attention State |
 | **Deferred** | Decision-scope storage |
 
-**These are planning decisions.** They may require separate human review before runtime
-implementation, and a rejection recorded here is not by itself an accepted architectural
-constraint on any other program.
+**These are not current decisions.** No selection or rejection in this table constrains a
+future product or implementation.
 
 ## 19. Non-Authorization Statement `[CONTRACT]`
 

@@ -1,5 +1,7 @@
 # Four-Eyes Review Evidence Contract
 
+**Status: CANONICAL — CURRENT PRODUCT-INDEPENDENT SAFETY CONTRACT.** Product authority: NONE.
+
 **Phase:** P6-FIX-009 (Issue #142). **Module:** `app/lib/phase6/reviewEvidence/`.
 
 Defines the shape and boundaries of Review Attestations and Four-Eyes Review Evidence:

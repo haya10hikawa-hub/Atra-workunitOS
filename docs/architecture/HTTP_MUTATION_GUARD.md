@@ -1,5 +1,7 @@
 # HTTP Mutation Guard and the Safe-Method Invariant
 
+**Status: CANONICAL — CURRENT PRODUCT-INDEPENDENT TECHNICAL INVARIANT.** Product authority: NONE.
+
 Status: implemented (WU-02S). Base `e8b36cc9`.
 
 ## INV-SAFE-1

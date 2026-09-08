@@ -1,6 +1,10 @@
 # Trust Boundaries
 
+**Status: CANONICAL — CURRENT PRODUCT-INDEPENDENT SECURITY BOUNDARIES.** Product authority: NONE.
+
 ## The Trust Model
+
+[`SECURITY_MODEL.md`](./SECURITY_MODEL.md) owns the umbrella security model and the current `Approval ≠ Execution` invariant. This document owns boundary-by-boundary enforcement details.
 
 WorkUnit OS operates on a strict zero-trust model for all external input.
 No data crosses a trust boundary without explicit sanitization or approval.
@@ -78,7 +82,7 @@ No data crosses a trust boundary without explicit sanitization or approval.
 - **What is enforced:** Client `approvedByPm` is ignored. Only server-side records count.
 - **Current state:** Default deny — `verifyServerSideApproval` returns `approval_required`
 
-### Boundary 4: Approved → Executed
+### Boundary 4: Approved → Runtime authorization eligibility
 
 - **File:** `app/lib/security/externalActions.ts`, `app/lib/security/rbac.ts`
 - **What it does:** Kill switch check + RBAC permission check before external API calls

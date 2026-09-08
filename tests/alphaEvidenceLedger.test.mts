@@ -17,8 +17,8 @@ import path from "node:path"
 
 const root = process.cwd()
 
-const LEDGER = path.join(root, "docs/ALPHA_EVIDENCE_LEDGER.md")
-const RDR = path.join(root, "docs/RELEASE_DECISION_RECORD.md")
+const LEDGER = path.join(root, "docs/legacy/ALPHA_EVIDENCE_LEDGER.md")
+const RDR = path.join(root, "docs/legacy/RELEASE_DECISION_RECORD.md")
 
 const read = (p: string): string => (existsSync(p) ? readFileSync(p, "utf8") : "")
 const ledger = read(LEDGER)
@@ -26,12 +26,12 @@ const rdr = read(RDR)
 
 // ── Files exist ──────────────────────────────────────────────
 
-test("1. docs/ALPHA_EVIDENCE_LEDGER.md exists", () => {
+test("1. docs/legacy/ALPHA_EVIDENCE_LEDGER.md exists", () => {
   assert.equal(existsSync(LEDGER), true)
   assert.ok(ledger.length > 0)
 })
 
-test("2. docs/RELEASE_DECISION_RECORD.md exists", () => {
+test("2. docs/legacy/RELEASE_DECISION_RECORD.md exists", () => {
   assert.equal(existsSync(RDR), true)
   assert.ok(rdr.length > 0)
 })

@@ -73,7 +73,7 @@ implementation phase may be proposed.
 
 - Key management maturity (rotation/revocation/backup) is design-stage only; until an
   implementation phase lands, approval binding remains unkeyed SHA-256 (accepted, tracked in
-  [`RISK_REGISTER.md`](./RISK_REGISTER.md) R4).
+  [`RISK_REGISTER.md`](./legacy/RISK_REGISTER.md) R4).
 - Canonicalization versioning drift risk persists until the canonical form is versioned.
 - Operator discipline is relied upon to keep secrets out of human-written records.
 
@@ -100,7 +100,7 @@ Implementation is **No-Go** while any of these is true:
 ## 10. Review requirements
 
 - A human reviewer must confirm every §9 No-Go condition is false and every §6 mitigation is
-  designed, then record the decision per [`ALPHA_SIGNOFF_TEMPLATE.md`](./ALPHA_SIGNOFF_TEMPLATE.md)
-  and [`RELEASE_DECISION_RECORD.md`](./RELEASE_DECISION_RECORD.md).
+  designed, then record the decision per [`ALPHA_SIGNOFF_TEMPLATE.md`](./legacy/ALPHA_SIGNOFF_TEMPLATE.md)
+  and [`RELEASE_DECISION_RECORD.md`](./legacy/RELEASE_DECISION_RECORD.md).
 - AI assistance may summarize this threat model, but a human makes and records the decision.
 - No implementation phase may be proposed until this review is recorded.
