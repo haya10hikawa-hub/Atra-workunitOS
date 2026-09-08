@@ -397,5 +397,8 @@ is resolved by this docs-only phase):
 
 This ApprovalStore Dual-read Wiring Pre-spec authorizes no runtime wiring, no ApprovalStore behavior change, no approval verification behavior change, no external action execution, no real LLM enablement, no production TenantSecretProvider, no secret storage, no KMS integration, no nonce storage, no key rotation runtime, no keyed MAC enforcement, no deployment, and no automated decision-making.
 
-Enforcement in code is governed by separate, future gates
-([`NEXT_CAPABILITY_GATE.md`](./archive/v0/NEXT_CAPABILITY_GATE.md)) with recorded human decisions.
+Any future implementation or capability enablement requires a new explicit CURRENT
+technical/safety decision and applicable implementation and verification gates.
+
+The archived V0 `NEXT_CAPABILITY_GATE` is historical context only and does not authorize
+current or future implementation.

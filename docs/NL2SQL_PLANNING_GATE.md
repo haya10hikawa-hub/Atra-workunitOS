@@ -154,7 +154,7 @@ Provenance must be restored before future query results can support WorkUnit rev
 When tenant scope, schema references, or sensitivity handling are unclear, the gate outputs
 `clarification_needed` rather than proceeding. Human review is required when the information
 need touches sensitive data, personal data, redaction, aggregation, contradiction, or
-missing information (per [`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md)).
+missing information, as required by this gate's stated No-Go conditions.
 
 ## 15. Failure and No-Go Conditions
 
@@ -181,5 +181,8 @@ future-gated capabilities and authorizes none of them.
 
 This NL2SQL Planning Gate authorizes no SQL generation, no SQL execution, no D1 execution, no free-form SQL generation, no runtime query planner, no database access, no LLM-controlled database access, no GraphRAG implementation, no vectorization, no real LLM enablement, no external execution, no Formal WorkUnit promotion, and no automated decision-making.
 
-Enforcement in code is governed by separate, future gates
-([`NEXT_CAPABILITY_GATE.md`](./archive/v0/NEXT_CAPABILITY_GATE.md)) with recorded human decisions.
+Any future implementation or capability enablement requires a new explicit CURRENT
+technical/safety decision and applicable implementation and verification gates.
+
+The archived V0 `NEXT_CAPABILITY_GATE` is historical context only and does not authorize
+current or future implementation.

@@ -239,8 +239,7 @@ Rule Review Record may describe future provenance capture, but it must not creat
 
 Future query results are not evidence unless query plan, compiled artifact, rule review record, tenant scope, selected source rows, and result provenance are recorded.
 
-This preserves the evidence boundary of [`EVIDENCE_STANDARD.md`](./archive/v0/EVIDENCE_STANDARD.md) and
-[`PROVENANCE_MODEL.md`](./archive/v0/PROVENANCE_MODEL.md): review never manufactures evidence, and the
+This preserves this gate's evidence and provenance boundary: review never manufactures evidence, and the
 provenance chain now includes the rule review record itself.
 
 ## 15. Failure and No-Go Conditions
@@ -286,5 +285,8 @@ A Rule Review Record must not authorize external execution.
 
 This Rule Review Gate authorizes no D1 execution, no SQL execution, no database access, no execution authorization, no approval, no runtime rule review, no runtime approval, no provenance record creation, no GraphRAG implementation, no vectorization, no real LLM enablement, no external execution, no Formal WorkUnit promotion, and no automated decision-making.
 
-Enforcement in code is governed by separate, future gates
-([`NEXT_CAPABILITY_GATE.md`](./archive/v0/NEXT_CAPABILITY_GATE.md)) with recorded human decisions.
+Any future implementation or capability enablement requires a new explicit CURRENT
+technical/safety decision and applicable implementation and verification gates.
+
+The archived V0 `NEXT_CAPABILITY_GATE` is historical context only and does not authorize
+current or future implementation.

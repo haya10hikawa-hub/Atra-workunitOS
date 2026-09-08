@@ -6,9 +6,9 @@
 
 This document is the **design gate** for a future `TenantSecretProvider` and for keyed
 approval-secret handling. It is opened only after Alpha exit
-([`ALPHA_EXIT_CRITERIA.md`](./legacy/ALPHA_EXIT_CRITERIA.md)) and sits under the
-[`NEXT_CAPABILITY_GATE.md`](./archive/v0/NEXT_CAPABILITY_GATE.md) "secret handling plan documented"
-prerequisite. It is **documentation and a static test only** — it designs nothing runtime,
+([`ALPHA_EXIT_CRITERIA.md`](./legacy/ALPHA_EXIT_CRITERIA.md)). Any future secret-handling
+implementation requires a new explicit CURRENT technical/safety decision and applicable
+implementation and verification gates. It is **documentation and a static test only** — it designs nothing runtime,
 connects nothing, and enables no capability.
 
 > **TenantSecretProvider planning does not authorize implementation, deployment, real LLM enablement, external execution, OAuth/token storage, production secret storage, or approval-flow behavior changes.**

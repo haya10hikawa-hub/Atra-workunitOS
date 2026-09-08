@@ -8,9 +8,7 @@ Defines how a Query Result Record with `result_status` `ready_for_evidence_revie
 ([`QUERY_RESULT_RECORD_CONTRACT.md`](./QUERY_RESULT_RECORD_CONTRACT.md)) may be reviewed
 before it is allowed to support human decision-making as evidence. Discharges the forward
 reference left by [`D1_READ_ONLY_EXECUTION_GATE.md`](./D1_READ_ONLY_EXECUTION_GATE.md) §16
-("Future evidence use requires complete provenance and human-review compatibility") and
-grounds it in [`EVIDENCE_STANDARD.md`](./archive/v0/EVIDENCE_STANDARD.md) and
-[`PROVENANCE_MODEL.md`](./archive/v0/PROVENANCE_MODEL.md). Pairs with
+("Future evidence use requires complete provenance and human-review compatibility"). Pairs with
 [`EVIDENCE_REVIEW_RECORD_CONTRACT.md`](./EVIDENCE_REVIEW_RECORD_CONTRACT.md). Documentation
 and a static test only.
 
@@ -125,8 +123,7 @@ Evidence Review pass must not authorize Formal WorkUnit promotion.
 
 `source_trust_marker`, `content_integrity_reference`, and `denied_schema_absence` are
 review-time inputs derived for this gate: the trust marker classifies where the result's
-rows came from — mapping the [`INFORMATION_INTAKE_POLICY.md`](./archive/v0/INFORMATION_INTAKE_POLICY.md)
-trust ladder and first-vs-third-party ranking onto result sources
+rows came from — applying this gate's stated trust-marker and source-ranking rules to result sources
 (first_party_system_record / integration_provided_record / user_provided_record at the
 trusted end; derived_query_result / aggregated_result for computed results;
 unknown_source / untrusted_source at the untrusted end, where third-party forwarded content
@@ -359,5 +356,8 @@ Evidence Review Record must not authorize Formal WorkUnit promotion.
 
 This Evidence Review Gate authorizes no truth assignment, no automated decision, no approval, no action authorization, no external action execution, no Formal WorkUnit promotion, no runtime evidence storage, no runtime provenance storage, no GraphRAG implementation, no vectorization, no real LLM enablement, no database access, no D1 execution, no SQL execution, no deployment, and no automated decision-making.
 
-Enforcement in code is governed by separate, future gates
-([`NEXT_CAPABILITY_GATE.md`](./archive/v0/NEXT_CAPABILITY_GATE.md)) with recorded human decisions.
+Any future implementation or capability enablement requires a new explicit CURRENT
+technical/safety decision and applicable implementation and verification gates.
+
+The archived V0 `NEXT_CAPABILITY_GATE` is historical context only and does not authorize
+current or future implementation.

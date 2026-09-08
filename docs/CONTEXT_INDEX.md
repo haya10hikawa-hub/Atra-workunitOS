@@ -53,7 +53,7 @@ UI
 
 | Task | Minimal context |
 |---|---|
-| UI maintenance | `PRODUCT_STATE.md`, `docs/CONTEXT_INDEX.md`, current V0 UI implementation files, client-safe view models, and relevant API response shape; frozen UI direction is under `docs/archive/v0/` |
+| UI maintenance | `PRODUCT_STATE.md`, `docs/CONTEXT_INDEX.md`, current V0 UI implementation files, client-safe view models, and relevant API response shape; frozen UI direction is historical context under `docs/archive/v0/` and does not authorize current or future implementation |
 | Auth work | `docs/security/SECURITY_MODEL.md`, `app/lib/application/auth/*`, `app/lib/security/session.ts`, control repositories |
 | Persistence work | `docs/DEPENDENCY_MAP.md`, target route file, `routeRepositories.ts`, `repositoryResolver.ts`, target repository implementation |
 | LLM work | `app/lib/llm/sanitize.ts`, `app/lib/llm/budget.ts`, `app/lib/llm/prompts.ts`, `app/lib/llm/processWorkSignal.ts` |

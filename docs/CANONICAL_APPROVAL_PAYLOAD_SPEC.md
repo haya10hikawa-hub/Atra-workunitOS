@@ -305,5 +305,8 @@ Future runtime implementation must not enable external actions without a separat
 
 This Canonical Approval Payload Spec authorizes no approval, no execution authorization, no external action execution, no runtime ApprovalStore change, no TenantSecretProvider implementation, no secret storage, no HMAC implementation, no real LLM enablement, no external execution, no deployment, and no automated decision-making.
 
-Enforcement in code is governed by separate, future gates
-([`NEXT_CAPABILITY_GATE.md`](./archive/v0/NEXT_CAPABILITY_GATE.md)) with recorded human decisions.
+Any future implementation or capability enablement requires a new explicit CURRENT
+technical/safety decision and applicable implementation and verification gates.
+
+The archived V0 `NEXT_CAPABILITY_GATE` is historical context only and does not authorize
+current or future implementation.

@@ -8,8 +8,8 @@ Defines the shape of a Query Result Record: the tenant-scoped, provenance-bearin
 **future** D1 read-only execution gate
 ([`D1_READ_ONLY_EXECUTION_GATE.md`](./D1_READ_ONLY_EXECUTION_GATE.md)) would produce from a
 valid Rule Review Record ([`RULE_REVIEW_RECORD_CONTRACT.md`](./RULE_REVIEW_RECORD_CONTRACT.md)).
-This is the object that can finally satisfy the evidence predicate of
-[`EVIDENCE_STANDARD.md`](./archive/v0/EVIDENCE_STANDARD.md). Documentation and a static test only.
+This is the object that can satisfy this contract's evidence predicate. Documentation and a
+static test only.
 
 ---
 
@@ -198,7 +198,7 @@ A Query Result Record must not be treated as truth by default when source rows c
 
 conflict_state must be explicit.
 
-These triggers follow [`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md); a Query Result Record
+These triggers preserve this contract's stated decision boundaries; a Query Result Record
 never clears a human review requirement inherited from its source Rule Review Record.
 
 ## 15. Validation Rules

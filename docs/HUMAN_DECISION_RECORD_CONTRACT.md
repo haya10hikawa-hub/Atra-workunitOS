@@ -8,9 +8,7 @@ Defines the shape of a Human Decision Record: the non-executing, human-authored 
 produced by the [`HUMAN_DECISION_GATE.md`](./HUMAN_DECISION_GATE.md) from a valid Evidence
 Review Record ([`EVIDENCE_REVIEW_RECORD_CONTRACT.md`](./EVIDENCE_REVIEW_RECORD_CONTRACT.md))
 and a valid LLM Judgment Record
-([`LLM_JUDGMENT_RECORD_CONTRACT.md`](./LLM_JUDGMENT_RECORD_CONTRACT.md)). Grounded in
-[`DECISION_RUBRIC.md`](./archive/v0/DECISION_RUBRIC.md) and
-[`EVIDENCE_STANDARD.md`](./archive/v0/EVIDENCE_STANDARD.md). Documentation and a static test only.
+([`LLM_JUDGMENT_RECORD_CONTRACT.md`](./LLM_JUDGMENT_RECORD_CONTRACT.md)). Documentation and a static test only.
 
 ---
 

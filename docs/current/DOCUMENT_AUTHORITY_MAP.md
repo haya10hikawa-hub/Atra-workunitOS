@@ -3,6 +3,9 @@
 This map classifies product-direction-facing documents at the V0 freeze. It does
 not reclassify runtime code, tests, or generic technical contracts.
 
+Every `ARCHIVE` entry is historical only: it does not authorize current or future
+implementation, capability enablement, approval, or product decisions.
+
 | Path before freeze | Classification | Action | Reason |
 | --- | --- | --- | --- |
 | `docs/archive/v0/ATRA_DOCTRINE.md` | V0_PRODUCT_HISTORY | ARCHIVE | Defines V0 user, problem, and product identity. |

@@ -11,7 +11,7 @@ This document captures the product value argument that must remain consistent wi
 - `docs/CANONICAL_DECISION_INDEX.md`
 - `docs/specs/WORKUNIT_DOMAIN_MODEL.md`
 - `docs/specs/ACTION_FIELD_SPEC.md`
-- `docs/archive/v0/AI_JUDGMENT_CRITERIA.md`
+- `docs/archive/v0/AI_JUDGMENT_CRITERIA.md` — historical context only; not current authority
 
 ---
 

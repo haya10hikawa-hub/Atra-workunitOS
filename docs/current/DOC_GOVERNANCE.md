@@ -8,7 +8,8 @@ Status: CURRENT DOCUMENTATION AUTHORITY
 - References link instead of independently redefining rules.
 - Research is not specification or product authority.
 - Conditional plans grant no product or implementation authority.
-- Frozen V0 product assumptions remain under [`../archive/v0/`](../archive/v0/).
+- Frozen V0 product assumptions remain under [`../archive/v0/`](../archive/v0/) as
+  historical context only; they do not authorize current or future implementation.
 - Non-product historical technical records remain under [`../legacy/`](../legacy/).
 - Target state and implemented state remain distinct.
 - Implementation claims require code, tests, migrations, CI, or runtime evidence.

@@ -19,31 +19,32 @@ REASON                 = this record establishes vocabulary, not capability; eve
                          historical V0 state only; no current product authorization
 ```
 
-## Authority Position
+## Historical provenance
 
 ```text
-Human PM
-  ↓
-docs/archive/v0/PHASE1_VALUE_GATE_PROGRAM.md      frozen V0 priority, phase order, Gates
-  ├─ docs/archive/v0/CANONICAL_WORKUNIT_PIPELINE_REFACTOR_PROGRAM.md   domain architecture
-  ├─ docs/architecture/SOURCE_RECORD_V1_SEMANTICS.md                     canonical record semantics
-  └─ this document                                                       information-layer vocabulary
+Historical V0 references: `docs/archive/v0/PHASE1_VALUE_GATE_PROGRAM.md` and
+`docs/archive/v0/CANONICAL_WORKUNIT_PIPELINE_REFACTOR_PROGRAM.md`.
+
+Current technical reference: `docs/architecture/SOURCE_RECORD_V1_SEMANTICS.md`.
 ```
 
-This document is subordinate to all three. It owns exactly one thing: **the independent kinds of truth
-Atra needs in order to understand and finish work**, and the vocabulary for talking about them without
-conflating four different questions.
+The V0 references are historical only and do not govern this research, current or future implementation,
+capability enablement, approval, or product decisions. This document records only the vocabulary for
+talking about four independent kinds of truth without conflating them.
 
 It does **not** own, and may never be read as changing:
 
-- phase order, phase entry, phase exit or Gate semantics — `PHASE1_VALUE_GATE_PROGRAM.md` owns those;
+- phase order, phase entry, phase exit or Gate semantics;
 - canonical record identity, content-digest or provider-profile gate state —
   `SOURCE_RECORD_V1_SEMANTICS.md` owns those, and every gate value restated here is a **copy**, never
   a source;
-- record ownership, projection boundaries or composition rules —
-  `CANONICAL_WORKUNIT_PIPELINE_REFACTOR_PROGRAM.md` owns those.
+- record ownership, projection boundaries or composition rules.
 
-Where this document disagrees with any of them, they govern and this document is the defect.
+Where this document conflicts with current technical contracts, the current contract controls; V0 sources
+remain historical context only.
+
+The former V0 statement “Where this document disagrees with any of them, they govern and this document
+is the defect.” is historical only and is not current governance.
 
 ## The Four Axes
 
@@ -179,8 +180,8 @@ Contributes: proposed action; human approval; execution result; verification tha
 Cannot alone establish: work truth. An action result is evidence that Atra acted, not evidence that
 the underlying work is complete — the two are separate facts and are reconciled, never equated.
 
-Bounded by `docs/archive/v0/ATRA_DOCTRINE.md` §7 (what Atra must not do) and §11 (the product invariant): Atra proposes, rules guard, humans decide. Phase-1 is
-read-only; no provider write path exists or is authorized here.
+The historical V0 `docs/archive/v0/ATRA_DOCTRINE.md` records the phrase “Atra proposes, rules guard,
+humans decide”; it is not current authority. This research authorizes no provider write path.
 
 ## Multi-Role Evidence
 
