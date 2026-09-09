@@ -10,4 +10,5 @@ export function scanModuleGraph(rootDir: string, scanRoots: string[]): Promise<M
 export function legacyEdgeKey(edge: ModuleEdge): string
 export function findLegacyEdges(edges: ModuleEdge[]): LegacyEdge[]
 export function multisetDifference(left: string[], right: string[]): string[]
+export function createModuleTargetResolver(rootDir: string): (filePath: string, specifier: string) => string
 export function resolveModuleTarget(rootDir: string, filePath: string, specifier: string): string
