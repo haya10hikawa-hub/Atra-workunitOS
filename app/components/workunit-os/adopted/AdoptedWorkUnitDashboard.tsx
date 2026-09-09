@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 // Icons sourced from react-icons/lu (the Lucide icon set) to keep a single icon
 // dependency; aliased to the original names so usages stay unchanged.
 import {
@@ -35,9 +35,14 @@ import {
   type DashboardIntegrationProviderStatus,
 } from "@/lib/application/dashboard/dashboardDataClient"
 import type { InboxWorkUnit } from "@/lib/application/workunitInbox/types"
+import { DASHBOARD_INBOX_SOURCE, requestInboxRefresh } from "@/lib/application/dashboard/dashboardInboxRefreshClient"
+import {
+  classifyProjectionReload, classifyRefreshResponse, type InboxRefreshPresentation,
+} from "@/lib/application/dashboard/inboxRefreshStateModel"
 import { runDashboardExecutionDryRun } from "@/lib/application/dashboard/dashboardExecutionDryRunClient"
 import { buildExecutionResultViewer } from "@/lib/application/dashboard/executionResultViewerModel"
 import { AdoptedActionFieldPanel } from "./AdoptedActionFieldPanel"
+import { AdoptedInboxRefreshControl } from "./AdoptedInboxRefreshControl"
 import { detectToolRequirements } from "@/lib/application/actionField/toolRequirementModel"
 import { buildReviewableActionDrafts } from "@/lib/application/actionField/actionDraftModel"
 import styles from "./AdoptedWorkUnitDashboard.module.css"
@@ -95,11 +100,22 @@ export function AdoptedWorkUnitDashboard() {
   const [dryRunActionType, setDryRunActionType] = useState<string | null>(null)
   const [actionFieldMode, setActionFieldMode] = useState<"entry" | "detail">("entry")
   const [draftFieldOverrides, setDraftFieldOverrides] = useState<Record<string, string>>({})
+  // ONE state: a separate count could disagree with it between updates, and that window
+  // is exactly where a count-bearing state would have to invent a number.
+  const [refreshPresentation, setRefreshPresentation] = useState<InboxRefreshPresentation>({ state: "IDLE" })
+  // Synchronous concurrency boundary: set inside the click's own tick, before the
+  // first await. `disabled` is a second, cosmetic layer — never the boundary.
+  const inFlightRef = useRef(false)
+  const mountedRef = useRef(true)
 
   useEffect(() => {
+    // Re-armed here, not only cleared in cleanup: React Strict Mode double-invokes
+    // effects in development, and a cleanup-only flag would wedge the control
+    // permanently after the first remount.
+    mountedRef.current = true
     let active = true
     Promise.all([
-      fetchDashboardWorkUnits("all"),
+      fetchDashboardWorkUnits(DASHBOARD_INBOX_SOURCE),
       fetchIntegrationStatus(),
       fetchRecentAuditLogs(),
     ]).then(([workUnitsResult, integrationResult, auditResult]) => {
@@ -125,6 +141,7 @@ export function AdoptedWorkUnitDashboard() {
     })
     return () => {
       active = false
+      mountedRef.current = false
     }
   }, [])
 
@@ -187,6 +204,44 @@ export function AdoptedWorkUnitDashboard() {
     if (!selectedInboxWorkUnit || !toolRequirements) return null
     return buildReviewableActionDrafts(selectedInboxWorkUnit, toolRequirements)
   }, [selectedInboxWorkUnit, toolRequirements])
+
+  // ─── Flag-gated Inbox refresh experiment ───────────────────────
+  // latch → exactly one POST → guard → stage 1 → (verified success ONLY) exactly
+  // one GET → guard → stage 2. No retry on any path, ever.
+  const handleRefresh = async () => {
+    if (inFlightRef.current) return
+    inFlightRef.current = true
+    setRefreshPresentation({ state: "REFRESHING" })
+    // Released in a `finally` — it runs on rejection as well as resolution, so a thrown
+    // attempt still settles and cannot wedge the control. Promise form, not a block: a
+    // `finally` block opts this component out of React Compiler analysis, which would
+    // silently retire an existing lint guarantee on an unrelated effect below.
+    await runRefreshAttempt().finally(() => {
+      inFlightRef.current = false
+    })
+  }
+
+  const runRefreshAttempt = async () => {
+    const transport = await requestInboxRefresh()
+    if (!mountedRef.current) return
+    const stage1 = classifyRefreshResponse(transport)
+    if (!stage1.reload) {
+      // Known pre-write failure or unprovable outcome: zero GETs, rows untouched.
+      setRefreshPresentation({ state: stage1.state })
+      return
+    }
+    const rows = await reloadProjection()
+    if (!mountedRef.current) return
+    const stage2 = classifyProjectionReload(rows !== null, stage1.refreshed)
+    if (stage2.applyRows && rows !== null) {
+      setDashboardState((current) => ({
+        ...current, status: rows.length === 0 ? "empty" : "loaded", workUnits: rows, error: undefined,
+      }))
+      setLastScanLabel(formatScanTime(new Date()))
+    }
+    // Stage 2 IS the presentation: a count-bearing outcome already carries its count.
+    setRefreshPresentation(stage2)
+  }
 
   const handleCreatePreview = async () => {
     setPreviewMessage("")
@@ -393,6 +448,7 @@ export function AdoptedWorkUnitDashboard() {
           <div className={styles.sidebarHeader}>
             <span className={styles.sidebarTitle}>WorkUnit Explorer</span>
             <div className={styles.sidebarState}>{statusText}</div>
+            <AdoptedInboxRefreshControl presentation={refreshPresentation} onRefresh={handleRefresh} />
           </div>
           <nav className={styles.sidebarNav} aria-label="WorkUnit list">
             {viewModel.workUnits.map((workUnit) => (
@@ -538,6 +594,20 @@ export function AdoptedWorkUnitDashboard() {
       </div>
     </div>
   )
+}
+
+/**
+ * The single projection re-read. `{ok:false}`, a rejected fetch and an unreadable
+ * body all collapse to `null` HERE, before the model — so no server error string,
+ * code or message can travel any further toward the DOM. Never retried.
+ */
+async function reloadProjection(): Promise<InboxWorkUnit[] | null> {
+  try {
+    const result = await fetchDashboardWorkUnits(DASHBOARD_INBOX_SOURCE)
+    return result.ok ? result.workUnits : null
+  } catch {
+    return null
+  }
 }
 
 function formatScanTime(date: Date): string {
