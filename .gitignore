@@ -61,3 +61,11 @@ next-env.d.ts
 # values) and local D1 evidence artifacts. Generated only; never committed.
 /bootstrap.control*.sql
 /.d1-evidence/
+
+# Public benchmark acquisition sandbox: raw identities/text stay local.
+/eval/classifier/external_sources/sandbox/
+/eval/classifier/raw_index/
+/eval/classifier/silver/
+/eval/classifier/gold_candidate_v0/runs/
+/eval/classifier/gold_candidate_v0/quarantine/
+/eval/classifier/gold_candidate_v0/episodes/

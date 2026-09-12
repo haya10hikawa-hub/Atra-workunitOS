@@ -39,7 +39,12 @@
     "cf:d1:schema:verify:remote": "node scripts/cf-d1-schema-verify-remote.mjs",
     "electron:dev": "ATRA_ELECTRON_START_URL=http://localhost:3000 NODE_OPTIONS=--experimental-strip-types electron electron/main.ts",
     "electron:build:check": "node scripts/electron-build-check.mjs",
-    "electron:runtime-smoke": "node scripts/electron-runtime-smoke.mjs"
+    "electron:runtime-smoke": "node scripts/electron-runtime-smoke.mjs",
+    "gold:schemas": "node eval/classifier/scripts/cli.mjs schemas",
+    "gold:validate": "node eval/classifier/scripts/cli.mjs validate",
+    "gold:report": "node eval/classifier/scripts/cli.mjs report",
+    "gold:test": "node --test --experimental-strip-types tests/goldCandidate*.test.mts",
+    "gold:test:acquisition": "python3 -B tests/test_gold_fetch_public.py"
   },
   "dependencies": {
     "google-auth-library": "11.0.2",
@@ -59,6 +64,7 @@
     "eslint-config-next": "^16.2.9",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "wrangler": "^4.99.0"
+    "wrangler": "^4.99.0",
+    "ajv": "^6.14.0"
   }
 }

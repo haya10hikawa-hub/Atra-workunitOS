@@ -1,0 +1,249 @@
+{
+  "status": "RAW_ACQUISITIONS_NOT_GOLD",
+  "receipts": [
+    {
+      "url": "https://zenodo.org/api/records/5909202/files/DISCO-A%20Dataset%20of%20Discord%20Chat%20Conversations%20for%20Software%20Engineering%20Research.zip/content",
+      "retrieved_at": "2026-09-11T09:56:37.226322+00:00",
+      "sha256": "7f9340b0af26fee57ec9369d0577c3f9ebdd395b46fa1ccb518178b3697ea967",
+      "bytes": 102955559,
+      "path": "external_sources/sandbox/disco-archive/7f9340b0af26fee57ec9369d0577c3f9ebdd395b46fa1ccb518178b3697ea967.raw",
+      "etag": null,
+      "last_modified": null,
+      "trust": "untrusted",
+      "boundary": "public-source-sandbox/v1"
+    },
+    {
+      "url": "https://zenodo.org/api/records/5909202",
+      "retrieved_at": "2026-09-11T06:50:35.196844+00:00",
+      "sha256": "6fadea086a0a004121386c235da2d9a55f10bef0d6007ad1b824c61e6ec079d4",
+      "bytes": 4437,
+      "path": "external_sources/sandbox/disco-metadata/6fadea086a0a004121386c235da2d9a55f10bef0d6007ad1b824c61e6ec079d4.raw",
+      "etag": "\"2\"",
+      "last_modified": null,
+      "trust": "untrusted",
+      "boundary": "public-source-sandbox/v1"
+    },
+    {
+      "url": "https://zenodo.org/api/records/15719919",
+      "retrieved_at": "2026-09-11T09:53:36.846691+00:00",
+      "sha256": "42f6cfa541b77a8b4cdb3d36fa38360253e25d85ac1911776793a93469bbe468",
+      "bytes": 5367,
+      "path": "external_sources/sandbox/jira-metadata/42f6cfa541b77a8b4cdb3d36fa38360253e25d85ac1911776793a93469bbe468.raw",
+      "etag": "\"4\"",
+      "last_modified": null,
+      "trust": "untrusted",
+      "boundary": "public-source-sandbox/v1"
+    },
+    {
+      "url": "https://zenodo.org/api/records/15719919/files/2025-06-23%20ThePublicJiraDataset.zip/content",
+      "sha256": "3add93a470d98c3569711bcd4c014083db24941339c9ed9305bda9b98a0d6257",
+      "bytes": 131072,
+      "range_start": 5813004166,
+      "range_end": 5813135237,
+      "archive_bytes": 5813135238,
+      "retrieved_at": "2026-09-11T09:57:07.785666+00:00",
+      "path": "external_sources/sandbox/jira-zip-directory/3add93a470d98c3569711bcd4c014083db24941339c9ed9305bda9b98a0d6257.raw"
+    },
+    {
+      "url": "https://api.github.com/repos/KazumaProject/JapaneseKeyboard/issues?state=closed&per_page=100&sort=comments&direction=desc",
+      "retrieved_at": "2026-09-11T10:13:05.068273+00:00",
+      "sha256": "6c2eafcd3b9d4630ded552fbcd03b8cd62f7cd23891c405dfc8210a5615dcf12",
+      "bytes": 526321,
+      "path": "external_sources/sandbox/kazumaproject-japanesekeyboard-issues/6c2eafcd3b9d4630ded552fbcd03b8cd62f7cd23891c405dfc8210a5615dcf12.raw",
+      "public_repository_confirmed": "KazumaProject/JapaneseKeyboard",
+      "boundary": "public-source-sandbox/v1",
+      "trust": "untrusted"
+    },
+    {
+      "url": "https://api.github.com/repos/KazumaProject/JapaneseKeyboard",
+      "retrieved_at": "2026-09-11T10:13:02.276872+00:00",
+      "sha256": "00d2ab712e77f2de126ff91ce28adcc72dc900fb0849436e598edf5fbc9386ad",
+      "bytes": 6283,
+      "path": "external_sources/sandbox/kazumaproject-japanesekeyboard-repo/00d2ab712e77f2de126ff91ce28adcc72dc900fb0849436e598edf5fbc9386ad.raw",
+      "public_repository_confirmed": "KazumaProject/JapaneseKeyboard",
+      "boundary": "public-source-sandbox/v1",
+      "trust": "untrusted"
+    },
+    {
+      "url": "https://api.github.com/repos/Project-PLATEAU/PLATEAU-SDK-for-Unity/issues?state=closed&per_page=100&sort=comments&direction=desc",
+      "retrieved_at": "2026-09-11T10:13:07.655280+00:00",
+      "sha256": "60e56272e9421b421dd9f36bdf248d02044718abc07d8b38a36626c4be7c25b7",
+      "bytes": 65153,
+      "path": "external_sources/sandbox/project-plateau-plateau-sdk-for-unity-issues/60e56272e9421b421dd9f36bdf248d02044718abc07d8b38a36626c4be7c25b7.raw",
+      "public_repository_confirmed": "Project-PLATEAU/PLATEAU-SDK-for-Unity",
+      "boundary": "public-source-sandbox/v1",
+      "trust": "untrusted"
+    },
+    {
+      "url": "https://api.github.com/repos/Project-PLATEAU/PLATEAU-SDK-for-Unity",
+      "retrieved_at": "2026-09-11T10:13:05.842124+00:00",
+      "sha256": "97a1184a3a5c40a82421efc2025fa5a8093f0c49128a088bdd7efe0464f69134",
+      "bytes": 20191,
+      "path": "external_sources/sandbox/project-plateau-plateau-sdk-for-unity-repo/97a1184a3a5c40a82421efc2025fa5a8093f0c49128a088bdd7efe0464f69134.raw",
+      "public_repository_confirmed": "Project-PLATEAU/PLATEAU-SDK-for-Unity",
+      "boundary": "public-source-sandbox/v1",
+      "trust": "untrusted"
+    },
+    {
+      "url": "https://api.github.com/repos/sakura-editor/sakura/issues?state=closed&per_page=100&sort=comments&direction=desc",
+      "retrieved_at": "2026-09-11T10:12:58.575974+00:00",
+      "sha256": "402dd15756ee24be98203c0e72f6eb5d74689ef0d4909b82ed806588ef7ad0f2",
+      "bytes": 700641,
+      "path": "external_sources/sandbox/sakura-editor-sakura-issues/402dd15756ee24be98203c0e72f6eb5d74689ef0d4909b82ed806588ef7ad0f2.raw",
+      "public_repository_confirmed": "sakura-editor/sakura",
+      "boundary": "public-source-sandbox/v1",
+      "trust": "untrusted"
+    },
+    {
+      "url": "https://api.github.com/repos/sakura-editor/sakura",
+      "retrieved_at": "2026-09-11T10:12:56.332186+00:00",
+      "sha256": "13eb973e9ef831ec85fcca951df1c735b943bd6fc727065b1627caed61be4a61",
+      "bytes": 7035,
+      "path": "external_sources/sandbox/sakura-editor-sakura-repo/13eb973e9ef831ec85fcca951df1c735b943bd6fc727065b1627caed61be4a61.raw",
+      "public_repository_confirmed": "sakura-editor/sakura",
+      "boundary": "public-source-sandbox/v1",
+      "trust": "untrusted"
+    },
+    {
+      "url": "https://zenodo.org/api/records/3627124/files/preethac/Software-related-Slack-Chats-with-Disentangled-Conversations-v1.0.0.zip/content",
+      "retrieved_at": "2026-09-11T09:52:48.117969+00:00",
+      "sha256": "e866ce34e2325503f70b7a99ce8e187631982aaf605a888a5e3754fb251c2f3e",
+      "bytes": 25837557,
+      "path": "external_sources/sandbox/slack-archive/e866ce34e2325503f70b7a99ce8e187631982aaf605a888a5e3754fb251c2f3e.raw",
+      "etag": null,
+      "last_modified": null,
+      "trust": "untrusted",
+      "boundary": "public-source-sandbox/v1"
+    },
+    {
+      "url": "https://api.github.com/repos/preethac/Software-related-Slack-Chats-with-Disentangled-Conversations/contents",
+      "retrieved_at": "2026-09-11T06:51:29.178670+00:00",
+      "sha256": "6c4fb677d23ec7548354995e13dffbdb15b8945ddcf563c7aae906cd9cee218c",
+      "bytes": 4131,
+      "path": "external_sources/sandbox/slack-files/6c4fb677d23ec7548354995e13dffbdb15b8945ddcf563c7aae906cd9cee218c.raw",
+      "etag": "\"9d005f22c4f65bb7020085b8540e1284e8a65857\"",
+      "last_modified": "Mon, 23 Mar 2026 17:35:17 GMT",
+      "trust": "untrusted",
+      "boundary": "public-source-sandbox/v1"
+    },
+    {
+      "url": "https://zenodo.org/api/records/3627124",
+      "retrieved_at": "2026-09-11T06:50:36.224980+00:00",
+      "sha256": "addb3029e736802356c23a7baeccb980ef95f79eb866600289866c86aedb1c2b",
+      "bytes": 4193,
+      "path": "external_sources/sandbox/slack-metadata/addb3029e736802356c23a7baeccb980ef95f79eb866600289866c86aedb1c2b.raw",
+      "etag": "\"4\"",
+      "last_modified": null,
+      "trust": "untrusted",
+      "boundary": "public-source-sandbox/v1"
+    },
+    {
+      "url": "https://api.github.com/repos/smartshark/promise-challenge/contents",
+      "retrieved_at": "2026-09-11T09:53:37.217402+00:00",
+      "sha256": "79655b83c5961e25f37696fb3d897816f9a9c4bad89c872175a5e57de8f97195",
+      "bytes": 7034,
+      "path": "external_sources/sandbox/smartshark-promise-files/79655b83c5961e25f37696fb3d897816f9a9c4bad89c872175a5e57de8f97195.raw",
+      "etag": "\"15d39cc34f0a32b5035bc52ed63034b084489ded\"",
+      "last_modified": "Fri, 23 Aug 2024 06:59:27 GMT",
+      "trust": "untrusted",
+      "boundary": "public-source-sandbox/v1"
+    },
+    {
+      "url": "https://api.github.com/repos/smartshark/promise-challenge/contents/dataset.md",
+      "retrieved_at": "2026-09-11T09:53:37.709001+00:00",
+      "sha256": "321021dc4785fb30ac8b9dfd572ecee95ed35e908c70b5634d1253fbfb2f4a9c",
+      "bytes": 6409,
+      "path": "external_sources/sandbox/smartshark-promise-guide/321021dc4785fb30ac8b9dfd572ecee95ed35e908c70b5634d1253fbfb2f4a9c.raw",
+      "etag": "\"c7fd2e58e2b3e91db458450807178bd632da5442\"",
+      "last_modified": "Fri, 22 Sep 2023 12:09:17 GMT",
+      "trust": "untrusted",
+      "boundary": "public-source-sandbox/v1"
+    },
+    {
+      "url": "https://smartshark.github.io/dbreleases/",
+      "retrieved_at": "2026-09-11T06:50:37.272426+00:00",
+      "sha256": "20649a1242c2523f46bf16a763bb04112f7051f1dcec0cdb47e52c4ddf816934",
+      "bytes": 25763,
+      "path": "external_sources/sandbox/smartshark-releases/20649a1242c2523f46bf16a763bb04112f7051f1dcec0cdb47e52c4ddf816934.raw",
+      "etag": "\"622ee0e9-64a3\"",
+      "last_modified": "Mon, 14 Mar 2022 06:30:01 GMT",
+      "trust": "untrusted",
+      "boundary": "public-source-sandbox/v1"
+    },
+    {
+      "url": "https://api.github.com/repos/vivliostyle/vivliostyle.js/issues?state=closed&per_page=100&sort=comments&direction=desc",
+      "retrieved_at": "2026-09-11T10:13:01.628595+00:00",
+      "sha256": "63d6ba205d58097f3e6490d92168af2227eebdcf13247566d40750125eb30428",
+      "bytes": 592427,
+      "path": "external_sources/sandbox/vivliostyle-vivliostyle-js-issues/63d6ba205d58097f3e6490d92168af2227eebdcf13247566d40750125eb30428.raw",
+      "public_repository_confirmed": "vivliostyle/vivliostyle.js",
+      "boundary": "public-source-sandbox/v1",
+      "trust": "untrusted"
+    },
+    {
+      "url": "https://api.github.com/repos/vivliostyle/vivliostyle.js",
+      "retrieved_at": "2026-09-11T10:12:59.429109+00:00",
+      "sha256": "f5b777a300be072b9cdba9b4636359c9f2eedef01278070fbc61daa5cb7ae91f",
+      "bytes": 7126,
+      "path": "external_sources/sandbox/vivliostyle-vivliostyle-js-repo/f5b777a300be072b9cdba9b4636359c9f2eedef01278070fbc61daa5cb7ae91f.raw",
+      "public_repository_confirmed": "vivliostyle/vivliostyle.js",
+      "boundary": "public-source-sandbox/v1",
+      "trust": "untrusted"
+    },
+    {
+      "url": "https://api.github.com/repos/VOICEVOX/voicevox/issues/1971/comments?per_page=100",
+      "retrieved_at": "2026-09-11T06:51:30.789145+00:00",
+      "sha256": "9b42dbdda9bcaec41a2807e7db1a8ad906db60a4554c5a45bfd792c0d768b947",
+      "bytes": 16918,
+      "path": "external_sources/sandbox/voicevox-1971-comments/9b42dbdda9bcaec41a2807e7db1a8ad906db60a4554c5a45bfd792c0d768b947.raw",
+      "etag": "W/\"9606fe9a0c1183b7106ac2b24a08e2d77e92958a468029509f43b3c7e2486785\"",
+      "last_modified": null,
+      "trust": "untrusted",
+      "boundary": "public-source-sandbox/v1"
+    },
+    {
+      "url": "https://api.github.com/repos/VOICEVOX/voicevox/issues/2218/comments?per_page=100",
+      "retrieved_at": "2026-09-11T06:51:29.803101+00:00",
+      "sha256": "6a5638a9322e638c9916e44a9018a69cfc571a3af3362f02c250a532b4296821",
+      "bytes": 88273,
+      "path": "external_sources/sandbox/voicevox-2218-comments/6a5638a9322e638c9916e44a9018a69cfc571a3af3362f02c250a532b4296821.raw",
+      "etag": "W/\"2448297696272074b8ca50e7f0c778327eb662c74d39cf5108818b10f5c7860a\"",
+      "last_modified": null,
+      "trust": "untrusted",
+      "boundary": "public-source-sandbox/v1"
+    },
+    {
+      "url": "https://api.github.com/repos/VOICEVOX/voicevox/issues/2303/comments?per_page=100",
+      "retrieved_at": "2026-09-11T06:51:30.310511+00:00",
+      "sha256": "2280e012bf8ca726090ee4a5db0e47fc5b758ea53d781b0e30682a2d2074855c",
+      "bytes": 43549,
+      "path": "external_sources/sandbox/voicevox-2303-comments/2280e012bf8ca726090ee4a5db0e47fc5b758ea53d781b0e30682a2d2074855c.raw",
+      "etag": "W/\"a74330ef56cc93083cd5261bdd020109e6f2ac22e986ba9bd2ec308ccf5cdaab\"",
+      "last_modified": null,
+      "trust": "untrusted",
+      "boundary": "public-source-sandbox/v1"
+    },
+    {
+      "url": "https://api.github.com/repos/VOICEVOX/voicevox/issues?state=closed&per_page=30&sort=comments&direction=desc",
+      "retrieved_at": "2026-09-11T06:50:17.061784+00:00",
+      "sha256": "7c83a17f3e4e2c3be6469924ebda655d00c281d85176394796ae28fe83543f2a",
+      "bytes": 174015,
+      "path": "external_sources/sandbox/voicevox-issues/7c83a17f3e4e2c3be6469924ebda655d00c281d85176394796ae28fe83543f2a.raw",
+      "etag": "W/\"b9a3244840ab29cbb24af2422c5637c81bfab4ca5e193ea27f3cc7246186d38c\"",
+      "last_modified": null,
+      "trust": "untrusted",
+      "boundary": "public-source-sandbox/v1"
+    },
+    {
+      "url": "https://api.github.com/repos/VOICEVOX/voicevox/license",
+      "retrieved_at": "2026-09-11T06:50:36.770117+00:00",
+      "sha256": "9ef61c02341457873121b01aa5213255d86116d8458b2449dbfa124de7e7f1a6",
+      "bytes": 1327,
+      "path": "external_sources/sandbox/voicevox-license/9ef61c02341457873121b01aa5213255d86116d8458b2449dbfa124de7e7f1a6.raw",
+      "etag": "W/\"e22a321e14208ce6212737e44ae3a26104818472afe9a02b4f03197d48f5322d\"",
+      "last_modified": "Mon, 07 Sep 2026 10:12:56 GMT",
+      "trust": "untrusted",
+      "boundary": "public-source-sandbox/v1"
+    }
+  ]
+}

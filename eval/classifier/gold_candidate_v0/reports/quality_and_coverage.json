@@ -1,0 +1,88 @@
+{
+  "complete": false,
+  "valid_episodes": 1,
+  "submitted_episodes": 1,
+  "rejected_candidates": 5,
+  "human_verified_episodes": 0,
+  "targets": {
+    "count": false,
+    "schema_and_integrity": true,
+    "english": false,
+    "japanese": false,
+    "mixed": false,
+    "source_families": false,
+    "project_diversity": false,
+    "japanese_repository_cap": true,
+    "ecosystem_cap": false,
+    "hard_adversarial": false,
+    "adversarial": false,
+    "hard_positive": false,
+    "hard_negative": false,
+    "uncertainty": false,
+    "nontrivial": true
+  },
+  "errors": [],
+  "languages": {
+    "ja": 1
+  },
+  "sources": {
+    "japanese_oss": 1
+  },
+  "projects": {
+    "VOICEVOX/voicevox": 1
+  },
+  "ecosystems": {
+    "VOICEVOX": 1
+  },
+  "difficulties": {
+    "adversarial": 1
+  },
+  "work_types": {
+    "feature": 1
+  },
+  "work_levels": {
+    "L1": 1,
+    "L3": 3
+  },
+  "relations": {
+    "SAME_WORK": 0,
+    "RELATED_DIFFERENT_WORK": 0,
+    "UNRELATED": 0,
+    "UNCERTAIN": 3,
+    "PARENT_OF": 0,
+    "CHILD_OF": 0,
+    "CONTRIBUTES_TO": 0,
+    "IMPLEMENTS": 0,
+    "VERIFIES": 0,
+    "REVIEWS": 0,
+    "DEPENDS_ON": 0,
+    "BLOCKS": 0,
+    "PRECEDES": 0,
+    "FOLLOWS": 0,
+    "DUPLICATE_OF": 0,
+    "EVIDENCE_FOR": 0,
+    "CONTRADICTS": 0,
+    "SUPERSEDES": 0,
+    "SPLIT_FROM": 0,
+    "MERGED_INTO": 0,
+    "UNKNOWN_RELATION": 0
+  },
+  "hard_cases": {
+    "NONTRIVIAL": 1,
+    "TASK_SPLIT": 1
+  },
+  "ambiguous_episodes": 1,
+  "splits": {
+    "DEV-CANDIDATE": 1
+  },
+  "review_queue": [
+    "GC-000001"
+  ],
+  "quality": {
+    "schema_failure_rate": 0,
+    "unsupported_claim_rate": 0,
+    "critic_rejection_rate": null,
+    "duplicate_rate": null,
+    "note": "No denominator means unmeasured. Critic rejection and duplicate rates require acquisition/run logs."
+  }
+}

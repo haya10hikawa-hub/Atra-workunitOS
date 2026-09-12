@@ -1,0 +1,90 @@
+{
+  "date": "2026-09-12",
+  "dataset_complete": false,
+  "accepted_episodes": 1,
+  "raw_neighborhoods": 203,
+  "normalized_records": 3472,
+  "gpt_drafts": 2,
+  "independent_critic_runs": 4,
+  "focused_js_tests": {
+    "tests": 37,
+    "pass": 37
+  },
+  "python_acquisition_tests": {
+    "tests": 7,
+    "pass": 7
+  },
+  "javascript_coverage": {
+    "lines": 83.07,
+    "branches": 85.5,
+    "functions": 86.86
+  },
+  "targeted_lint": "PASS (pipeline scripts and both new TypeScript test files)",
+  "classifier_workspace_tests": "PASS",
+  "classifier_workspace_typecheck": "PASS",
+  "root_test_run": {
+    "tests": 5320,
+    "pass": 5299,
+    "fail": 20,
+    "skipped": 1
+  },
+  "root_failure_names": [
+    "A8: the 14-field signal contract is unchanged and its boundary suite still passes (23019.229792ms)",
+    "governance: proposed canonical records are proposal terminology, not runtime authority (636.227416ms)",
+    "governance: only ratified canonical record names are declared, at exactly one path each (411.518667ms)",
+    "WU-A: application value edges reach only application, domain and ports (590.948334ms)",
+    "WU-A: POLICED is a derived claim — every policed layer is scanned at its own root (506.235375ms)",
+    "WU-A: the recorded ledger reconciles against every WU-A policy at once (2468.492875ms)",
+    "SIGINT during Wrangler dev: dev group + descendant + root removed, non-zero exit (20454.654084ms)",
+    "T18: the provider and Inbox suites stay green with an unchanged test count (1435.873625ms)",
+    "I5b: runFirstRunConsent completes the real local-loopback server round trip and persists refresh state (117.163709ms)",
+    "J-A: the authorization URL carries a non-empty state parameter (20.142917ms)",
+    "J-B: two independent consent attempts produce different states (11.952792ms)",
+    "J-C: a callback carrying the matching state is permitted through to code exchange (18.10725ms)",
+    "J-D: a callback with no state parameter fails closed without exchanging the code or persisting a token (12.067ms)",
+    "J-E: a callback with a mismatched state fails closed without exchanging the code or persisting a token (14.123917ms)",
+    "J-F: the authorization URL carries code_challenge and code_challenge_method=S256 (18.062209ms)",
+    "J-G: the code exchange receives the same codeVerifier generated for this consent attempt (16.386958ms)",
+    "J-H: a wrong or missing PKCE verifier causes the (synthetic) exchange to fail closed, with no token persisted (15.222667ms)",
+    "J-I: neither the state nor the codeVerifier is ever written to stdout or stderr (18.33625ms)",
+    "J-J: no token state is persisted when state validation fails (16.098459ms)",
+    "phase-1 authority: ratified semantic targets are not code authorization (358.913917ms)",
+    "failing tests:",
+    "A8: the 14-field signal contract is unchanged and its boundary suite still passes (23019.229792ms)",
+    "governance: proposed canonical records are proposal terminology, not runtime authority (636.227416ms)",
+    "governance: only ratified canonical record names are declared, at exactly one path each (411.518667ms)",
+    "WU-A: application value edges reach only application, domain and ports (590.948334ms)",
+    "WU-A: POLICED is a derived claim — every policed layer is scanned at its own root (506.235375ms)",
+    "WU-A: the recorded ledger reconciles against every WU-A policy at once (2468.492875ms)",
+    "SIGINT during Wrangler dev: dev group + descendant + root removed, non-zero exit (20454.654084ms)",
+    "T18: the provider and Inbox suites stay green with an unchanged test count (1435.873625ms)",
+    "I5b: runFirstRunConsent completes the real local-loopback server round trip and persists refresh state (117.163709ms)",
+    "J-A: the authorization URL carries a non-empty state parameter (20.142917ms)",
+    "J-B: two independent consent attempts produce different states (11.952792ms)",
+    "J-C: a callback carrying the matching state is permitted through to code exchange (18.10725ms)",
+    "J-D: a callback with no state parameter fails closed without exchanging the code or persisting a token (12.067ms)",
+    "J-E: a callback with a mismatched state fails closed without exchanging the code or persisting a token (14.123917ms)",
+    "J-F: the authorization URL carries code_challenge and code_challenge_method=S256 (18.062209ms)",
+    "J-G: the code exchange receives the same codeVerifier generated for this consent attempt (16.386958ms)",
+    "J-H: a wrong or missing PKCE verifier causes the (synthetic) exchange to fail closed, with no token persisted (15.222667ms)",
+    "J-I: neither the state nor the codeVerifier is ever written to stdout or stderr (18.33625ms)",
+    "J-J: no token state is persisted when state validation fails (16.098459ms)",
+    "phase-1 authority: ratified semantic targets are not code authorization (358.913917ms)"
+  ],
+  "git_diff_check": "PASS",
+  "integration": "NOT_STARTED_DATASET_PREREQUISITE_UNMET",
+  "build": "NOT_RUN",
+  "automatic_approval": "USER_CONTINUE_AUTHORIZED_SEPARATE_CONTEXT_EXECUTION",
+  "dependency_audit": {
+    "critical": 0,
+    "high": 3,
+    "packages": [
+      "miniflare",
+      "sharp",
+      "wrangler"
+    ],
+    "note": "Existing dependency versions; no advisory reported for the newly declared Ajv dependency."
+  },
+  "pending_draft": "GC-000002 requires canonical tag repair and fresh critic; not accepted",
+  "root_test_run_note": "Earlier local workspace baseline, including pre-existing uncommitted classifier assets; not a claim that the scoped GitHub snapshot was tested with those assets removed."
+}

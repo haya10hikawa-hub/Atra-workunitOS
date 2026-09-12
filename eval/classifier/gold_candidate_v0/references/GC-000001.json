@@ -1,0 +1,370 @@
+{
+  "format": "gold-candidate-reference/v1",
+  "episode_id": "GC-000001",
+  "dataset_id": "github-voicevox-20260911",
+  "project_id": "VOICEVOX/voicevox",
+  "language": "ja",
+  "status": "ACCEPTED_FOR_HUMAN_REVIEW",
+  "human_verified": false,
+  "full_episode_included": false,
+  "limitation": "Reference-only snapshot. Full local source evidence and run artifacts are required for corpus validation; this file is not itself a loadable Gold Candidate.",
+  "source_refs": [
+    {
+      "source_id": "github:VOICEVOX/voicevox:2217361824",
+      "provider": "github",
+      "url": "https://github.com/VOICEVOX/voicevox/pull/1971",
+      "raw_hash": "7c83a17f3e4e2c3be6469924ebda655d00c281d85176394796ae28fe83543f2a",
+      "content_hash": "2d9e05ec6ea080514f00d05a723e3dec0ef5e1c902860aa3a16cd8c0d4dbd69e"
+    },
+    {
+      "source_id": "github:VOICEVOX/voicevox:2031518620",
+      "provider": "github",
+      "url": "https://github.com/VOICEVOX/voicevox/pull/1971#issuecomment-2031518620",
+      "raw_hash": "9b42dbdda9bcaec41a2807e7db1a8ad906db60a4554c5a45bfd792c0d768b947",
+      "content_hash": "9a52f674f5270fcec393a96405fe93daee78cf8c980f572d95a8deda63588900"
+    },
+    {
+      "source_id": "github:VOICEVOX/voicevox:2031547696",
+      "provider": "github",
+      "url": "https://github.com/VOICEVOX/voicevox/pull/1971#issuecomment-2031547696",
+      "raw_hash": "9b42dbdda9bcaec41a2807e7db1a8ad906db60a4554c5a45bfd792c0d768b947",
+      "content_hash": "94f5964e5f1b934edc19f5c618687be58670f6f0e8408c057b8d22f54c45dc0b"
+    },
+    {
+      "source_id": "github:VOICEVOX/voicevox:2041033691",
+      "provider": "github",
+      "url": "https://github.com/VOICEVOX/voicevox/pull/1971#issuecomment-2041033691",
+      "raw_hash": "9b42dbdda9bcaec41a2807e7db1a8ad906db60a4554c5a45bfd792c0d768b947",
+      "content_hash": "dd14e5c6bdef986224293fbc7f6ea427a8a814916098244d4ec03f12ff69d796"
+    },
+    {
+      "source_id": "github:VOICEVOX/voicevox:2082837364",
+      "provider": "github",
+      "url": "https://github.com/VOICEVOX/voicevox/pull/1971#issuecomment-2082837364",
+      "raw_hash": "9b42dbdda9bcaec41a2807e7db1a8ad906db60a4554c5a45bfd792c0d768b947",
+      "content_hash": "478653fe39a6fc708e50338ecd50b133cfd38c02fa4f15fe989c7f6fcadef160"
+    },
+    {
+      "source_id": "github:VOICEVOX/voicevox:2082998064",
+      "provider": "github",
+      "url": "https://github.com/VOICEVOX/voicevox/pull/1971#issuecomment-2082998064",
+      "raw_hash": "9b42dbdda9bcaec41a2807e7db1a8ad906db60a4554c5a45bfd792c0d768b947",
+      "content_hash": "c86a49acbd9309daa7ca7bd6d48fb49cf6df494974f3e1f147a7f84ef8edaf6c"
+    },
+    {
+      "source_id": "github:VOICEVOX/voicevox:2085201903",
+      "provider": "github",
+      "url": "https://github.com/VOICEVOX/voicevox/pull/1971#issuecomment-2085201903",
+      "raw_hash": "9b42dbdda9bcaec41a2807e7db1a8ad906db60a4554c5a45bfd792c0d768b947",
+      "content_hash": "058bdc6dfaf093c0f5b75fde2ee424f66c33d60250dc4c45e60f969280072bc2"
+    },
+    {
+      "source_id": "github:VOICEVOX/voicevox:2094017396",
+      "provider": "github",
+      "url": "https://github.com/VOICEVOX/voicevox/pull/1971#issuecomment-2094017396",
+      "raw_hash": "9b42dbdda9bcaec41a2807e7db1a8ad906db60a4554c5a45bfd792c0d768b947",
+      "content_hash": "5c38c76cad6117c2a22c6380c58384b83a191a1e83bf50edd041461647ed1f7d"
+    },
+    {
+      "source_id": "github:VOICEVOX/voicevox:2119377418",
+      "provider": "github",
+      "url": "https://github.com/VOICEVOX/voicevox/pull/1971#issuecomment-2119377418",
+      "raw_hash": "9b42dbdda9bcaec41a2807e7db1a8ad906db60a4554c5a45bfd792c0d768b947",
+      "content_hash": "0bbb75683f14ac891bce2fc02e267f350e4434a3a85d8f551daa849939703178"
+    },
+    {
+      "source_id": "github:VOICEVOX/voicevox:2119384184",
+      "provider": "github",
+      "url": "https://github.com/VOICEVOX/voicevox/pull/1971#issuecomment-2119384184",
+      "raw_hash": "9b42dbdda9bcaec41a2807e7db1a8ad906db60a4554c5a45bfd792c0d768b947",
+      "content_hash": "fb074396e7ec82382cda2aecab640eddad45e2c93b9c14495da22fb17c91430c"
+    }
+  ],
+  "atom_refs": [
+    {
+      "atom_id": "a0",
+      "source_id": "github:VOICEVOX/voicevox:2217361824",
+      "start": 27,
+      "end": 43
+    },
+    {
+      "atom_id": "a1",
+      "source_id": "github:VOICEVOX/voicevox:2031518620",
+      "start": 0,
+      "end": 11
+    },
+    {
+      "atom_id": "a2",
+      "source_id": "github:VOICEVOX/voicevox:2041033691",
+      "start": 0,
+      "end": 12
+    },
+    {
+      "atom_id": "a3",
+      "source_id": "github:VOICEVOX/voicevox:2082837364",
+      "start": 14,
+      "end": 52
+    },
+    {
+      "atom_id": "a4",
+      "source_id": "github:VOICEVOX/voicevox:2082998064",
+      "start": 44,
+      "end": 118
+    },
+    {
+      "atom_id": "a5",
+      "source_id": "github:VOICEVOX/voicevox:2082998064",
+      "start": 120,
+      "end": 145
+    },
+    {
+      "atom_id": "a6",
+      "source_id": "github:VOICEVOX/voicevox:2094017396",
+      "start": 0,
+      "end": 21
+    },
+    {
+      "atom_id": "a7",
+      "source_id": "github:VOICEVOX/voicevox:2119377418",
+      "start": 70,
+      "end": 95
+    },
+    {
+      "atom_id": "a8",
+      "source_id": "github:VOICEVOX/voicevox:2119377418",
+      "start": 107,
+      "end": 161
+    },
+    {
+      "atom_id": "a9",
+      "source_id": "github:VOICEVOX/voicevox:2119384184",
+      "start": 5,
+      "end": 26
+    }
+  ],
+  "work_nodes": [
+    {
+      "node_id": "n0",
+      "title": "ソングのマルチトラック機能追加",
+      "level": "L1",
+      "goal": null,
+      "done_condition": null,
+      "status": "CHANGE_PLANNED_COMPLETION_UNCONFIRMED",
+      "time_window": null,
+      "evidence_refs": [
+        "a0",
+        "a1",
+        "a2",
+        "a9"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "node_id": "n1",
+      "title": "SET_SCORE除去と個別setter化の提案",
+      "level": "L3",
+      "goal": null,
+      "done_condition": null,
+      "status": "PROPOSED_WITH_REMOVAL_INTENTION",
+      "time_window": null,
+      "evidence_refs": [
+        "a4",
+        "a5",
+        "a6"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "node_id": "n2",
+      "title": "レビュー継続のためPRを作り直す提案",
+      "level": "L3",
+      "goal": null,
+      "done_condition": null,
+      "status": "PROPOSED",
+      "time_window": null,
+      "evidence_refs": [
+        "a7",
+        "a9"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "node_id": "n3",
+      "title": "UI変更を別PRへ分離する提案",
+      "level": "L3",
+      "goal": null,
+      "done_condition": null,
+      "status": "PROPOSED",
+      "time_window": null,
+      "evidence_refs": [
+        "a8",
+        "a9"
+      ],
+      "confidence": "medium"
+    }
+  ],
+  "relations": [
+    {
+      "relation_id": "r0",
+      "from_id": "n0",
+      "to_id": "n1",
+      "type": "UNCERTAIN",
+      "evidence_refs": [
+        "a0",
+        "a4",
+        "a5"
+      ],
+      "rationale": "setter変更を別PRへ分離する提案は明示されるが、マルチトラック機能の内部作業か独立した仕事かを提出単位だけでは確定できない。",
+      "confidence": "low"
+    },
+    {
+      "relation_id": "r1",
+      "from_id": "n0",
+      "to_id": "n3",
+      "type": "UNCERTAIN",
+      "evidence_refs": [
+        "a0",
+        "a8",
+        "a9"
+      ],
+      "rationale": "別PRへのUI分離は提案されているが、機能全体の一部なのか独立した仕事なのかを提出単位だけでは決められない。",
+      "confidence": "low"
+    },
+    {
+      "relation_id": "r2",
+      "from_id": "n2",
+      "to_id": "n3",
+      "type": "UNCERTAIN",
+      "evidence_refs": [
+        "a7",
+        "a8",
+        "a9"
+      ],
+      "rationale": "PR再作成とUI分離は同時に提案されるが、独立した作業単位として実行されたか判断できない。",
+      "confidence": "low"
+    }
+  ],
+  "evidence_map": [
+    {
+      "claim_id": "n0",
+      "atom_ids": [
+        "a0",
+        "a1",
+        "a2",
+        "a9"
+      ]
+    },
+    {
+      "claim_id": "n1",
+      "atom_ids": [
+        "a4",
+        "a5",
+        "a6"
+      ]
+    },
+    {
+      "claim_id": "n2",
+      "atom_ids": [
+        "a7",
+        "a9"
+      ]
+    },
+    {
+      "claim_id": "n3",
+      "atom_ids": [
+        "a8",
+        "a9"
+      ]
+    },
+    {
+      "claim_id": "r0",
+      "atom_ids": [
+        "a0",
+        "a4",
+        "a5"
+      ]
+    },
+    {
+      "claim_id": "r1",
+      "atom_ids": [
+        "a0",
+        "a8",
+        "a9"
+      ]
+    },
+    {
+      "claim_id": "r2",
+      "atom_ids": [
+        "a7",
+        "a8",
+        "a9"
+      ]
+    }
+  ],
+  "critic": {
+    "run_id": "critic-d3eca9a5-d6ff-4ae3-8b2f-edd64c85bf75",
+    "annotation_digest": "7713496e067db389f5c69728c0e1a38171ea310bba06ba34eefbffa018ae7f30",
+    "claims": [
+      {
+        "claim_id": "n0",
+        "verdict": "SUPPORTED",
+        "critical": false
+      },
+      {
+        "claim_id": "n1",
+        "verdict": "SUPPORTED",
+        "critical": false
+      },
+      {
+        "claim_id": "n2",
+        "verdict": "SUPPORTED",
+        "critical": false
+      },
+      {
+        "claim_id": "n3",
+        "verdict": "SUPPORTED",
+        "critical": false
+      },
+      {
+        "claim_id": "r0",
+        "verdict": "SUPPORTED",
+        "critical": false
+      },
+      {
+        "claim_id": "r1",
+        "verdict": "SUPPORTED",
+        "critical": false
+      },
+      {
+        "claim_id": "r2",
+        "verdict": "SUPPORTED",
+        "critical": false
+      },
+      {
+        "claim_id": "labels.language",
+        "verdict": "SUPPORTED",
+        "critical": false
+      },
+      {
+        "claim_id": "labels.difficulty",
+        "verdict": "SUPPORTED",
+        "critical": false
+      },
+      {
+        "claim_id": "labels.work_type",
+        "verdict": "SUPPORTED",
+        "critical": false
+      },
+      {
+        "claim_id": "labels.hard_cases.NONTRIVIAL",
+        "verdict": "SUPPORTED",
+        "critical": false
+      },
+      {
+        "claim_id": "labels.hard_cases.TASK_SPLIT",
+        "verdict": "SUPPORTED",
+        "critical": false
+      }
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "stage": "raw-sanitization",
+  "dataset_id": "disco-zenodo-5909202",
+  "project_id": "disco/pythongeneral",
+  "neighborhood_id": "window-320",
+  "reason": "sensitive data: quarantine source before annotation"
+}

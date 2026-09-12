@@ -1,0 +1,7 @@
+{
+  "stage": "raw-sanitization",
+  "dataset_id": "slack-zenodo-3627124",
+  "project_id": "slack/pythondev",
+  "neighborhood_id": "1280",
+  "reason": "sensitive data: quarantine source before annotation"
+}

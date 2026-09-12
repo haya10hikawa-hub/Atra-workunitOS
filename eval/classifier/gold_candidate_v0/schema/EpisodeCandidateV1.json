@@ -1,0 +1,240 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "dataset_id",
+    "project_id",
+    "ecosystem",
+    "split",
+    "sources",
+    "selection_rationale",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "episode-candidate/v1"
+    },
+    "candidate_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "dataset_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ecosystem": {
+      "type": "string",
+      "minLength": 1
+    },
+    "split": {
+      "enum": [
+        "TRAIN-CANDIDATE",
+        "DEV-CANDIDATE",
+        "TEST-CANDIDATE"
+      ]
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "source_id",
+          "provider",
+          "dataset",
+          "project",
+          "source_type",
+          "external_id",
+          "source_url",
+          "timestamp",
+          "author_anonymized",
+          "title",
+          "content",
+          "explicit_refs",
+          "structured_relations",
+          "metadata",
+          "license",
+          "provenance",
+          "sanitization"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "external-source-record/v1"
+          },
+          "source_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1
+          },
+          "dataset": {
+            "type": "string",
+            "minLength": 1
+          },
+          "project": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "external_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "author_anonymized": {
+            "type": "string",
+            "minLength": 1
+          },
+          "title": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1
+          },
+          "explicit_refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "uniqueItems": true
+          },
+          "structured_relations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "type",
+                "target_ref"
+              ],
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "target_ref": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "minItems": 0
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "artifact_only",
+              "context_ref"
+            ],
+            "properties": {
+              "artifact_only": {
+                "type": "boolean"
+              },
+              "context_ref": {
+                "type": "string",
+                "minLength": 1
+              },
+              "original_timestamp": {
+                "type": "string"
+              }
+            }
+          },
+          "license": {
+            "type": "string",
+            "minLength": 1
+          },
+          "provenance": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "raw_hash",
+              "content_hash",
+              "retrieved_at",
+              "raw_reference"
+            ],
+            "properties": {
+              "raw_hash": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "content_hash": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "retrieved_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "raw_reference": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "sanitization": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "boundary",
+              "version",
+              "trust"
+            ],
+            "properties": {
+              "boundary": {
+                "const": "public-source-sandbox/v1"
+              },
+              "version": {
+                "const": "1"
+              },
+              "trust": {
+                "const": "untrusted"
+              }
+            }
+          }
+        }
+      },
+      "minItems": 1
+    },
+    "selection_rationale": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "enum": [
+        "RAW",
+        "SILVER",
+        "ANNOTATION_PENDING",
+        "CRITIC_PENDING"
+      ]
+    }
+  }
+}

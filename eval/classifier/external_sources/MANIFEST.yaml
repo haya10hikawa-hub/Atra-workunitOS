@@ -1,0 +1,100 @@
+{
+  "format": "external-sources/v1",
+  "datasets": [
+    {
+      "dataset_id": "github-voicevox-20260911",
+      "name": "VOICEVOX public issue neighborhoods",
+      "source_family": "japanese_oss",
+      "source_url": "https://api.github.com/repos/VOICEVOX/voicevox/issues?state=closed&per_page=30&sort=comments&direction=desc",
+      "version": "7c83a17f3e4e2c3be6469924ebda655d00c281d85176394796ae28fe83543f2a",
+      "retrieved_at": "2026-09-11T06:50:17.061784+00:00",
+      "license": "LGPL-3.0 for repository code; issue/comment text retained locally for reference only",
+      "license_evidence_url": "https://github.com/VOICEVOX/voicevox/blob/main/LICENSE",
+      "redistribution_policy": "references-and-derived-only",
+      "attribution_required": true,
+      "attribution": "VOICEVOX project and public issue/comment contributors; original attribution remains at source URLs",
+      "contains_personal_data": true,
+      "anonymized": true,
+      "source_types": [
+        "issue",
+        "pull_request",
+        "issue_comment"
+      ],
+      "language": [
+        "ja",
+        "mixed"
+      ],
+      "known_limitations": [
+        "Repository code license does not establish redistribution rights for issue comments. Raw text and normalized episodes must remain local.",
+        "Thread membership is Silver evidence, never SAME_WORK truth.",
+        "Three initial neighborhoods only; no distractor selection or GPT/critic runs yet."
+      ],
+      "checksum": "7c83a17f3e4e2c3be6469924ebda655d00c281d85176394796ae28fe83543f2a",
+      "local_path": "external_sources/sandbox/voicevox-issues/7c83a17f3e4e2c3be6469924ebda655d00c281d85176394796ae28fe83543f2a.raw",
+      "notes": "Public-source sandbox receipts bind downloaded bytes. No permission to redistribute full issue text is inferred.",
+      "status": "ACQUIRED"
+    },
+    {
+      "dataset_id": "slack-zenodo-3627124",
+      "name": "Software-related Slack Chats v1.0.0",
+      "source_family": "slack",
+      "source_url": "https://zenodo.org/records/3627124",
+      "version": "v1.0.0",
+      "retrieved_at": "2026-09-11T09:52:48.117969+00:00",
+      "license": "LicenseRef-Zenodo-other-open (publisher metadata); full text kept local; no redistribution grant inferred",
+      "license_evidence_url": "https://zenodo.org/records/3627124",
+      "redistribution_policy": "references-and-derived-only",
+      "attribution_required": true,
+      "attribution": "Preetha Chatterjee and Kostadin Damevski; source participants as referenced by publisher",
+      "contains_personal_data": true,
+      "anonymized": true,
+      "source_types": [
+        "chat_message"
+      ],
+      "language": [
+        "en"
+      ],
+      "known_limitations": [
+        "Publisher records license status as other-open; a concrete text redistribution license is not established. Local evaluation and reproducible references only.",
+        "Included scripts/COPYING is not assumed to license the conversations.",
+        "Conversation grouping is Silver; Discord windows are only raw neighborhoods.",
+        "Source timestamps have no timezone; original text is retained and canonical timestamp stays null."
+      ],
+      "checksum": "e866ce34e2325503f70b7a99ce8e187631982aaf605a888a5e3754fb251c2f3e",
+      "local_path": "external_sources/sandbox/slack-archive/e866ce34e2325503f70b7a99ce8e187631982aaf605a888a5e3754fb251c2f3e.raw",
+      "notes": "Acquired public research archive; no inference of permission to distribute text. References resolve to member paths and message indices in the pinned archive.",
+      "status": "ACQUIRED"
+    },
+    {
+      "dataset_id": "disco-zenodo-5909202",
+      "name": "DISCO v2.0.0",
+      "source_family": "disco",
+      "source_url": "https://zenodo.org/records/5909202",
+      "version": "v2.0.0",
+      "retrieved_at": "2026-09-11T09:56:37.226322+00:00",
+      "license": "LicenseRef-Zenodo-other-open (publisher metadata); full text kept local; no redistribution grant inferred",
+      "license_evidence_url": "https://zenodo.org/records/5909202",
+      "redistribution_policy": "references-and-derived-only",
+      "attribution_required": true,
+      "attribution": "Keerthana Muthu Subash, Lakshmi Prasanna Kumar, Sri Lakshmi Vadlamani, Preetha Chatterjee, Olga Baysal; source participants",
+      "contains_personal_data": true,
+      "anonymized": true,
+      "source_types": [
+        "chat_message"
+      ],
+      "language": [
+        "en"
+      ],
+      "known_limitations": [
+        "Publisher records license status as other-open; a concrete text redistribution license is not established. Local evaluation and reproducible references only.",
+        "Included scripts/COPYING is not assumed to license the conversations.",
+        "Conversation grouping is Silver; Discord windows are only raw neighborhoods.",
+        "Source timestamps have no timezone; original text is retained and canonical timestamp stays null."
+      ],
+      "checksum": "7f9340b0af26fee57ec9369d0577c3f9ebdd395b46fa1ccb518178b3697ea967",
+      "local_path": "external_sources/sandbox/disco-archive/7f9340b0af26fee57ec9369d0577c3f9ebdd395b46fa1ccb518178b3697ea967.raw",
+      "notes": "Acquired public research archive; no inference of permission to distribute text. References resolve to member paths and message indices in the pinned archive.",
+      "status": "ACQUIRED"
+    }
+  ]
+}

@@ -1,0 +1,128 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "dataset_id",
+    "name",
+    "source_family",
+    "source_url",
+    "version",
+    "retrieved_at",
+    "license",
+    "license_evidence_url",
+    "redistribution_policy",
+    "attribution_required",
+    "attribution",
+    "contains_personal_data",
+    "anonymized",
+    "source_types",
+    "language",
+    "known_limitations",
+    "checksum",
+    "local_path",
+    "notes",
+    "status"
+  ],
+  "properties": {
+    "dataset_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_family": {
+      "enum": [
+        "jira",
+        "smartshark",
+        "slack",
+        "disco",
+        "wikimedia",
+        "japanese_oss",
+        "figma",
+        "apache_mail"
+      ]
+    },
+    "source_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "retrieved_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "license": {
+      "type": "string",
+      "minLength": 1
+    },
+    "license_evidence_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "redistribution_policy": {
+      "enum": [
+        "open-with-attribution",
+        "references-and-derived-only"
+      ]
+    },
+    "attribution_required": {
+      "type": "boolean"
+    },
+    "attribution": {
+      "type": "string",
+      "minLength": 1
+    },
+    "contains_personal_data": {
+      "type": "boolean"
+    },
+    "anonymized": {
+      "const": true
+    },
+    "source_types": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true,
+      "minItems": 1
+    },
+    "language": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true,
+      "minItems": 1
+    },
+    "known_limitations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "checksum": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "local_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "notes": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "const": "ACQUIRED"
+    }
+  }
+}

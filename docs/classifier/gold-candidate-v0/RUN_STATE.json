@@ -1,0 +1,13 @@
+{
+  "updated_at": "2026-09-12",
+  "user_authorization": "User replied continue to the pending independent-context approval question; subsequent automatic review permitted execution.",
+  "raw_candidates": 203,
+  "raw_records": 3472,
+  "accepted_episodes": 1,
+  "independent_critic_completed_runs": 4,
+  "critic_rejected_draft_runs": 2,
+  "integration_status": "NOT_STARTED_DATASET_PREREQUISITE_UNMET",
+  "active_work": "GitHub checkpoint requested by user; then continue dataset acquisition and annotation.",
+  "pending_schema_repair": "GC-000002: free-form hard-case descriptions do not match exact critic tag IDs; no acceptance counted.",
+  "checkpoint_branch": "codex/gold-candidate-v0-pipeline"
+}
