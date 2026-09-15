@@ -1,0 +1,39 @@
+flowchart TB
+  A["依頼発生"] --> B["Atra が観測"]
+  B --> C["関連情報を収集<br/>PR・Issue・スレッド・期限"]
+  C --> D["作業単位を形成"]
+  D --> E["重要度順に候補化"]
+  E --> W["中断 — 数時間 〜 数日"]
+  W --> F["人が再開"]
+
+  F -.-> S1["思い出す"]
+  S1 -.-> S2["チャットを遡る"]
+  S2 -.-> S3["Issue を探す"]
+  S3 -.-> S4["差分を読み直す"]
+  S4 -.-> S5["期限を確認する"]
+  S5 -.-> G["作業を選ぶ"]
+
+  F ==>|"5 手順を飛ばす"| G
+
+  G --> H["必要な文脈が<br/>そろった状態で開く"]
+
+  subgraph U ["(未決定区間)"]
+    direction TB
+    R["レビューする"] --> Z["完了"]
+  end
+  H --> R
+
+  classDef base fill:#ffffff,stroke:#111111,stroke-width:1.5px,color:#111111
+  classDef skip fill:#eceff1,stroke:#b6c1cb,stroke-width:1px,stroke-dasharray:4 3,color:#7b8a99
+  classDef gap  fill:#ffffff,stroke:#111111,stroke-width:1.5px,stroke-dasharray:6 4,color:#111111
+  classDef un   fill:#ffffff,stroke:#111111,stroke-width:1.5px,stroke-dasharray:6 4,color:#111111
+
+  class A,B,C,D,E,F,G,H base
+  class S1,S2,S3,S4,S5 skip
+  class W gap
+  class R,Z un
+
+  style U fill:#f0f2f4,stroke:#b6c1cb,stroke-width:1px,color:#6f7a85
+
+  linkStyle 6,7,8,9,10,11 stroke:#b6c1cb,stroke-width:1px
+  linkStyle 12 stroke:#111111,stroke-width:3px
