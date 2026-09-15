@@ -1,0 +1,854 @@
+<title>Atra 要件定義</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+  :root{
+    --paper:#eef0f3;
+    --surface:#ffffff;
+    --surface-2:#f6f7f9;
+    --ink:#171a21;
+    --ink-2:#39404e;
+    --muted:#69717f;
+    --rule:#d6dae1;
+    --rule-soft:#e5e8ed;
+    --accent:#b5771a;
+    --accent-soft:#f4e6cc;
+    --cut:#a2412f;
+    --cut-soft:#f3dfda;
+    --chrome:#1b1f28;
+    --chrome-2:#232834;
+    --chrome-line:#333a48;
+    --chrome-text:#e8eaef;
+    --chrome-muted:#8c94a3;
+    --chrome-sel:#3a3320;
+    --chrome-sel-line:#7a6428;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#0d1015;
+      --surface:#171b23;
+      --surface-2:#1e232c;
+      --ink:#e7e9ee;
+      --ink-2:#b9c0cc;
+      --muted:#8d96a5;
+      --rule:#2c333f;
+      --rule-soft:#232a34;
+      --accent:#dfa844;
+      --accent-soft:#3a2f18;
+      --cut:#e08571;
+      --cut-soft:#3a2420;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#0d1015;
+    --surface:#171b23;
+    --surface-2:#1e232c;
+    --ink:#e7e9ee;
+    --ink-2:#b9c0cc;
+    --muted:#8d96a5;
+    --rule:#2c333f;
+    --rule-soft:#232a34;
+    --accent:#dfa844;
+    --accent-soft:#3a2f18;
+    --cut:#e08571;
+    --cut-soft:#3a2420;
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    background:var(--paper);
+    color:var(--ink);
+    font-family:'Zen Kaku Gothic New','Hiragino Kaku Gothic ProN','Yu Gothic',Meiryo,system-ui,sans-serif;
+    font-size:16px;
+    line-height:1.7;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono{font-family:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace}
+
+  /* ---------- rail ---------- */
+  .rail{
+    position:fixed;left:0;right:0;top:env(safe-area-inset-top,0px);
+    height:3px;background:var(--rule-soft);z-index:50;
+  }
+  .rail span{display:block;height:100%;width:0;background:var(--accent);transition:width .18s ease}
+  .hud{
+    position:fixed;right:16px;bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:50;
+    display:flex;gap:8px;align-items:center;
+    background:var(--surface);border:1px solid var(--rule);border-radius:999px;
+    padding:6px 8px 6px 14px;box-shadow:0 2px 12px rgba(0,0,0,.09);
+    font-size:12px;letter-spacing:.06em;color:var(--muted);
+  }
+  .hud button{
+    font:inherit;font-family:'JetBrains Mono',ui-monospace,monospace;
+    border:1px solid var(--rule);background:var(--surface-2);color:var(--ink-2);
+    border-radius:999px;padding:3px 10px;cursor:pointer;
+  }
+  .hud button:hover{border-color:var(--accent);color:var(--accent)}
+  .hud button:focus-visible,.hud a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  /* ---------- deck ---------- */
+  .deck{
+    display:flex;flex-direction:column;gap:28px;
+    padding-block:34px 90px;padding-left:20px;padding-right:20px;
+    max-width:1180px;margin:0 auto;
+  }
+  .slide{
+    position:relative;
+    background:var(--surface);
+    border:1px solid var(--rule);
+    border-radius:4px;
+    padding:44px 52px 48px;
+    scroll-margin-top:24px;
+    display:flex;flex-direction:column;
+  }
+  .slide::before{
+    content:attr(data-n);
+    position:absolute;top:18px;right:22px;
+    font-family:'JetBrains Mono',ui-monospace,monospace;
+    font-size:11px;color:var(--muted);letter-spacing:.12em;
+  }
+  .eyebrow{
+    font-family:'JetBrains Mono',ui-monospace,monospace;
+    font-size:11px;letter-spacing:.2em;text-transform:uppercase;
+    color:var(--accent);margin:0 0 10px;
+  }
+  h1{font-size:clamp(34px,5vw,58px);line-height:1.2;margin:0;font-weight:900;letter-spacing:-.01em;text-wrap:balance}
+  h2{font-size:clamp(24px,3.2vw,34px);line-height:1.3;margin:0 0 6px;font-weight:700;text-wrap:balance}
+  h3{font-size:16px;margin:0 0 8px;font-weight:700;letter-spacing:.02em}
+  .sub{color:var(--muted);font-size:15px;margin:0 0 26px}
+  p{margin:0 0 14px;max-width:66ch}
+  .lead{font-size:19px;line-height:1.75;font-weight:500;max-width:60ch}
+  strong{font-weight:700}
+  .hl{background:linear-gradient(transparent 62%,var(--accent-soft) 62%);font-weight:700}
+  .divider{height:1px;background:var(--rule-soft);margin:26px 0}
+
+  /* ---------- title slide ---------- */
+  .title-slide{padding-block:86px 78px}
+  .title-meta{
+    display:flex;flex-wrap:wrap;gap:8px 28px;margin-top:34px;
+    font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;color:var(--muted);letter-spacing:.06em;
+  }
+  .oneline{
+    margin-top:30px;padding-left:20px;border-left:3px solid var(--accent);
+    font-size:clamp(17px,2.2vw,22px);line-height:1.65;font-weight:500;max-width:34ch;
+  }
+
+  /* ---------- key caps ---------- */
+  kbd{
+    font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.86em;
+    background:var(--surface-2);border:1px solid var(--rule);border-bottom-width:2px;
+    border-radius:4px;padding:1px 6px;color:var(--ink);white-space:nowrap;
+  }
+
+  /* ---------- generic grids ---------- */
+  .cols{display:grid;gap:26px}
+  .cols.two{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+  .cols.mock{grid-template-columns:minmax(300px,1.15fr) minmax(260px,1fr);align-items:start}
+  @media (max-width:860px){.cols.mock{grid-template-columns:1fr}}
+
+  /* ---------- terms table ---------- */
+  .terms{width:100%;border-collapse:collapse;font-size:15px}
+  .terms th,.terms td{text-align:left;padding:11px 14px 11px 0;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+  .terms th{width:150px;font-weight:700;color:var(--ink)}
+  .terms tr:last-child td,.terms tr:last-child th{border-bottom:0}
+
+  /* ---------- stats ---------- */
+  .stats{display:flex;flex-wrap:wrap;gap:0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);margin:22px 0}
+  .stat{flex:1 1 150px;padding:16px 20px 16px 0}
+  .stat + .stat{border-left:1px solid var(--rule-soft);padding-left:20px}
+  .stat b{display:block;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:26px;font-weight:700;line-height:1.2;font-variant-numeric:tabular-nums}
+  .stat span{font-size:12.5px;color:var(--muted);letter-spacing:.04em}
+
+  /* ---------- step list (current flow) ---------- */
+  .steps{list-style:none;margin:0;padding:0;counter-reset:s}
+  .steps li{
+    display:grid;grid-template-columns:34px 1fr auto;gap:14px;align-items:baseline;
+    padding:9px 0;border-bottom:1px solid var(--rule-soft);
+  }
+  .steps li:last-child{border-bottom:0}
+  .steps li::before{
+    counter-increment:s;content:counter(s);
+    font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;color:var(--muted);
+  }
+  .steps .tag{
+    font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.08em;
+    color:var(--cut);background:var(--cut-soft);border-radius:3px;padding:2px 8px;white-space:nowrap;
+  }
+  .steps li.gap{border-bottom:0;padding:4px 0}
+  .steps li.gap em{grid-column:1/-1;font-style:normal;font-family:'JetBrains Mono',ui-monospace,monospace;
+    font-size:11px;letter-spacing:.14em;color:var(--muted);border-top:1px dashed var(--rule);padding-top:10px;display:block}
+
+  /* ---------- raycast mock ---------- */
+  .mock-wrap{overflow-x:auto}
+  .ray{
+    background:var(--chrome);color:var(--chrome-text);
+    border:1px solid var(--chrome-line);border-radius:10px;
+    box-shadow:0 14px 34px rgba(10,12,18,.28);
+    font-size:13px;line-height:1.55;overflow:hidden;min-width:300px;
+  }
+  .ray-search{
+    display:flex;align-items:center;gap:10px;padding:13px 16px;
+    border-bottom:1px solid var(--chrome-line);
+  }
+  .ray-search .q{font-family:'JetBrains Mono',ui-monospace,monospace;color:var(--chrome-text)}
+  .ray-search .caret{display:inline-block;width:1px;height:14px;background:#dfa844;vertical-align:-2px;margin-left:1px}
+  .ray-search .icon{color:var(--chrome-muted);font-size:12px}
+  .ray-body{display:grid;grid-template-columns:1fr}
+  .ray-body.split{grid-template-columns:1fr 1.05fr}
+  @media (max-width:560px){.ray-body.split{grid-template-columns:1fr}}
+  .ray-pane{padding:10px 0}
+  .ray-pane + .ray-pane{border-left:1px solid var(--chrome-line)}
+  .ray-sec{
+    font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;letter-spacing:.14em;
+    color:var(--chrome-muted);padding:6px 16px 8px;
+  }
+  .row{display:grid;grid-template-columns:1fr auto;gap:10px;padding:8px 16px;align-items:baseline}
+  .row .name{font-weight:500}
+  .row .meta{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:var(--chrome-muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+  .row .note{grid-column:1/-1;font-size:11.5px;color:var(--chrome-muted);margin-top:1px}
+  .row.sel{background:var(--chrome-sel);box-shadow:inset 2px 0 0 #dfa844}
+  .row.sel .name{color:#f3c979}
+  .ray-detail{padding:14px 18px 18px;font-size:12.5px}
+  .ray-detail h4{
+    font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;letter-spacing:.14em;
+    color:var(--chrome-muted);margin:16px 0 6px;font-weight:500;
+  }
+  .ray-detail h4:first-child{margin-top:0}
+  .ray-detail .title{font-size:14px;font-weight:700;margin-bottom:12px;color:#f3c979}
+  .ray-detail ul{margin:0;padding-left:16px}
+  .ray-detail li{margin:3px 0}
+  .ray-detail .items{list-style:none;padding:0;margin:0;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11.5px}
+  .ray-detail .items li{display:flex;gap:8px;padding:2.5px 0;color:#c8cedb}
+  .ray-detail .items li i{font-style:normal;width:14px;text-align:center;opacity:.9}
+  .ray-foot{
+    border-top:1px solid var(--chrome-line);padding:9px 16px;
+    display:flex;justify-content:space-between;gap:12px;
+    font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10.5px;color:var(--chrome-muted);
+  }
+  .ray-input{
+    margin:12px 16px;padding:9px 12px;border:1px solid var(--chrome-line);border-radius:6px;
+    font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;color:var(--chrome-text);background:#141821;
+  }
+  .ray-note{padding:2px 16px 12px;font-size:11.5px;color:var(--chrome-muted)}
+  .ray-actions .row{grid-template-columns:1fr auto}
+  .ray-actions .row .meta{letter-spacing:.06em}
+
+  /* ---------- annotation column ---------- */
+  .anno{font-size:14.5px}
+  .anno dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 14px;align-items:baseline}
+  .anno dt{
+    font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10px;letter-spacing:.12em;
+    color:var(--accent);padding-top:3px;white-space:nowrap;
+  }
+  .anno dd{margin:0}
+  .anno .why{
+    margin-top:20px;padding:14px 16px;background:var(--surface-2);
+    border-left:3px solid var(--accent);font-size:14px;
+  }
+  .anno .why b{display:block;font-size:11px;letter-spacing:.14em;color:var(--accent);
+    font-family:'JetBrains Mono',ui-monospace,monospace;margin-bottom:4px;font-weight:500}
+
+  /* ---------- comparison figure ---------- */
+  .compare{
+    display:grid;grid-template-columns:1fr 1fr;gap:0 30px;
+    border-top:1px solid var(--rule);margin-top:8px;
+  }
+  @media (max-width:760px){.compare{grid-template-columns:1fr;gap:26px}}
+  .compare .head{
+    font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;letter-spacing:.16em;
+    padding:12px 0 14px;color:var(--muted);
+  }
+  .compare .head b{color:var(--ink);font-size:13px;letter-spacing:.06em}
+  .clist{list-style:none;margin:0;padding:0;font-size:14.5px}
+  .clist li{
+    display:grid;grid-template-columns:20px 1fr auto;gap:10px;align-items:baseline;
+    padding:8px 0;border-bottom:1px solid var(--rule-soft);
+  }
+  .clist li .n{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:var(--muted)}
+  .clist li .t{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .clist li.cut{color:var(--cut)}
+  .clist li.cut .body{text-decoration:line-through;text-decoration-thickness:1px;text-decoration-color:var(--cut)}
+  .clist li.cut .n{color:var(--cut)}
+  .clist li.cut .t{color:var(--cut);text-decoration:none}
+  .clist li.wait{border-bottom:0;padding:10px 0 4px}
+  .clist li.wait .body{grid-column:1/-1;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:10.5px;
+    letter-spacing:.14em;color:var(--muted);border-top:1px dashed var(--rule);padding-top:10px;text-decoration:none}
+  .clist li.new{background:var(--accent-soft)}
+  .clist li.new .n,.clist li.new .t{color:var(--accent)}
+  .total{
+    display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+    border-top:2px solid var(--rule);padding-top:12px;margin-top:2px;
+  }
+  .total b{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:24px;font-variant-numeric:tabular-nums}
+  .total .l{font-size:12px;color:var(--muted);letter-spacing:.06em;font-family:'JetBrains Mono',ui-monospace,monospace}
+  .total.before b{color:var(--cut)}
+  .total.after b{color:var(--accent)}
+  .verdict{
+    margin-top:26px;padding:18px 22px;border:1px solid var(--rule);background:var(--surface-2);
+    display:flex;flex-wrap:wrap;gap:8px 30px;align-items:baseline;font-size:15px;
+  }
+  .verdict b{font-size:17px}
+
+  /* ---------- rules ---------- */
+  .rules{list-style:none;margin:0;padding:0;display:grid;gap:0}
+  .rules li{
+    display:grid;grid-template-columns:30px 1fr 1fr;gap:18px;align-items:baseline;
+    padding:13px 0;border-bottom:1px solid var(--rule-soft);
+  }
+  @media (max-width:720px){.rules li{grid-template-columns:30px 1fr;gap:6px 14px}.rules li .why2{grid-column:2}}
+  .rules li:last-child{border-bottom:0}
+  .rules .num{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:var(--accent)}
+  .rules .r{font-weight:700;font-size:15px}
+  .rules .why2{color:var(--muted);font-size:13.5px}
+
+  /* ---------- feature / output lists ---------- */
+  .box{border:1px solid var(--rule);padding:18px 20px}
+  .box h3{color:var(--accent);font-family:'JetBrains Mono',ui-monospace,monospace;
+    font-size:11px;letter-spacing:.14em;font-weight:500;margin-bottom:10px}
+  .box ul{margin:0;padding-left:17px;font-size:14.5px}
+  .box li{margin:4px 0}
+  .box.off{border-style:dashed;color:var(--muted)}
+  .box.off h3{color:var(--muted)}
+
+  /* ---------- architecture ---------- */
+  .arch{display:flex;flex-direction:column;align-items:stretch;gap:0;max-width:640px}
+  .layer{border:1px solid var(--rule);padding:16px 20px;background:var(--surface-2)}
+  .layer.core{border:2px solid var(--accent);background:var(--accent-soft)}
+  .layer h4{margin:0 0 4px;font-size:15px;font-weight:700}
+  .layer p{margin:0;font-size:13.5px;color:var(--muted);max-width:none}
+  .layer.core p{color:var(--ink-2)}
+  .conn{
+    display:flex;align-items:center;gap:10px;padding:7px 0 7px 26px;
+    font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;color:var(--muted);
+  }
+  .conn::before{content:"";width:1px;height:18px;background:var(--rule);flex:none}
+
+  /* ---------- diff ---------- */
+  .diff{list-style:none;margin:0;padding:0;counter-reset:d}
+  .diff li{display:grid;grid-template-columns:26px 1fr;gap:14px;padding:14px 0;border-bottom:1px solid var(--rule-soft)}
+  .diff li:last-child{border-bottom:0}
+  .diff li::before{counter-increment:d;content:counter(d);
+    font-family:'JetBrains Mono',ui-monospace,monospace;font-size:20px;color:var(--accent);font-weight:700;line-height:1.3}
+  .diff b{display:block;font-size:16px;margin-bottom:2px}
+  .diff span{color:var(--ink-2);font-size:14.5px}
+
+  /* ---------- decided / undecided ---------- */
+  .decide{display:grid;gap:22px;grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+  .decide ul{margin:0;padding-left:17px;font-size:14.5px}
+  .decide li{margin:5px 0}
+  .decide .prov{
+    margin-top:12px;padding:14px 16px;background:var(--accent-soft);border-left:3px solid var(--accent);
+    font-size:14px;font-weight:500;color:var(--ink);
+  }
+
+  @media (max-width:640px){
+    .slide{padding:30px 22px 34px}
+    .deck{padding-left:16px;padding-right:16px;gap:20px}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
+  @media print{
+    body{background:#fff}
+    .rail,.hud{display:none}
+    .deck{gap:0;padding:0;max-width:none}
+    .slide{border:0;page-break-after:always;padding:26px 30px}
+  }
+</style>
+
+<div class="rail"><span id="railbar"></span></div>
+
+<div class="deck" id="deck">
+
+<!-- 01 -->
+<section class="slide title-slide" data-n="01">
+  <p class="eyebrow">要件定義書 v1 — 2026.09.15</p>
+  <h1>Atra</h1>
+  <p class="oneline">中断した作業に、<span class="hl">30秒で戻れる</span>ようにする Raycast 拡張。</p>
+  <div class="title-meta">
+    <span>神山まるごと高専</span>
+    <span>提出先 / 斎藤さん</span>
+    <span>構成 / 門馬さん提示の型</span>
+  </div>
+</section>
+
+<!-- 02 -->
+<section class="slide" data-n="02">
+  <p class="eyebrow">この資料で使う言葉</p>
+  <h2>言葉は4つだけ</h2>
+  <p class="sub">この4語以外の名前は最後まで出てきません。</p>
+  <table class="terms">
+    <tr><th>グループ</th><td>1つの作業のまとまり。タブ・PR・スレッド・ファイル・メモが入っている箱。</td></tr>
+    <tr><th>再開ブリーフ</th><td>グループを選んだとき右に出る「前回の自分からの引き継ぎ」。</td></tr>
+    <tr><th>中断メモ</th><td>作業を止めるときに残す1行。</td></tr>
+    <tr><th>判断記録</th><td>「これはこうすると決めた」を残したもの。消えない。</td></tr>
+  </table>
+  <div class="divider"></div>
+  <p class="lead">Atra がやることは1つ。<strong>グループを作って、再開の瞬間にそれを出す。</strong></p>
+</section>
+
+<!-- 03 -->
+<section class="slide" data-n="03">
+  <p class="eyebrow">対象ユーザーと課題</p>
+  <h2>対象は自分たち2名</h2>
+  <div class="cols two">
+    <div>
+      <h3>誰のために作るか</h3>
+      <p>神山まるごと高専の学生2名。複数のプロジェクトを同時に持ち、授業・MTG・移動・就寝で1日に何度も中断される。中断の長さは数十分から数日まで。</p>
+      <p><strong>対象を広げない。</strong>売れるかどうかは二の次。自分たちが毎日使いたいものを作る。毎日の当事者なので、正しいかどうかを自分で判定できる。</p>
+    </div>
+    <div>
+      <h3>何に困っているか</h3>
+      <p class="lead">中断した作業に戻るとき、<span class="hl">毎回「何をやっていたか」を作り直している。</span></p>
+      <p>情報が足りないのではない。情報は全部ある。どこにあるか、どれが今の自分に関係あるかが思い出せない。</p>
+    </div>
+  </div>
+  <div class="stats">
+    <div class="stat"><b>15–30分</b><span>1回の再開にかかる時間</span></div>
+    <div class="stat"><b>3–5回</b><span>1日の再開回数</span></div>
+    <div class="stat"><b>約1時間</b><span>1日あたりの損失</span></div>
+  </div>
+  <p>失われているのは時間だけではない。<strong>再開が重いので、細切れの時間に作業を始めなくなる。</strong></p>
+</section>
+
+<!-- 04 -->
+<section class="slide" data-n="04">
+  <p class="eyebrow">1 — 現状の業務フロー</p>
+  <h2>いま、人がやっていること</h2>
+  <p class="sub">システムの話は出てきません。人の動きだけです。</p>
+  <ol class="steps">
+    <li><span>作業中。タブ・エディタ・ターミナル・Slack が開いている</span><span></span></li>
+    <li><span>中断する（授業／MTG／移動／就寝）</span><span></span></li>
+    <li class="gap"><em>数時間 〜 数日</em></li>
+    <li><span>机に座る。再開しようとする</span><span></span></li>
+    <li><span>「何をやってたんだっけ」と思い出そうとする</span><span class="tag">思い出す</span></li>
+    <li><span>ブラウザ履歴を遡る／Slack を遡る／PR を開く</span><span class="tag">探す</span></li>
+    <li><span>前回何を決めたか思い出せない → もう一度調べ直す</span><span class="tag">調べ直す</span></li>
+    <li><span>散らばっていた画面を1つずつ開き直す</span><span class="tag">開き直す</span></li>
+    <li><span>ようやく手が動き始める</span><span></span></li>
+  </ol>
+  <div class="divider"></div>
+  <p class="lead">印をつけた4手順で <strong>15〜30分。</strong> ここに価値は1つも生まれていない。</p>
+</section>
+
+<!-- 05 -->
+<section class="slide" data-n="05">
+  <p class="eyebrow">2 — 導入後の業務フロー</p>
+  <h2>画面 1 — 起動直後</h2>
+  <p class="sub">操作：<kbd>⌥Space</kbd> → <span class="mono">atra</span> と打つ → <kbd>Enter</kbd></p>
+  <div class="cols mock">
+    <div class="mock-wrap">
+      <div class="ray">
+        <div class="ray-search"><span class="icon">🔍</span><span class="q">atra<span class="caret"></span></span></div>
+        <div class="ray-body"><div class="ray-pane">
+          <div class="ray-sec">再開する</div>
+          <div class="row sel"><span class="name">Atra 要件定義</span><span class="meta">2時間前 · 7件</span><span class="note">比較図を描くところで止めた</span></div>
+          <div class="row"><span class="name">Hopper ランキング実装</span><span class="meta">昨日 · 12件</span><span class="note">ベクトル統合の分離メモリまで書いた</span></div>
+          <div class="row"><span class="name">学校 / 情報数学レポート</span><span class="meta">3日前 · 4件</span><span class="note">設問3が分からず放置</span></div>
+          <div class="row"><span class="name">採用面談の準備</span><span class="meta">5日前 · 3件</span><span class="note">日程だけ決まっている</span></div>
+        </div></div>
+        <div class="ray-foot"><span>↑↓ 選ぶ</span><span>↵ 再開する　⌘K 操作</span></div>
+      </div>
+    </div>
+    <div class="anno">
+      <dl>
+        <dt>見えるもの</dt><dd>グループの一覧。<strong>1行 = 1つの作業のまとまり。</strong></dd>
+        <dt>1行の中身</dt><dd>名前 / 最後に触った時刻 / 中断メモ / 中身の件数。<strong>この4つだけ。</strong></dd>
+        <dt>並び順</dt><dd>「今これを再開する確率が高い順」。最終更新を軸に、時間帯で補正する。名前順でもアルファベット順でもない。</dd>
+      </dl>
+      <div class="why"><b>なぜここが重要か</b>一番上に自分の作業が来ていれば、それだけで勝ち。<strong>探す操作が消える。</strong></div>
+    </div>
+  </div>
+</section>
+
+<!-- 06 -->
+<section class="slide" data-n="06">
+  <p class="eyebrow">2 — 導入後の業務フロー ／ 本書の中心</p>
+  <h2>画面 2 — グループを選ぶ（まだ開かない）</h2>
+  <p class="sub">操作：<kbd>↑</kbd> <kbd>↓</kbd> で移動するだけ。<kbd>Enter</kbd> はまだ押さない。</p>
+  <div class="cols mock">
+    <div class="mock-wrap">
+      <div class="ray">
+        <div class="ray-search"><span class="icon">🔍</span><span class="q">atra<span class="caret"></span></span></div>
+        <div class="ray-body split">
+          <div class="ray-pane">
+            <div class="row sel"><span class="name">Atra 要件定義</span><span class="meta">2時間前</span></div>
+            <div class="row"><span class="name">Hopper ランキング実装</span><span class="meta">昨日</span></div>
+            <div class="row"><span class="name">情報数学レポート</span><span class="meta">3日前</span></div>
+            <div class="row"><span class="name">採用面談の準備</span><span class="meta">5日前</span></div>
+          </div>
+          <div class="ray-pane ray-detail">
+            <div class="title">Atra 要件定義</div>
+            <h4>中断メモ</h4>
+            <div>「比較図を描くところで止めた」</div>
+            <h4>前回決めたこと</h4>
+            <ul><li>非機能要件は今回書かない</li><li>ICP は自分たち。広げない</li><li>特化の定義は今決めない</li></ul>
+            <h4>中身 — 7件</h4>
+            <ul class="items">
+              <li><i>🌐</i>門馬さんの構成メモ</li>
+              <li><i>🌐</i>Raycast API ドキュメント</li>
+              <li><i>⌥</i>PR #254 docs boundary</li>
+              <li><i>💬</i>Slack / 斎藤さん 9/01</li>
+              <li><i>📁</i>~/Atra-workunitOS</li>
+              <li><i>📄</i>docs/product/…V1.md</li>
+              <li><i>📝</i>メモ：比較図は必ず図にする</li>
+            </ul>
+            <h4>次にやること</h4>
+            <div>比較図（1と2を並べる）</div>
+          </div>
+        </div>
+        <div class="ray-foot"><span>↑↓ 選ぶ</span><span>↵ 再開する　⌘K 操作</span></div>
+      </div>
+    </div>
+    <div class="anno">
+      <dl>
+        <dt>起きること</dt><dd>右ペインに<strong>再開ブリーフ</strong>が出る。前回の自分からの引き継ぎ。</dd>
+        <dt>読み終えた時点</dt><dd>頭の中は中断前に戻っている。</dd>
+        <dt>信用できる理由</dt><dd>「前回決めたこと」は AI の要約ではなく、<strong>自分が判断記録として残したもの。</strong>だから読み飛ばせる。</dd>
+      </dl>
+      <div class="why"><b>この画面が本体</b>現状フローの ④ 思い出す / ⑤ 探す / ⑥ 調べ直す が、ここで一度に消える。</div>
+    </div>
+  </div>
+</section>
+
+<!-- 07 -->
+<section class="slide" data-n="07">
+  <p class="eyebrow">2 — 導入後の業務フロー</p>
+  <h2>画面 3 — 再開する</h2>
+  <p class="sub">操作：<kbd>Enter</kbd></p>
+  <div class="cols two">
+    <div>
+      <ol class="steps">
+        <li><span>Raycast が閉じる</span><span></span></li>
+        <li><span>グループの中身が一括で開く（ブラウザのタブ群、エディタ、ターミナルは該当ディレクトリで）</span><span></span></li>
+        <li><span>画面が中断前の状態に戻っている</span><span></span></li>
+      </ol>
+    </div>
+    <div class="anno">
+      <div class="stats" style="margin-top:0">
+        <div class="stat"><b>2秒</b><span>目標所要時間</span></div>
+        <div class="stat"><b>4操作</b><span>⌥Space → atra → ↓ → ↵</span></div>
+      </div>
+      <p>Atra が出てくるのはここまで。<strong>以降は普通に作業する。</strong>常駐ダッシュボードも、進捗管理も、通知もない。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 08 -->
+<section class="slide" data-n="08">
+  <p class="eyebrow">2 — 導入後の業務フロー</p>
+  <h2>画面 4 — もっと細かくやりたいとき</h2>
+  <p class="sub">操作：グループを選んだ状態で <kbd>⌘K</kbd></p>
+  <div class="cols mock">
+    <div class="mock-wrap">
+      <div class="ray ray-actions">
+        <div class="ray-sec" style="padding-top:12px">アクション — Atra 要件定義</div>
+        <div class="row sel"><span class="name">すべて開く</span><span class="meta">↵</span></div>
+        <div class="row"><span class="name">リンクだけ開く</span><span class="meta">⌘↵</span></div>
+        <div class="row"><span class="name">中断メモを書き直す</span><span class="meta">⌘E</span></div>
+        <div class="row"><span class="name">判断記録を追加</span><span class="meta">⌘D</span></div>
+        <div class="row"><span class="name">このグループを分割</span><span class="meta">⌘S</span></div>
+        <div class="row"><span class="name">別のグループと統合</span><span class="meta">⌘M</span></div>
+        <div class="row"><span class="name">アーカイブ</span><span class="meta">⌘⌫</span></div>
+        <div class="ray-foot" style="margin-top:8px"><span>⌘K で開閉</span><span>esc 戻る</span></div>
+      </div>
+    </div>
+    <div class="anno">
+      <p class="lead">普段は使わない。<strong>使わなくても画面 1〜3 だけで完結する。</strong></p>
+      <div class="why"><b>設計の考え方</b>機能はアクションパネルの中に沈める。一覧画面に機能を生やすと、再開のたびに読む量が増える。</div>
+    </div>
+  </div>
+</section>
+
+<!-- 09 -->
+<section class="slide" data-n="09">
+  <p class="eyebrow">2 — 導入後の業務フロー</p>
+  <h2>画面 5 — 中断するとき</h2>
+  <p class="sub">操作：<kbd>⌥Space</kbd> → <span class="mono">park</span> → <kbd>Enter</kbd></p>
+  <div class="cols mock">
+    <div class="mock-wrap">
+      <div class="ray">
+        <div class="ray-search"><span class="icon">🔍</span><span class="q">park<span class="caret"></span></span></div>
+        <div class="ray-sec">作業を置く — Atra 要件定義</div>
+        <div class="ray-input">比較図を描くところで止めた<span class="caret"></span></div>
+        <div class="ray-note">いま開いているもの <strong>7件</strong> をこのグループに紐づけます</div>
+        <div class="ray-foot"><span>↓ 別のグループを選ぶ</span><span>↵ 完了</span></div>
+      </div>
+    </div>
+    <div class="anno">
+      <dl>
+        <dt>やること</dt><dd><strong>1行打って Enter。それだけ。</strong></dd>
+        <dt>省略できる</dt><dd>メモを飛ばしても動く。ただし再開ブリーフは薄くなる。</dd>
+        <dt>紐づけ先</dt><dd>自動で推定。違えば <kbd>↓</kbd> で選び直す。</dd>
+      </dl>
+      <div class="why"><b>ここを重くすると誰も使わない</b>中断は5秒、再開は2秒。この予算を超える機能は入れない。</div>
+    </div>
+  </div>
+</section>
+
+<!-- 10 -->
+<section class="slide" data-n="10">
+  <p class="eyebrow">2 — 導入後の業務フロー</p>
+  <h2>画面 6 — 作業中に情報が増えたとき</h2>
+  <p class="sub">操作：<kbd>⌥Space</kbd> → <span class="mono">add</span> → <kbd>Enter</kbd>（今見ているタブが対象）</p>
+  <div class="cols mock">
+    <div class="mock-wrap">
+      <div class="ray">
+        <div class="ray-search"><span class="icon">🔍</span><span class="q">add<span class="caret"></span></span></div>
+        <div class="ray-sec">「Raycast API / List」を追加する先</div>
+        <div class="row sel"><span class="name">Atra 要件定義</span><span class="meta">いま作業中</span></div>
+        <div class="row"><span class="name">Hopper ランキング実装</span><span class="meta">昨日</span></div>
+        <div class="row"><span class="name">＋ 新しいグループを作る</span><span class="meta"></span></div>
+        <div class="ray-foot"><span>↑↓ 選ぶ</span><span>↵ 追加</span></div>
+      </div>
+    </div>
+    <div class="anno">
+      <p class="lead">推薦順に並ぶ。<kbd>Enter</kbd> で追加。</p>
+      <div class="why"><b>やらないこと</b><strong>分類作業をさせない。</strong>フォルダを選ばせる、タグを付けさせる、カテゴリを決めさせる — 全部やらない。</div>
+    </div>
+  </div>
+</section>
+
+<!-- 11 -->
+<section class="slide" data-n="11">
+  <p class="eyebrow">2 — 導入後の業務フロー</p>
+  <h2>画面 7 — グルーピングが間違っていたとき</h2>
+  <p class="sub">操作：再開ブリーフの中身の行を選び、<kbd>⌘K</kbd> →「このグループから外す」／「分割」</p>
+  <div class="cols two">
+    <div>
+      <p class="lead">移動するだけではない。<span class="hl">「人間がここを訂正した」という事実が判断記録として残る。</span></p>
+      <p>次の推薦はこれを使う。訂正が積み上がるほど、画面 1 の並び順が当たるようになる。</p>
+    </div>
+    <div class="anno">
+      <div class="why"><b>前提</b>グルーピングは必ず外れる。<strong>外れたときのコストを1操作にすることが設計目標。</strong>精度100%を目指す設計にはしない。</div>
+    </div>
+  </div>
+</section>
+
+<!-- 12 -->
+<section class="slide" data-n="12">
+  <p class="eyebrow">2 — 導入後の業務フロー</p>
+  <h2>通しで見ると</h2>
+  <ol class="steps">
+    <li><span>作業中</span><span></span></li>
+    <li><span><kbd>⌥Space</kbd> → <span class="mono">park</span> → 1行メモ → <kbd>Enter</kbd></span><span class="tag" style="color:var(--accent);background:var(--accent-soft)">5秒</span></li>
+    <li class="gap"><em>数時間 〜 数日</em></li>
+    <li><span><kbd>⌥Space</kbd> → <span class="mono">atra</span> → <kbd>↓</kbd> → 再開ブリーフを読む</span><span class="tag" style="color:var(--accent);background:var(--accent-soft)">20秒</span></li>
+    <li><span><kbd>Enter</kbd> → 中断前の画面が戻る</span><span class="tag" style="color:var(--accent);background:var(--accent-soft)">2秒</span></li>
+    <li><span>手が動く</span><span></span></li>
+  </ol>
+</section>
+
+<!-- 13 -->
+<section class="slide" data-n="13">
+  <p class="eyebrow">3 — 1 と 2 の比較</p>
+  <h2>何がショートカットされるか</h2>
+  <div class="compare">
+    <div>
+      <div class="head">現状 — <b>15〜30分</b></div>
+      <ul class="clist">
+        <li><span class="n">1</span><span class="body">作業中</span><span class="t"></span></li>
+        <li><span class="n">2</span><span class="body">中断する</span><span class="t"></span></li>
+        <li class="wait"><span class="body">数時間 〜 数日</span></li>
+        <li><span class="n">3</span><span class="body">机に座る</span><span class="t"></span></li>
+        <li class="cut"><span class="n">4</span><span class="body">何をやってたか思い出す</span><span class="t">✗</span></li>
+        <li class="cut"><span class="n">5</span><span class="body">履歴・Slack・PR を遡る</span><span class="t">✗</span></li>
+        <li class="cut"><span class="n">6</span><span class="body">前回の判断を調べ直す</span><span class="t">✗</span></li>
+        <li class="cut"><span class="n">7</span><span class="body">画面を1つずつ開き直す</span><span class="t">✗</span></li>
+        <li><span class="n">8</span><span class="body">手が動く</span><span class="t"></span></li>
+      </ul>
+      <div class="total before"><span class="l">合計</span><b>15–30分</b></div>
+    </div>
+    <div>
+      <div class="head">導入後 — <b>約30秒</b></div>
+      <ul class="clist">
+        <li><span class="n">1</span><span class="body">作業中</span><span class="t"></span></li>
+        <li class="new"><span class="n">2</span><span class="body">⌥Space → park → Enter</span><span class="t">5秒</span></li>
+        <li class="wait"><span class="body">数時間 〜 数日</span></li>
+        <li><span class="n">3</span><span class="body">⌥Space → atra</span><span class="t"></span></li>
+        <li class="new"><span class="n">&nbsp;</span><span class="body">再開ブリーフを読む　←　④⑤⑥ の代わり</span><span class="t">20秒</span></li>
+        <li class="new"><span class="n">&nbsp;</span><span class="body">Enter で一括で開く　←　⑦ の代わり</span><span class="t">2秒</span></li>
+        <li><span class="n">4</span><span class="body">手が動く</span><span class="t"></span></li>
+      </ul>
+      <div class="total after"><span class="l">合計</span><b>約30秒</b></div>
+    </div>
+  </div>
+  <div class="verdict">
+    <span><b>消える手順：④⑤⑥⑦</b></span>
+    <span>④⑤⑥ が消える理由 → <strong>再開ブリーフ</strong></span>
+    <span>⑦ が消える理由 → <strong>一括で開く</strong></span>
+    <span>増えるのは ② の <strong>5秒だけ</strong></span>
+  </div>
+</section>
+
+<!-- 14 -->
+<section class="slide" data-n="14">
+  <p class="eyebrow">4 — ルール</p>
+  <h2>守らないと「思い出せる」が壊れるもの</h2>
+  <ul class="rules">
+    <li><span class="num">01</span><span class="r">グループを確定させるのは人間。AI は候補を出すだけ。</span><span class="why2">勝手に分類されると、外れたときに探す場所が消える</span></li>
+    <li><span class="num">02</span><span class="r">勝手に閉じない・消さない・アーカイブしない。</span><span class="why2">1回消されたら二度と信用されない</span></li>
+    <li><span class="num">03</span><span class="r">判断記録は上書きしない。積む。</span><span class="why2">「前回どう決めたか」が消えると、調べ直しが復活する</span></li>
+    <li><span class="num">04</span><span class="r">本文は外に出さない。外に出るのはメタ情報だけ。</span><span class="why2">自分たちの Slack・学校の課題・採用の話が入る</span></li>
+    <li><span class="num">05</span><span class="r">グルーピングが全部外れていても、検索で辿り着ける。</span><span class="why2">推薦が外れた日に作業が止まってはいけない</span></li>
+    <li><span class="num">06</span><span class="r">中断5秒・再開2秒を超えたら機能を削る。</span><span class="why2">重い記録作業は必ず続かない</span></li>
+    <li><span class="num">07</span><span class="r">画面1の1行に4項目以上を出さない。</span><span class="why2">読む時間が増えた時点で目的に反する</span></li>
+  </ul>
+</section>
+
+<!-- 15 -->
+<section class="slide" data-n="15">
+  <p class="eyebrow">5 — 必要機能</p>
+  <h2>MVP に入れるものだけ</h2>
+  <p class="sub">ここに無いものは作りません。</p>
+  <div class="cols" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:18px">
+    <div class="box"><h3>グループ</h3><ul>
+      <li>作成 / 命名 / 分割 / 統合 / アーカイブ</li>
+      <li>並び替え（最終更新 + 時間帯 + 訂正履歴）</li>
+    </ul></div>
+    <div class="box"><h3>中身</h3><ul>
+      <li>URL / ファイルパス / リポジトリ</li>
+      <li>PR・Issue / Slack スレッド</li>
+      <li>ターミナルの作業ディレクトリ</li>
+      <li>追加（画面6）・外す（画面7）</li>
+    </ul></div>
+    <div class="box"><h3>記録</h3><ul>
+      <li>中断メモ（1行・任意）</li>
+      <li>判断記録（追記のみ・消えない）</li>
+      <li>訂正の記録（画面7で自動）</li>
+    </ul></div>
+    <div class="box"><h3>再開</h3><ul>
+      <li>再開ブリーフの生成</li>
+      <li>一括で開く / リンクだけ開く</li>
+    </ul></div>
+    <div class="box off"><h3>今回は作らない</h3><ul>
+      <li>自動実行・自動送信</li>
+      <li>チーム共有・権限管理</li>
+      <li>Web ダッシュボード</li>
+      <li>V0 の WorkUnit / Graph / Action Field / 承認フロー</li>
+    </ul></div>
+  </div>
+</section>
+
+<!-- 16 -->
+<section class="slide" data-n="16">
+  <p class="eyebrow">6 — 出力形式</p>
+  <h2>Atra の出力は3つだけ</h2>
+  <table class="terms">
+    <tr><th>グループ一覧</th><td><span class="mono" style="color:var(--muted);font-size:12px">Raycast List ／ 画面1</span><br>名前 / 最終更新 / 中断メモ / 件数</td></tr>
+    <tr><th>再開ブリーフ</th><td><span class="mono" style="color:var(--muted);font-size:12px">Raycast Detail ／ 画面2</span><br>中断メモ / 前回決めたこと / 中身 / 次にやること</td></tr>
+    <tr><th>一括オープン</th><td><span class="mono" style="color:var(--muted);font-size:12px">OS の操作 ／ 画面3</span><br>タブ・エディタ・ターミナルが開く</td></tr>
+  </table>
+  <div class="divider"></div>
+  <p>加えて、グループはローカルに<strong>人間が読める JSON</strong> としても書き出せる。<br>Atra が動かなくなっても中身が取り出せることを保証するため。</p>
+</section>
+
+<!-- 17 -->
+<section class="slide" data-n="17">
+  <p class="eyebrow">7 — システム構成</p>
+  <h2>フロントは作らない。借りる。</h2>
+  <div class="cols mock">
+    <div class="arch">
+      <div class="layer"><h4>Raycast</h4><p>List / Detail / Action Panel — 既に毎日押しているホットキーの中に入る</p></div>
+      <div class="conn">拡張（TypeScript）</div>
+      <div class="layer"><h4>ローカルストア</h4><p>グループ / 中身 / 中断メモ / 判断記録 — Mac の中から出ない</p></div>
+      <div class="conn">メタ情報のみ（本文は送らない）</div>
+      <div class="layer core"><h4>Atra Core ← 自分たちが作るのはここ</h4><p>グルーピング候補の生成 / 再開順のランキング（訂正履歴で学習）/ 時間の二軸モデル / 判断記録の保管</p></div>
+    </div>
+    <div class="anno">
+      <p class="lead">UI を作らない分の時間を、<strong>グルーピングの精度に全部使う。</strong></p>
+      <div class="why"><b>凍結 V0 から持ち込む技術資産</b>
+        製品の方向としてではなく、部品としてのみ。<br><br>
+        <span class="mono" style="font-size:11.5px">・時間の二軸モデル<br>・人間の判断記録の型<br>・外部ソースの正規化</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 18 -->
+<section class="slide" data-n="18">
+  <p class="eyebrow">8 — 差別化</p>
+  <h2>他と違うのは2点だけ</h2>
+  <ol class="diff">
+    <li><span><b>時間を2軸で持つ</b><span>情報が「いつ起きたか」と「自分がいつ知ったか」を分けて記録する。だから再開時に、<strong>中断した時点の自分がどこまで知っていたか</strong>を復元できる。</span></span></li>
+    <li><span><b>人間の判断が記録として残る</b><span>前回決めたことも、グルーピングの訂正も、上書きされずに積み上がる。</span></span></li>
+  </ol>
+  <div class="divider"></div>
+  <p class="sub" style="margin:0">以上。差別化の説明はここで終わり。</p>
+</section>
+
+<!-- 19 -->
+<section class="slide" data-n="19">
+  <p class="eyebrow">9 — 今の状態</p>
+  <h2>決まっていること／決めないこと</h2>
+  <div class="decide">
+    <div>
+      <h3>決まっている</h3>
+      <ul>
+        <li>対象ユーザーは自分たち2名。広げない</li>
+        <li>作るのは情報のグルーピング。Raycast 拡張として</li>
+        <li>フロントは Raycast、バックエンドは自分たちで作る</li>
+        <li>V0（WorkUnit OS）は凍結。方向としては引き継がない</li>
+      </ul>
+    </div>
+    <div>
+      <h3>今は決めない</h3>
+      <ul><li>機能特化か、体験特化かの定義</li></ul>
+      <div class="prov">暫定：「今は"作業を再開する瞬間"に絞る。そのための機能としてグルーピングを作る。範囲は自分たちで使いながら確定させる」</div>
+    </div>
+    <div>
+      <h3>降りた特化</h3>
+      <ul>
+        <li><strong>領域特化</strong> — ドメイン知識で勝てない</li>
+        <li><strong>職種特化（エンジニア向け）</strong> — AI エージェントに飲まれる</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<div class="hud">
+  <span class="mono" id="counter">01 / 19</span>
+  <button id="prev" aria-label="前のスライド">↑</button>
+  <button id="next" aria-label="次のスライド">↓</button>
+  <button id="print" aria-label="PDF で書き出す">PDF</button>
+</div>
+
+<script>
+(function(){
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var bar = document.getElementById('railbar');
+  var counter = document.getElementById('counter');
+  var i = 0;
+  function pad(n){ return (n < 10 ? '0' : '') + n; }
+  function paint(){
+    bar.style.width = ((i + 1) / slides.length * 100) + '%';
+    counter.textContent = pad(i + 1) + ' / ' + pad(slides.length);
+  }
+  function go(n){
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    slides[i].scrollIntoView({behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start'});
+    paint();
+  }
+  document.getElementById('next').addEventListener('click', function(){ go(i + 1); });
+  document.getElementById('prev').addEventListener('click', function(){ go(i - 1); });
+  document.getElementById('print').addEventListener('click', function(){ window.print(); });
+  document.addEventListener('keydown', function(e){
+    if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
+    if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') { e.preventDefault(); go(i + 1); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); go(i - 1); }
+    else if (e.key === 'Home') { e.preventDefault(); go(0); }
+    else if (e.key === 'End') { e.preventDefault(); go(slides.length - 1); }
+  });
+  if ('IntersectionObserver' in window) {
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){
+        if (en.isIntersecting) { i = slides.indexOf(en.target); paint(); }
+      });
+    }, {threshold: 0.4});
+    slides.forEach(function(s){ io.observe(s); });
+  }
+  paint();
+})();
+</script>
