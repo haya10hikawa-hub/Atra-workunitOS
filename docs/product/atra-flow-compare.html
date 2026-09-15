@@ -4,286 +4,194 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap">
 <style>
   :root{
-    --bg:#f7f9fa; --card:#ffffff; --ink:#1d2733; --ink2:#4a5866; --muted:#78838f;
-    --blue:#2f7fd1; --blue-bg:#eaf4fd; --blue-line:#a8cdee;
-    --green:#3a9c4d; --green-bg:#edf7ee; --green-line:#a9d9b0;
-    --arrow:#9aa4ad;
-    --red:#e04a3a; --red-bg:#fdeeec; --red-line:#f0b3aa;
-    --t-orange:#f0a030; --t-purple:#8e5bd0; --t-red:#e04a3a;
-    --t-blue:#4a90d9; --t-green:#43a047; --t-grey:#8d99a5;
-    --line:#dde3e8; --dash:#b6c0c9;
-    --hold:#b8860b; --hold-bg:#fdf6e3; --hold-line:#e8d08a;
+    --bg:#f5f7f9; --card:#fff; --ink:#132030; --ink2:#43546a; --muted:#71808f;
+    --line:#dce2e8; --navy:#0d3055; --navy-soft:#e7edf4;
+    --skip:#7b8a99; --skip-bg:#eceff1; --skip-line:#b6c1cb;
+    --hold:#96700f; --hold-bg:#fbf3dd; --hold-line:#e0c680;
+    --paper:#ffffff; --paper-line:#dfe5ea;
   }
   @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
-    --bg:#0e1319; --card:#1a212a; --ink:#e8edf2; --ink2:#b6c2ce; --muted:#8894a1;
-    --blue:#6fb0ea; --blue-bg:#152534; --blue-line:#2f5b82;
-    --green:#6cc47c; --green-bg:#15281a; --green-line:#2f6b3c;
-    --arrow:#48545f;
-    --red:#ef7f6e; --red-bg:#2e1c19; --red-line:#71382f;
-    --t-orange:#e0a049; --t-purple:#a37ddd; --t-red:#ef7f6e;
-    --t-blue:#5f9fe0; --t-green:#5cb56a; --t-grey:#78848f;
-    --line:#2a333d; --dash:#48545f;
+    --bg:#0c1117; --card:#161d26; --ink:#e7ecf2; --ink2:#b3bfcc; --muted:#8593a2;
+    --line:#28313c; --navy:#7aa9dd; --navy-soft:#16273a;
+    --skip:#8593a2; --skip-bg:#1d242d; --skip-line:#39434f;
     --hold:#dfb958; --hold-bg:#2a2313; --hold-line:#6b5723;
   }}
   :root[data-theme="dark"]{
-    --bg:#0e1319; --card:#1a212a; --ink:#e8edf2; --ink2:#b6c2ce; --muted:#8894a1;
-    --blue:#6fb0ea; --blue-bg:#152534; --blue-line:#2f5b82;
-    --green:#6cc47c; --green-bg:#15281a; --green-line:#2f6b3c;
-    --arrow:#48545f;
-    --red:#ef7f6e; --red-bg:#2e1c19; --red-line:#71382f;
-    --t-orange:#e0a049; --t-purple:#a37ddd; --t-red:#ef7f6e;
-    --t-blue:#5f9fe0; --t-green:#5cb56a; --t-grey:#78848f;
-    --line:#2a333d; --dash:#48545f;
+    --bg:#0c1117; --card:#161d26; --ink:#e7ecf2; --ink2:#b3bfcc; --muted:#8593a2;
+    --line:#28313c; --navy:#7aa9dd; --navy-soft:#16273a;
+    --skip:#8593a2; --skip-bg:#1d242d; --skip-line:#39434f;
     --hold:#dfb958; --hold-bg:#2a2313; --hold-line:#6b5723;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
     font-family:'Zen Kaku Gothic New','Hiragino Kaku Gothic ProN','Yu Gothic',Meiryo,system-ui,sans-serif;
-    font-size:15px;line-height:1.7;-webkit-font-smoothing:antialiased}
+    font-size:15px;line-height:1.75;-webkit-font-smoothing:antialiased}
   .mono{font-family:'JetBrains Mono',ui-monospace,Menlo,monospace}
-  .wrap{max-width:720px;margin:0 auto;padding-block:30px 70px;padding-left:18px;padding-right:18px}
+  .wrap{max-width:1080px;margin:0 auto;padding-block:30px 70px;padding-left:18px;padding-right:18px}
 
-  header .kicker{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.16em;
-    color:var(--muted);margin:0 0 8px}
-  header h1{font-size:clamp(23px,4vw,31px);font-weight:900;margin:0 0 6px;letter-spacing:-.01em}
-  header .sub{color:var(--muted);font-size:13.5px;margin:0}
-  header .thesis{font-size:16px;font-weight:500;margin:16px 0 0;padding-left:14px;
-    border-left:3px solid var(--green);max-width:52ch}
-  .legend{display:flex;flex-wrap:wrap;gap:7px 16px;margin:20px 0 24px;font-size:12px;color:var(--muted)}
-  .legend b{display:inline-flex;align-items:center;gap:6px;font-weight:500;color:var(--ink2)}
-  .sw{width:13px;height:13px;border-radius:3px;border:1px solid var(--line);background:var(--card);flex:none}
-  .sw.k{background:var(--red-bg);border:1px dashed var(--red-line)}
-  .sw.h{background:var(--hold-bg);border:1px dashed var(--hold-line)}
+  .kicker{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.16em;color:var(--muted);margin:0 0 8px}
+  h1{font-size:clamp(23px,4vw,32px);font-weight:900;margin:0 0 6px;letter-spacing:-.01em}
+  .sub{color:var(--muted);font-size:13.5px;margin:0}
+  .thesis{font-size:16.5px;font-weight:500;margin:16px 0 0;padding-left:14px;
+    border-left:3px solid var(--navy);max-width:54ch}
 
-  /* ===== group box (reference idiom) ===== */
-  .group{border:2px solid;border-radius:12px;padding:16px 18px 20px;background:transparent}
-  .group.g1{border-color:var(--blue);background:color-mix(in srgb,var(--blue-bg) 55%,transparent)}
-  .group.g2{border-color:var(--green);background:color-mix(in srgb,var(--green-bg) 55%,transparent)}
-  .gtitle{font-size:18px;font-weight:900;margin:0 0 14px;letter-spacing:.01em}
-  .g1 .gtitle{color:var(--blue)}
-  .g2 .gtitle{color:var(--green)}
-  .gtitle small{display:block;font-size:12px;font-weight:500;color:var(--muted);margin-top:2px;letter-spacing:0}
+  /* figure sits on its own paper in both themes */
+  figure{margin:26px 0 0;background:var(--paper);border:1px solid var(--paper-line);
+    border-radius:10px;padding:18px 10px 8px;overflow-x:auto}
+  figure .mermaid{min-width:940px;display:flex;justify-content:center}
+  figcaption{font-size:12px;color:#71808f;padding:4px 12px 8px;min-width:0;
+    font-family:'JetBrains Mono',ui-monospace,monospace;letter-spacing:.04em}
 
-  /* ===== row: card + tile ===== */
-  .row{display:grid;grid-template-columns:1fr 54px;gap:14px;align-items:center}
-  @media (max-width:520px){.row{grid-template-columns:1fr 42px;gap:9px}}
-  .box{background:var(--card);border:1px solid var(--blue-line);border-radius:8px;
-    padding:11px 15px}
-  .g2 .box{border-color:var(--green-line)}
-  .box .t{font-weight:700;font-size:15px;line-height:1.5}
-  .box .d{font-size:12.5px;color:var(--muted);line-height:1.55;margin-top:2px}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 20px;margin:18px 0 0;font-size:12.5px;color:var(--muted)}
+  .legend b{display:inline-flex;align-items:center;gap:7px;font-weight:500;color:var(--ink2)}
+  .sw{width:15px;height:13px;border-radius:3px;flex:none}
+  .sw.n{background:#0d3055}
+  .sw.s{background:#eceff1;border:1px dashed #b6c1cb}
+  .sw.h{background:#fff;border:2px solid #0d3055}
+  .sw.p{background:#fbf3dd;border:1px solid #e0c680}
 
-  .tile{width:54px;height:48px;border-radius:9px;display:grid;place-items:center;font-size:21px;
-    color:#fff}
-  @media (max-width:520px){.tile{width:42px;height:42px;font-size:17px;border-radius:7px}}
-  .tile.o{background:var(--t-orange)} .tile.p{background:var(--t-purple)}
-  .tile.r{background:var(--t-red)}    .tile.b{background:var(--t-blue)}
-  .tile.g{background:var(--t-green)}  .tile.s{background:var(--t-grey)}
-  .tile.none{background:transparent}
-
-  /* thick grey arrow, reference style */
-  .down{display:grid;place-items:center;padding:7px 0}
-  .down svg{display:block}
-  .down.big{padding:14px 0}
-
-  /* removed step */
-  .box.cut{background:var(--red-bg);border:1px dashed var(--red-line)}
-  .box.cut .t{color:var(--red);text-decoration:line-through;
-    text-decoration-thickness:1.5px;text-decoration-color:color-mix(in srgb,var(--red) 55%,transparent)}
-  .box.cut .d{color:var(--red);opacity:.85}
-  .xmark{display:grid;place-items:center;width:54px;height:48px;color:var(--red);
-    font-size:24px;font-weight:700}
-  @media (max-width:520px){.xmark{width:42px;height:42px;font-size:20px}}
-
-  /* auto / hold */
-  .box.auto{background:color-mix(in srgb,var(--green-bg) 85%,transparent);border:1px dashed var(--green-line)}
-  .box.auto .t{color:var(--green)}
-  .box.hold{background:var(--hold-bg);border:1px dashed var(--hold-line)}
-  .box.hold .t{color:var(--hold)}
-  .box.hold .d{color:var(--hold);opacity:.9}
-
-  /* inline mini-diagram, mirrors 設計図 → 実体 */
-  .mini{display:flex;align-items:center;gap:9px;margin-top:9px;flex-wrap:wrap}
-  .mini .src{border:1px dashed var(--dash);border-radius:6px;padding:4px 9px;
-    font-size:11.5px;color:var(--muted);font-family:'JetBrains Mono',monospace}
-  .mini .to{color:var(--red);font-size:15px;line-height:1}
-  .mini .dst{background:var(--t-red);color:#fff;border-radius:6px;padding:4px 11px;
-    font-size:12px;font-weight:700}
-
-  /* pause divider */
-  .pause{display:flex;align-items:center;gap:12px;margin:12px 0;
-    font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.14em;color:var(--muted)}
-  .pause::before,.pause::after{content:"";flex:1;height:0;
-    border-top:2px dashed var(--dash)}
-
-  .collapse{margin:10px 0 2px;padding:9px 14px;border-radius:7px;
-    background:var(--red-bg);border:1px dashed var(--red-line);
-    font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--red);text-align:center}
-
-  /* ===== totals & notes ===== */
-  .totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
-    border:1px solid var(--line);border-radius:10px;margin:28px 0 0;background:var(--card);overflow:hidden}
+  .totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));
+    border:1px solid var(--line);border-radius:10px;margin:26px 0 0;background:var(--card);overflow:hidden}
   .tot{padding:15px 18px;border-right:1px solid var(--line)}
   .tot:last-child{border-right:0}
-  @media (max-width:600px){.tot{border-right:0;border-bottom:1px solid var(--line)}.tot:last-child{border-bottom:0}}
+  @media (max-width:620px){.tot{border-right:0;border-bottom:1px solid var(--line)}.tot:last-child{border-bottom:0}}
   .tot b{display:block;font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;
-    line-height:1.15;font-variant-numeric:tabular-nums}
+    line-height:1.15;font-variant-numeric:tabular-nums;color:var(--navy)}
   .tot span{font-size:12px;color:var(--muted)}
-  .tot.a b{color:var(--blue)} .tot.b b{color:var(--green)}
-  .tot.c b{color:var(--red)}  .tot.d b{color:var(--ink)}
+  .tot.c b{color:var(--skip)}
 
-  .why{margin:22px 0 0;padding:16px 20px;background:var(--green-bg);
-    border-left:3px solid var(--green);border-radius:0 8px 8px 0;max-width:60ch}
-  .why b{display:block;font-family:'JetBrains Mono',monospace;font-size:10.5px;
-    letter-spacing:.16em;color:var(--green);margin-bottom:6px;font-weight:500}
+  .why{margin:22px 0 0;padding:16px 20px;background:var(--navy-soft);
+    border-left:3px solid var(--navy);border-radius:0 8px 8px 0;max-width:62ch}
+  .why b{display:block;font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.16em;
+    color:var(--navy);margin-bottom:6px;font-weight:500}
   .why p{margin:0;font-size:15px}
-  .open{margin:14px 0 0;padding:15px 20px;background:var(--hold-bg);
-    border-left:3px solid var(--hold);border-radius:0 8px 8px 0;max-width:60ch;
-    font-size:13.5px;color:var(--ink2)}
-  .open b{display:block;font-family:'JetBrains Mono',monospace;font-size:10.5px;
-    letter-spacing:.16em;color:var(--hold);margin-bottom:6px;font-weight:500}
+  .open{margin:14px 0 0;padding:15px 20px;background:var(--hold-bg);border-left:3px solid var(--hold);
+    border-radius:0 8px 8px 0;max-width:62ch;font-size:13.5px;color:var(--ink2)}
+  .open b{display:block;font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.16em;
+    color:var(--hold);margin-bottom:6px;font-weight:500}
   .open a{color:var(--hold);text-underline-offset:2px}
-  footer{margin-top:30px;padding-top:14px;border-top:1px solid var(--line);
-    font-size:11.5px;color:var(--muted)}
-  @media print{body{background:#fff}.wrap{padding:0}}
+
+  details{margin:24px 0 0;border:1px solid var(--line);border-radius:9px;background:var(--card)}
+  summary{cursor:pointer;padding:12px 18px;font-size:13.5px;font-weight:700;list-style:none}
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"▸ ";color:var(--muted)}
+  details[open] summary::before{content:"▾ "}
+  summary:focus-visible{outline:2px solid var(--navy);outline-offset:-2px;border-radius:9px}
+  pre{margin:0;padding:0 18px 18px;overflow-x:auto}
+  pre code{font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:12px;
+    line-height:1.7;color:var(--ink2);white-space:pre}
+
+  footer{margin-top:30px;padding-top:14px;border-top:1px solid var(--line);font-size:11.5px;color:var(--muted)}
+  @media print{body{background:#fff}.wrap{padding:0}details{break-inside:avoid}}
 </style>
 
 <div class="wrap">
-<header>
   <p class="kicker">1 と 2 の比較 — 何がショートカットされるか</p>
   <h1>中断から再開まで</h1>
   <p class="sub">題材：「管理画面の PR をレビューする」（応募書類の例）</p>
-  <p class="thesis">消えるのは <strong>探す・思い出す・読み直す</strong> の6手順。
-    増える手順は<strong>ひとつもありません。</strong></p>
-</header>
+  <p class="thesis">中断のあと、人は <strong>5 手順かけて文脈を組み立て直しています。</strong>
+    Atra はその 5 手順を、依頼が届いた時点で先に済ませておきます。</p>
+
+<figure>
+<pre class="mermaid">
+flowchart LR
+  A["依頼発生"] --> B["Atra が観測"]
+  B --> C["関連情報を収集<br/>PR・Issue・スレッド・期限"]
+  C --> D["作業単位を形成"]
+  D --> E["重要度順に候補化"]
+  E --> W{{"中断<br/>数時間 〜 数日"}}
+  W --> F["人が再開"]
+
+  F -.-> S1["思い出す"]
+  S1 -.-> S2["チャットを遡る"]
+  S2 -.-> S3["Issue を探す"]
+  S3 -.-> S4["差分を読み直す"]
+  S4 -.-> S5["期限を確認する"]
+  S5 -.-> G["作業を選ぶ"]
+
+  F ==>|"5 手順を飛ばす"| G
+
+  G --> H["必要な文脈が<br/>そろった状態で開く"]
+  H --> R["レビューする"]
+  R --> Z["完了"]
+
+  classDef atra fill:#0d3055,stroke:#0d3055,stroke-width:1px,color:#ffffff
+  classDef skip fill:#eceff1,stroke:#b6c1cb,stroke-width:1px,stroke-dasharray:4 3,color:#7b8a99
+  classDef pause fill:#fbf3dd,stroke:#e0c680,stroke-width:1px,color:#96700f
+  classDef open fill:#ffffff,stroke:#0d3055,stroke-width:2px,color:#0d3055
+
+  class A,B,C,D,E,F,G,H atra
+  class S1,S2,S3,S4,S5 skip
+  class W pause
+  class R,Z open
+
+  linkStyle 11 stroke:#0d3055,stroke-width:3px
+</pre>
+<figcaption>濃紺＝Atra が関わる区間　／　灰色の破線＝導入後に通らなくなる手順　／　白抜き＝Atra がいない区間</figcaption>
+</figure>
 
 <div class="legend">
-  <b><span class="sw"></span>そのまま残る</b>
-  <b><span class="sw k"></span>消える手順</b>
-  <b><span class="sw h"></span>まだ決めていない</b>
+  <b><span class="sw n"></span>Atra が関わる</b>
+  <b><span class="sw s"></span>通らなくなる手順</b>
+  <b><span class="sw p"></span>中断</b>
+  <b><span class="sw h"></span>Atra がいない（未決定）</b>
 </div>
 
-<!-- ============ GROUP 1 ============ -->
-<section class="group g1">
-  <h2 class="gtitle">1. 現在の流れ<small>PR レビュー1件あたり 14 手順</small></h2>
-
-  <div class="row"><div class="box"><div class="t">1-1. レビュー依頼が届く</div>
-    <div class="d">チャットで「#289 見ておいて」と言われる</div></div><div class="tile b">💬</div></div>
-  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
-
-  <div class="row"><div class="box"><div class="t">1-2.「あとで見ます」と返す</div></div><div class="tile s">↩</div></div>
-  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
-
-  <div class="row"><div class="box"><div class="t">1-3. 別の作業に戻る</div></div><div class="tile s">⇤</div></div>
-
-  <div class="pause">1-4. 中断 — 数時間 〜 数日</div>
-
-  <div class="row"><div class="box"><div class="t">1-5. 机に座る</div></div><div class="tile o">🪑</div></div>
-  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
-
-  <div class="row"><div class="box cut"><div class="t">1-6. 何を頼まれていたか思い出す</div></div><div class="xmark">✕</div></div>
-  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
-
-  <div class="row"><div class="box cut"><div class="t">1-7. チャットを遡って依頼を探す</div></div><div class="xmark">✕</div></div>
-  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
-
-  <div class="row"><div class="box"><div class="t">1-8. PR を開く</div></div><div class="tile p">🔗</div></div>
-  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
-
-  <div class="row"><div class="box cut"><div class="t">1-9. 何のための変更か分からない</div>
-    <div class="d">Issue を探しに行く</div></div><div class="xmark">✕</div></div>
-  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
-
-  <div class="row"><div class="box cut"><div class="t">1-10. どこまで見たか分からない</div>
-    <div class="d">差分を最初から読み直す</div></div><div class="xmark">✕</div></div>
-  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
-
-  <div class="row"><div class="box cut"><div class="t">1-11. 期限が分からない</div>
-    <div class="d">カレンダーを見に行く</div></div><div class="xmark">✕</div></div>
-  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
-
-  <div class="row"><div class="box"><div class="t">1-12. 指摘を書く</div></div><div class="tile g">✍</div></div>
-  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
-
-  <div class="row"><div class="box cut"><div class="t">1-13. 未確認の点をどこかにメモ</div>
-    <div class="d">次に開いたとき見つからない</div></div><div class="xmark">✕</div></div>
-  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
-
-  <div class="row"><div class="box"><div class="t">1-14.「見ました」と返す</div></div><div class="tile s">↩</div></div>
-
-  <div class="collapse">✕ の 6 手順では、何も作られていない</div>
-</section>
-
-<!-- big arrow between groups, as in the reference -->
-<div class="down big"><svg width="34" height="42" viewBox="0 0 34 42" aria-hidden="true">
-  <path d="M11 0h12v23h8l-14 19L3 23h8z" fill="#9aa4ad"/></svg></div>
-
-<!-- ============ GROUP 2 ============ -->
-<section class="group g2">
-  <h2 class="gtitle">2. Atra 導入後<small>同じ1件が 9 手順</small></h2>
-
-  <div class="row"><div class="box"><div class="t">2-0. 見る範囲を決める</div>
-    <div class="d">このリポジトリ、このチャンネル。<strong>決めるのは最初の一度だけ</strong></div></div>
-    <div class="tile o">🎯</div></div>
-  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
-
-  <div class="row"><div class="box"><div class="t">2-1. レビュー依頼が届く</div></div><div class="tile b">💬</div></div>
-  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
-
-  <div class="row"><div class="box auto"><div class="t">Atra が1つにまとめる</div>
-    <div class="d">PR・Issue・スレッド・期限を拾って作業単位にする。<strong>人の操作なし</strong></div>
-    <div class="mini"><span class="src">5 か所に散らばった情報</span><span class="to">➜</span><span class="dst">1 枚</span></div>
-    </div><div class="tile g">⚙</div></div>
-  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
-
-  <div class="row"><div class="box"><div class="t">2-2.「あとで見ます」と返す</div></div><div class="tile s">↩</div></div>
-  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
-
-  <div class="row"><div class="box"><div class="t">2-3. 別の作業に戻る</div></div><div class="tile s">⇤</div></div>
-
-  <div class="pause">2-4. 中断 — 数時間 〜 数日</div>
-
-  <div class="row"><div class="box"><div class="t">2-5. 机に座る。Atra を開く</div></div><div class="tile o">🪑</div></div>
-  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
-
-  <div class="row"><div class="box"><div class="t">2-6. 一覧から選ぶ</div>
-    <div class="d">依頼・対象の PR・背景の Issue・期限・まだ確認できていない点が<strong>1枚にそろっている</strong><br>
-    ← 現在の 1-6 / 1-7 / 1-9 / 1-10 / 1-11 がここで消える</div></div>
-    <div class="tile p">📄</div></div>
-  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
-
-  <div class="row"><div class="box"><div class="t">2-7. PR・Issue・スレッドが開く</div></div><div class="tile p">🔗</div></div>
-  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
-
-  <div class="row"><div class="box"><div class="t">2-8. 指摘を書く</div></div><div class="tile g">✍</div></div>
-  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
-
-  <div class="row"><div class="box hold"><div class="t">この範囲に Atra はいない</div>
-    <div class="d">作業中に Atra が何をするかは未決定</div></div><div class="tile none" style="color:var(--hold);font-weight:700">？</div></div>
-  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
-
-  <div class="row"><div class="box"><div class="t">2-9.「見ました」と返す</div></div><div class="tile s">↩</div></div>
-</section>
-
 <div class="totals">
-  <div class="tot a"><b>14</b><span>現在の手順数</span></div>
-  <div class="tot b"><b>9</b><span>導入後の手順数</span></div>
-  <div class="tot c"><b>6</b><span>消える手順</span></div>
-  <div class="tot d"><b>0</b><span>増える手順</span></div>
+  <div class="tot"><b>5</b><span>飛ばされる手順</span></div>
+  <div class="tot"><b>0</b><span>増える手順</span></div>
+  <div class="tot"><b>1</b><span>事前に決めること（見る範囲）</span></div>
+  <div class="tot c"><b>未計測</b><span>削減時間</span></div>
 </div>
 
 <div class="why">
-  <b>なぜ6手順が消えるのか</b>
-  <p>バラバラに届いた5つが、<strong>依頼された時点で1つにまとめられているから。</strong>
-  探す先が5つから1つになったのではなく、<strong>探す行為そのものがなくなります。</strong></p>
+  <b>なぜ飛ばせるのか</b>
+  <p>順番が入れ替わっているだけです。<strong>人が再開してから探していた5つを、依頼が届いた時点で Atra が集めておく。</strong>
+  探す先が5か所から1か所になったのではなく、<strong>探す行為そのものが前倒しで終わっています。</strong></p>
 </div>
 
 <div class="open">
-  <b>この図が確定しているのは 2-7 まで</b>
-  2-0〜2-7 が含んでいるのは <strong>見つける・まとめる・提示する</strong> の2層だけです。
-  作業中（2-8 以降）に Atra が何をするかは決めていません。
-  分岐の検討は <a href="https://github.com/haya10hikawa-hub/Atra-workunitOS/issues/257">Issue #257</a> にあります。
+  <b>この図が確定しているのは「開く」まで</b>
+  濃紺の区間が含んでいるのは <strong>観測・収集・形成・候補化・提示</strong> だけです。
+  レビュー中に Atra が何をするかは決めていません。分岐の検討は
+  <a href="https://github.com/haya10hikawa-hub/Atra-workunitOS/issues/257">Issue #257</a> にあります。
 </div>
 
-<footer>2026-09-15 ／ 現在の流れは実測ではなく、日常の再現です。手順数はこの題材1件あたりの数。</footer>
+<details>
+  <summary>Mermaid ソース（コピーして Notion などに貼れます）</summary>
+<pre><code>flowchart LR
+  A["依頼発生"] --&gt; B["Atra が観測"]
+  B --&gt; C["関連情報を収集&lt;br/&gt;PR・Issue・スレッド・期限"]
+  C --&gt; D["作業単位を形成"]
+  D --&gt; E["重要度順に候補化"]
+  E --&gt; W{{"中断&lt;br/&gt;数時間 〜 数日"}}
+  W --&gt; F["人が再開"]
+
+  F -.-&gt; S1["思い出す"]
+  S1 -.-&gt; S2["チャットを遡る"]
+  S2 -.-&gt; S3["Issue を探す"]
+  S3 -.-&gt; S4["差分を読み直す"]
+  S4 -.-&gt; S5["期限を確認する"]
+  S5 -.-&gt; G["作業を選ぶ"]
+
+  F ==&gt;|"5 手順を飛ばす"| G
+
+  G --&gt; H["必要な文脈が&lt;br/&gt;そろった状態で開く"]
+  H --&gt; R["レビューする"]
+  R --&gt; Z["完了"]
+
+  classDef atra fill:#0d3055,stroke:#0d3055,stroke-width:1px,color:#ffffff
+  classDef skip fill:#eceff1,stroke:#b6c1cb,stroke-width:1px,stroke-dasharray:4 3,color:#7b8a99
+  classDef pause fill:#fbf3dd,stroke:#e0c680,stroke-width:1px,color:#96700f
+  classDef open fill:#ffffff,stroke:#0d3055,stroke-width:2px,color:#0d3055
+
+  class A,B,C,D,E,F,G,H atra
+  class S1,S2,S3,S4,S5 skip
+  class W pause
+  class R,Z open
+
+  linkStyle 11 stroke:#0d3055,stroke-width:3px</code></pre>
+</details>
+
+<footer>2026-09-15 ／ 飛ばされる 5 手順は日常の再現であり、実測ではありません。削減時間は未計測です。</footer>
 </div>
