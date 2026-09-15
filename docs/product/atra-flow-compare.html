@@ -1,0 +1,303 @@
+<title>中断から再開まで</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+  :root{
+    --bg:#f4f6f8; --card:#fff; --panel:#fbfcfd;
+    --ink:#16202b; --ink2:#41505f; --muted:#6d7b8a;
+    --line:#d7dde4; --line2:#e7ecf1;
+    --now:#4a6b8a; --now-bg:#eef3f8; --now-line:#9db6cd;
+    --aft:#2c7a5b; --aft-bg:#eaf5ef; --aft-line:#8bc4a8;
+    --cut:#b0453180; --cut-ink:#a8412f; --cut-bg:#fbeeeb; --cut-line:#e3b5ab;
+    --hold:#8a6a1f; --hold-bg:#fdf3dd; --hold-line:#e0c680;
+    --arrow:#b9c4ce;
+  }
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+    --bg:#0d1117; --card:#171d25; --panel:#131920;
+    --ink:#e6eaef; --ink2:#b4bfcb; --muted:#8895a4;
+    --line:#2a333d; --line2:#222a33;
+    --now:#8fb3d4; --now-bg:#182430; --now-line:#3a5673;
+    --aft:#6fc79b; --aft-bg:#14271f; --aft-line:#2f6b4f;
+    --cut:#e0857180; --cut-ink:#e08571; --cut-bg:#2c1d1a; --cut-line:#6b3b31;
+    --hold:#dfb958; --hold-bg:#2a2313; --hold-line:#6b5723;
+    --arrow:#3a444f;
+  }}
+  :root[data-theme="dark"]{
+    --bg:#0d1117; --card:#171d25; --panel:#131920;
+    --ink:#e6eaef; --ink2:#b4bfcb; --muted:#8895a4;
+    --line:#2a333d; --line2:#222a33;
+    --now:#8fb3d4; --now-bg:#182430; --now-line:#3a5673;
+    --aft:#6fc79b; --aft-bg:#14271f; --aft-line:#2f6b4f;
+    --cut:#e0857180; --cut-ink:#e08571; --cut-bg:#2c1d1a; --cut-line:#6b3b31;
+    --hold:#dfb958; --hold-bg:#2a2313; --hold-line:#6b5723;
+    --arrow:#3a444f;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:'Zen Kaku Gothic New','Hiragino Kaku Gothic ProN','Yu Gothic',Meiryo,system-ui,sans-serif;
+    font-size:15px;line-height:1.7;-webkit-font-smoothing:antialiased}
+  .mono{font-family:'JetBrains Mono',ui-monospace,Menlo,monospace}
+  .wrap{max-width:1060px;margin:0 auto;padding-block:30px 70px;padding-left:20px;padding-right:20px}
+
+  header h1{font-size:clamp(24px,3.6vw,34px);font-weight:900;margin:0 0 8px;letter-spacing:-.01em;text-wrap:balance}
+  header .sub{color:var(--muted);font-size:14px;margin:0 0 4px}
+  header .thesis{font-size:17px;font-weight:500;max-width:56ch;margin:14px 0 0;
+    padding-left:16px;border-left:3px solid var(--aft)}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin:22px 0 26px;font-size:12.5px;color:var(--muted)}
+  .legend b{display:inline-flex;align-items:center;gap:6px;font-weight:500;color:var(--ink2)}
+  .sw{width:13px;height:13px;border-radius:3px;border:1px solid var(--line);flex:none}
+  .sw.k{background:var(--cut-bg);border-color:var(--cut-line)}
+  .sw.n{background:var(--card)}
+  .sw.h{background:var(--hold-bg);border-color:var(--hold-line)}
+
+  /* ── comparison grid ── */
+  .cmp{display:grid;grid-template-columns:1fr 1fr;gap:0 22px}
+  @media (max-width:760px){.cmp{grid-template-columns:1fr;gap:0}}
+
+  .chead{
+    display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+    padding:11px 16px;border-radius:9px 9px 0 0;border:2px solid;border-bottom:0;
+    font-weight:900;font-size:17px;position:sticky;top:env(safe-area-inset-top,0px);z-index:3;
+  }
+  .chead .n{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;opacity:.85}
+  .chead.now{color:var(--now);border-color:var(--now-line);background:var(--now-bg)}
+  .chead.aft{color:var(--aft);border-color:var(--aft-line);background:var(--aft-bg)}
+
+  .band{
+    grid-column:1/-1;margin:16px 0 10px;
+    font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.16em;color:var(--muted);
+    display:flex;align-items:center;gap:12px;
+  }
+  .band::after{content:"";flex:1;height:1px;background:var(--line2)}
+  .band.pause{color:var(--hold)}
+  .band.pause::after{background:repeating-linear-gradient(90deg,var(--hold-line) 0 6px,transparent 6px 12px)}
+
+  .cell{border:2px solid;border-top:0;border-bottom:0;padding:4px 14px 8px;background:var(--panel)}
+  .cell.now{border-color:var(--now-line)}
+  .cell.aft{border-color:var(--aft-line)}
+  .cell.first{border-top:0}
+  .cell.last{border-bottom:2px solid;border-radius:0 0 9px 9px;padding-bottom:14px}
+  .cell.now.last{border-bottom-color:var(--now-line)}
+  .cell.aft.last{border-bottom-color:var(--aft-line)}
+  .only{display:none;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.14em;
+    padding:8px 0 2px}
+  @media (max-width:760px){
+    .only{display:block}
+    .cell.now .only{color:var(--now)}
+    .cell.aft .only{color:var(--aft)}
+    .cell{margin-bottom:0}
+    .cell.aft{margin-bottom:10px}
+  }
+
+  /* ── cards ── */
+  .card{
+    display:grid;grid-template-columns:1fr 34px;gap:10px;align-items:center;
+    background:var(--card);border:1px solid var(--line);border-radius:8px;
+    padding:9px 11px;margin:8px 0;
+  }
+  .card .t{font-weight:700;font-size:14.5px;line-height:1.45}
+  .card .d{font-size:12.5px;color:var(--muted);line-height:1.5;margin-top:1px}
+  .tile{width:34px;height:34px;border-radius:7px;display:grid;place-items:center;
+    font-size:15px;background:var(--now-bg);border:1px solid var(--now-line)}
+  .aft .tile{background:var(--aft-bg);border-color:var(--aft-line)}
+
+  .card.cut{background:var(--cut-bg);border-color:var(--cut-line);border-style:dashed}
+  .card.cut .t{color:var(--cut-ink);text-decoration:line-through;
+    text-decoration-thickness:1.5px;text-decoration-color:var(--cut)}
+  .card.cut .d{color:var(--cut-ink);opacity:.8}
+  .card.cut .tile{background:transparent;border:0;color:var(--cut-ink);font-weight:700;font-size:17px}
+
+  .card.key{border-color:var(--aft-line);border-width:2px;box-shadow:0 1px 0 var(--aft-line)}
+  .card.auto{background:var(--aft-bg);border-style:dashed;border-color:var(--aft-line)}
+  .card.auto .t{color:var(--aft)}
+  .card.hold{background:var(--hold-bg);border-color:var(--hold-line);border-style:dashed}
+  .card.hold .t{color:var(--hold)}
+  .card.hold .d{color:var(--hold);opacity:.85}
+  .card.hold .tile{background:transparent;border:0;color:var(--hold)}
+
+  .arw{display:grid;place-items:center;height:16px;color:var(--arrow);font-size:13px;line-height:1}
+  .none{padding:16px 2px;color:var(--muted);font-size:13px;font-style:normal;
+    border:1px dashed var(--line);border-radius:8px;margin:8px 0;text-align:center}
+
+  /* ── collapse marker ── */
+  .collapse{
+    grid-column:1/-1;display:flex;align-items:center;justify-content:center;gap:10px;
+    margin:10px 0 2px;font-size:12.5px;color:var(--cut-ink);
+    font-family:'JetBrains Mono',monospace;letter-spacing:.06em;
+  }
+
+  /* ── totals ── */
+  .totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0;
+    border:1px solid var(--line);border-radius:10px;margin:30px 0 0;background:var(--card);overflow:hidden}
+  .tot{padding:16px 18px;border-right:1px solid var(--line2)}
+  .tot:last-child{border-right:0}
+  @media (max-width:640px){.tot{border-right:0;border-bottom:1px solid var(--line2)}.tot:last-child{border-bottom:0}}
+  .tot b{display:block;font-family:'JetBrains Mono',monospace;font-size:27px;font-weight:700;
+    line-height:1.15;font-variant-numeric:tabular-nums}
+  .tot span{font-size:12.5px;color:var(--muted)}
+  .tot.a b{color:var(--now)} .tot.b b{color:var(--aft)}
+  .tot.c b{color:var(--cut-ink)} .tot.d b{color:var(--ink)}
+
+  .why{margin:26px 0 0;padding:18px 22px;background:var(--aft-bg);border-left:3px solid var(--aft);
+    border-radius:0 8px 8px 0;max-width:68ch}
+  .why b{display:block;font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.16em;
+    color:var(--aft);margin-bottom:6px;font-weight:500}
+  .why p{margin:0;font-size:15px}
+  .open{margin:16px 0 0;padding:16px 20px;background:var(--hold-bg);border-left:3px solid var(--hold);
+    border-radius:0 8px 8px 0;max-width:68ch;font-size:14px;color:var(--ink2)}
+  .open b{display:block;font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.16em;
+    color:var(--hold);margin-bottom:6px;font-weight:500}
+  .open a{color:var(--hold);text-underline-offset:2px}
+  footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line2);
+    font-size:12px;color:var(--muted)}
+  @media print{body{background:#fff}.wrap{padding:0}.chead{position:static}}
+</style>
+
+<div class="wrap">
+<header>
+  <p class="sub mono">1 と 2 の比較 — 何がショートカットされるか</p>
+  <h1>中断から再開まで</h1>
+  <p class="sub">題材：「管理画面の PR をレビューする」（応募書類の例）</p>
+  <p class="thesis">消えるのは <strong>探す・思い出す・読み直す</strong> の6手順。
+    増える手順は<strong>ひとつもありません。</strong></p>
+</header>
+
+<div class="legend">
+  <b><span class="sw n"></span>そのまま残る手順</b>
+  <b><span class="sw k"></span>消える手順</b>
+  <b><span class="sw h"></span>まだ決めていない範囲</b>
+</div>
+
+<div class="cmp">
+
+  <div class="chead now"><span class="n">1</span><span>現在の流れ</span></div>
+  <div class="chead aft"><span class="n">2</span><span>Atra 導入後</span></div>
+
+  <!-- phase 0 -->
+  <div class="band">事前 — 一度だけ</div>
+  <div class="cell now first">
+    <div class="only">1 現在の流れ</div>
+    <div class="none">事前の準備はない</div>
+  </div>
+  <div class="cell aft first">
+    <div class="only">2 Atra 導入後</div>
+    <div class="card">
+      <div><div class="t">見る範囲を決める</div>
+        <div class="d">このリポジトリ、このチャンネル。<strong>決めるのは最初の一度だけ</strong></div></div>
+      <div class="tile">🎯</div>
+    </div>
+  </div>
+
+  <!-- phase A -->
+  <div class="band">A — 依頼を受ける</div>
+  <div class="cell now">
+    <div class="only">1 現在の流れ</div>
+    <div class="card"><div><div class="t">① レビュー依頼が届く</div></div><div class="tile">💬</div></div>
+    <div class="arw">▼</div>
+    <div class="card"><div><div class="t">②「あとで見ます」と返す</div></div><div class="tile">↩</div></div>
+    <div class="arw">▼</div>
+    <div class="card"><div><div class="t">③ 別の作業に戻る</div></div><div class="tile">⇤</div></div>
+  </div>
+  <div class="cell aft">
+    <div class="only">2 Atra 導入後</div>
+    <div class="card"><div><div class="t">① レビュー依頼が届く</div></div><div class="tile">💬</div></div>
+    <div class="arw">▼</div>
+    <div class="card auto">
+      <div><div class="t">Atra が1つにまとめる</div>
+        <div class="d">PR・Issue・スレッド・期限を拾って作業単位にする。<strong>人の操作なし</strong></div></div>
+      <div class="tile">⚙</div>
+    </div>
+    <div class="arw">▼</div>
+    <div class="card"><div><div class="t">②「あとで見ます」と返す</div></div><div class="tile">↩</div></div>
+    <div class="arw">▼</div>
+    <div class="card"><div><div class="t">③ 別の作業に戻る</div></div><div class="tile">⇤</div></div>
+  </div>
+
+  <!-- pause -->
+  <div class="band pause">④ 中断 — 数時間 〜 数日</div>
+
+  <!-- phase B -->
+  <div class="band">B — 再開する　←　ここが変わる</div>
+  <div class="cell now">
+    <div class="only">1 現在の流れ</div>
+    <div class="card"><div><div class="t">⑤ 机に座る</div></div><div class="tile">🪑</div></div>
+    <div class="arw">▼</div>
+    <div class="card cut"><div><div class="t">⑥ 何を頼まれていたか思い出す</div></div><div class="tile">✗</div></div>
+    <div class="arw">▼</div>
+    <div class="card cut"><div><div class="t">⑦ Slack を遡って依頼を探す</div></div><div class="tile">✗</div></div>
+    <div class="arw">▼</div>
+    <div class="card"><div><div class="t">⑧ PR を開く</div></div><div class="tile">🔗</div></div>
+    <div class="arw">▼</div>
+    <div class="card cut"><div><div class="t">⑨ 何のための変更か → Issue を探す</div></div><div class="tile">✗</div></div>
+    <div class="arw">▼</div>
+    <div class="card cut"><div><div class="t">⑩ どこまで見たか → 差分を読み直す</div></div><div class="tile">✗</div></div>
+    <div class="arw">▼</div>
+    <div class="card cut"><div><div class="t">⑪ 期限 → カレンダーを見る</div></div><div class="tile">✗</div></div>
+  </div>
+  <div class="cell aft">
+    <div class="only">2 Atra 導入後</div>
+    <div class="card"><div><div class="t">⑤ 机に座る。Atra を開く</div></div><div class="tile">🪑</div></div>
+    <div class="arw">▼</div>
+    <div class="card key">
+      <div><div class="t">⑥ 一覧から選ぶ</div>
+        <div class="d">依頼・対象の PR・背景の Issue・期限・まだ確認できていない点が<strong>1枚にそろっている</strong></div></div>
+      <div class="tile">📄</div>
+    </div>
+    <div class="arw">▼</div>
+    <div class="card"><div><div class="t">⑦ PR・Issue・スレッドが開く</div></div><div class="tile">🔗</div></div>
+  </div>
+
+  <div class="collapse">現在の 6 手順　→　導入後の 2 手順</div>
+
+  <!-- phase C -->
+  <div class="band">C — 作業して返す</div>
+  <div class="cell now last">
+    <div class="only">1 現在の流れ</div>
+    <div class="card"><div><div class="t">⑫ 指摘を書く</div></div><div class="tile">✍</div></div>
+    <div class="arw">▼</div>
+    <div class="card cut">
+      <div><div class="t">⑬ 未確認の点をどこかにメモ</div>
+        <div class="d">次に開いたとき見つからない</div></div>
+      <div class="tile">✗</div>
+    </div>
+    <div class="arw">▼</div>
+    <div class="card"><div><div class="t">⑭「見ました」と返す</div></div><div class="tile">↩</div></div>
+  </div>
+  <div class="cell aft last">
+    <div class="only">2 Atra 導入後</div>
+    <div class="card"><div><div class="t">⑧ 指摘を書く</div></div><div class="tile">✍</div></div>
+    <div class="arw">▼</div>
+    <div class="card hold">
+      <div><div class="t">この範囲に Atra はいない</div>
+        <div class="d">作業中に Atra が何をするかは未決定</div></div>
+      <div class="tile">？</div>
+    </div>
+    <div class="arw">▼</div>
+    <div class="card"><div><div class="t">⑨「見ました」と返す</div></div><div class="tile">↩</div></div>
+  </div>
+
+</div>
+
+<div class="totals">
+  <div class="tot a"><b>14</b><span>現在の手順数</span></div>
+  <div class="tot b"><b>9</b><span>導入後の手順数</span></div>
+  <div class="tot c"><b>6</b><span>消える手順</span></div>
+  <div class="tot d"><b>0</b><span>増える手順</span></div>
+</div>
+
+<div class="why">
+  <b>なぜ6手順が消えるのか</b>
+  <p>バラバラに届いた5つが、<strong>依頼された時点で1つにまとめられているから。</strong>
+  探す先が5つから1つになったのではなく、<strong>探す行為そのものがなくなります。</strong></p>
+</div>
+
+<div class="open">
+  <b>この図が確定しているのは C の手前まで</b>
+  ①〜⑦ が含んでいるのは <strong>見つける・まとめる・提示する</strong> の2層だけです。
+  作業中（C）に Atra が何をするかは決めていません。
+  分岐の検討は <a href="https://github.com/haya10hikawa-hub/Atra-workunitOS/issues/257">Issue #257</a> にあります。
+</div>
+
+<footer>2026-09-15 ／ 現在の流れは実測ではなく、日常の再現です。手順数はこの題材1件あたりの数。</footer>
+</div>
