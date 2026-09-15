@@ -4,61 +4,62 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap">
 <style>
   :root{
-    --bg:#f5f7f9; --card:#fff; --ink:#132030; --ink2:#43546a; --muted:#71808f;
-    --line:#dce2e8; --navy:#0d3055; --navy-soft:#e7edf4;
-    --skip:#7b8a99; --skip-bg:#eceff1; --skip-line:#b6c1cb;
+    --bg:#f5f6f7; --card:#fff; --ink:#111111; --ink2:#3d4650; --muted:#6f7a85;
+    --line:#dadee2; --rule:#111111;
+    --navy:#0d3055; --navy-soft:#e7edf4;
     --hold:#96700f; --hold-bg:#fbf3dd; --hold-line:#e0c680;
-    --paper:#ffffff; --paper-line:#dfe5ea;
+    --skip:#7b8a99; --skip-bg:#eceff1; --skip-line:#b6c1cb;
+    --paper:#ffffff; --paper-line:#dfe3e7;
   }
   @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
-    --bg:#0c1117; --card:#161d26; --ink:#e7ecf2; --ink2:#b3bfcc; --muted:#8593a2;
-    --line:#28313c; --navy:#7aa9dd; --navy-soft:#16273a;
-    --skip:#8593a2; --skip-bg:#1d242d; --skip-line:#39434f;
+    --bg:#0c0f13; --card:#161a20; --ink:#e9edf1; --ink2:#b2bcc6; --muted:#848f9b;
+    --line:#272d35; --rule:#e9edf1;
+    --navy:#7aa9dd; --navy-soft:#16273a;
     --hold:#dfb958; --hold-bg:#2a2313; --hold-line:#6b5723;
+    --skip:#8b96a2; --skip-bg:#1c2229; --skip-line:#39424c;
   }}
   :root[data-theme="dark"]{
-    --bg:#0c1117; --card:#161d26; --ink:#e7ecf2; --ink2:#b3bfcc; --muted:#8593a2;
-    --line:#28313c; --navy:#7aa9dd; --navy-soft:#16273a;
-    --skip:#8593a2; --skip-bg:#1d242d; --skip-line:#39434f;
+    --bg:#0c0f13; --card:#161a20; --ink:#e9edf1; --ink2:#b2bcc6; --muted:#848f9b;
+    --line:#272d35; --rule:#e9edf1;
+    --navy:#7aa9dd; --navy-soft:#16273a;
     --hold:#dfb958; --hold-bg:#2a2313; --hold-line:#6b5723;
+    --skip:#8b96a2; --skip-bg:#1c2229; --skip-line:#39424c;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
     font-family:'Zen Kaku Gothic New','Hiragino Kaku Gothic ProN','Yu Gothic',Meiryo,system-ui,sans-serif;
     font-size:15px;line-height:1.75;-webkit-font-smoothing:antialiased}
-  .mono{font-family:'JetBrains Mono',ui-monospace,Menlo,monospace}
-  .wrap{max-width:1080px;margin:0 auto;padding-block:30px 70px;padding-left:18px;padding-right:18px}
+  .wrap{max-width:760px;margin:0 auto;padding-block:30px 70px;padding-left:18px;padding-right:18px}
 
   .kicker{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.16em;color:var(--muted);margin:0 0 8px}
   h1{font-size:clamp(23px,4vw,32px);font-weight:900;margin:0 0 6px;letter-spacing:-.01em}
   .sub{color:var(--muted);font-size:13.5px;margin:0}
   .thesis{font-size:16.5px;font-weight:500;margin:16px 0 0;padding-left:14px;
-    border-left:3px solid var(--navy);max-width:54ch}
+    border-left:3px solid var(--rule);max-width:54ch}
 
-  /* figure sits on its own paper in both themes */
   figure{margin:26px 0 0;background:var(--paper);border:1px solid var(--paper-line);
-    border-radius:10px;padding:18px 10px 8px;overflow-x:auto}
-  figure .mermaid{min-width:940px;display:flex;justify-content:center}
-  figcaption{font-size:12px;color:#71808f;padding:4px 12px 8px;min-width:0;
-    font-family:'JetBrains Mono',ui-monospace,monospace;letter-spacing:.04em}
+    border-radius:8px;padding:20px 8px 8px;overflow-x:auto}
+  figure .mermaid{min-width:430px;display:flex;justify-content:center}
+  figcaption{font-size:11.5px;color:#6f7a85;padding:8px 14px 6px;
+    font-family:'JetBrains Mono',ui-monospace,monospace;letter-spacing:.04em;line-height:1.7}
 
   .legend{display:flex;flex-wrap:wrap;gap:8px 20px;margin:18px 0 0;font-size:12.5px;color:var(--muted)}
   .legend b{display:inline-flex;align-items:center;gap:7px;font-weight:500;color:var(--ink2)}
-  .sw{width:15px;height:13px;border-radius:3px;flex:none}
-  .sw.n{background:#0d3055}
+  .sw{width:16px;height:13px;border-radius:2px;flex:none;background:#fff}
+  .sw.n{border:1.5px solid #111}
   .sw.s{background:#eceff1;border:1px dashed #b6c1cb}
-  .sw.h{background:#fff;border:2px solid #0d3055}
-  .sw.p{background:#fbf3dd;border:1px solid #e0c680}
+  .sw.d{border:1.5px dashed #111}
+  .sw.u{background:#f0f2f4;border:1px solid #b6c1cb}
 
-  .totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));
-    border:1px solid var(--line);border-radius:10px;margin:26px 0 0;background:var(--card);overflow:hidden}
+  .totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
+    border:1px solid var(--line);border-radius:8px;margin:26px 0 0;background:var(--card);overflow:hidden}
   .tot{padding:15px 18px;border-right:1px solid var(--line)}
   .tot:last-child{border-right:0}
   @media (max-width:620px){.tot{border-right:0;border-bottom:1px solid var(--line)}.tot:last-child{border-bottom:0}}
   .tot b{display:block;font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;
-    line-height:1.15;font-variant-numeric:tabular-nums;color:var(--navy)}
+    line-height:1.15;font-variant-numeric:tabular-nums;color:var(--ink)}
   .tot span{font-size:12px;color:var(--muted)}
-  .tot.c b{color:var(--skip)}
+  .tot.c b{color:var(--muted);font-size:20px}
 
   .why{margin:22px 0 0;padding:16px 20px;background:var(--navy-soft);
     border-left:3px solid var(--navy);border-radius:0 8px 8px 0;max-width:62ch}
@@ -71,12 +72,12 @@
     color:var(--hold);margin-bottom:6px;font-weight:500}
   .open a{color:var(--hold);text-underline-offset:2px}
 
-  details{margin:24px 0 0;border:1px solid var(--line);border-radius:9px;background:var(--card)}
+  details{margin:24px 0 0;border:1px solid var(--line);border-radius:8px;background:var(--card)}
   summary{cursor:pointer;padding:12px 18px;font-size:13.5px;font-weight:700;list-style:none}
   summary::-webkit-details-marker{display:none}
   summary::before{content:"▸ ";color:var(--muted)}
   details[open] summary::before{content:"▾ "}
-  summary:focus-visible{outline:2px solid var(--navy);outline-offset:-2px;border-radius:9px}
+  summary:focus-visible{outline:2px solid var(--rule);outline-offset:-2px;border-radius:8px}
   pre{margin:0;padding:0 18px 18px;overflow-x:auto}
   pre code{font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:12px;
     line-height:1.7;color:var(--ink2);white-space:pre}
@@ -94,12 +95,12 @@
 
 <figure>
 <pre class="mermaid">
-flowchart LR
+flowchart TB
   A["依頼発生"] --> B["Atra が観測"]
   B --> C["関連情報を収集<br/>PR・Issue・スレッド・期限"]
   C --> D["作業単位を形成"]
   D --> E["重要度順に候補化"]
-  E --> W{{"中断<br/>数時間 〜 数日"}}
+  E --> W["中断 — 数時間 〜 数日"]
   W --> F["人が再開"]
 
   F -.-> S1["思い出す"]
@@ -112,29 +113,36 @@ flowchart LR
   F ==>|"5 手順を飛ばす"| G
 
   G --> H["必要な文脈が<br/>そろった状態で開く"]
-  H --> R["レビューする"]
-  R --> Z["完了"]
 
-  classDef atra fill:#0d3055,stroke:#0d3055,stroke-width:1px,color:#ffffff
+  subgraph U ["Atra がいない区間 — 未決定"]
+    direction TB
+    R["レビューする"] --> Z["完了"]
+  end
+  H --> R
+
+  classDef base fill:#ffffff,stroke:#111111,stroke-width:1.5px,color:#111111
   classDef skip fill:#eceff1,stroke:#b6c1cb,stroke-width:1px,stroke-dasharray:4 3,color:#7b8a99
-  classDef pause fill:#fbf3dd,stroke:#e0c680,stroke-width:1px,color:#96700f
-  classDef open fill:#ffffff,stroke:#0d3055,stroke-width:2px,color:#0d3055
+  classDef gap  fill:#ffffff,stroke:#111111,stroke-width:1.5px,stroke-dasharray:6 4,color:#111111
+  classDef un   fill:#ffffff,stroke:#111111,stroke-width:1.5px,stroke-dasharray:6 4,color:#111111
 
-  class A,B,C,D,E,F,G,H atra
+  class A,B,C,D,E,F,G,H base
   class S1,S2,S3,S4,S5 skip
-  class W pause
-  class R,Z open
+  class W gap
+  class R,Z un
 
-  linkStyle 11 stroke:#0d3055,stroke-width:3px
+  style U fill:#f0f2f4,stroke:#b6c1cb,stroke-width:1px,color:#6f7a85
+
+  linkStyle 6,7,8,9,10,11 stroke:#b6c1cb,stroke-width:1px
+  linkStyle 12 stroke:#111111,stroke-width:3px
 </pre>
-<figcaption>濃紺＝Atra が関わる区間　／　灰色の破線＝導入後に通らなくなる手順　／　白抜き＝Atra がいない区間</figcaption>
+<figcaption>黒枠＝確定した流れ　／　灰色の破線＝導入後に通らなくなる手順　／　黒い点線枠＝時間の空白<br>灰色で囲った領域＝Atra の役割が未決定の区間</figcaption>
 </figure>
 
 <div class="legend">
-  <b><span class="sw n"></span>Atra が関わる</b>
+  <b><span class="sw n"></span>確定した流れ</b>
   <b><span class="sw s"></span>通らなくなる手順</b>
-  <b><span class="sw p"></span>中断</b>
-  <b><span class="sw h"></span>Atra がいない（未決定）</b>
+  <b><span class="sw d"></span>中断</b>
+  <b><span class="sw u"></span>未決定の区間</b>
 </div>
 
 <div class="totals">
@@ -152,19 +160,19 @@ flowchart LR
 
 <div class="open">
   <b>この図が確定しているのは「開く」まで</b>
-  濃紺の区間が含んでいるのは <strong>観測・収集・形成・候補化・提示</strong> だけです。
-  レビュー中に Atra が何をするかは決めていません。分岐の検討は
+  黒枠の区間が含んでいるのは <strong>観測・収集・形成・候補化・提示</strong> だけです。
+  灰色で囲った先、レビュー中に Atra が何をするかは決めていません。分岐の検討は
   <a href="https://github.com/haya10hikawa-hub/Atra-workunitOS/issues/257">Issue #257</a> にあります。
 </div>
 
 <details>
   <summary>Mermaid ソース（コピーして Notion などに貼れます）</summary>
-<pre><code>flowchart LR
+<pre><code>flowchart TB
   A["依頼発生"] --&gt; B["Atra が観測"]
   B --&gt; C["関連情報を収集&lt;br/&gt;PR・Issue・スレッド・期限"]
   C --&gt; D["作業単位を形成"]
   D --&gt; E["重要度順に候補化"]
-  E --&gt; W{{"中断&lt;br/&gt;数時間 〜 数日"}}
+  E --&gt; W["中断 — 数時間 〜 数日"]
   W --&gt; F["人が再開"]
 
   F -.-&gt; S1["思い出す"]
@@ -177,20 +185,27 @@ flowchart LR
   F ==&gt;|"5 手順を飛ばす"| G
 
   G --&gt; H["必要な文脈が&lt;br/&gt;そろった状態で開く"]
-  H --&gt; R["レビューする"]
-  R --&gt; Z["完了"]
 
-  classDef atra fill:#0d3055,stroke:#0d3055,stroke-width:1px,color:#ffffff
+  subgraph U ["Atra がいない区間 — 未決定"]
+    direction TB
+    R["レビューする"] --&gt; Z["完了"]
+  end
+  H --&gt; R
+
+  classDef base fill:#ffffff,stroke:#111111,stroke-width:1.5px,color:#111111
   classDef skip fill:#eceff1,stroke:#b6c1cb,stroke-width:1px,stroke-dasharray:4 3,color:#7b8a99
-  classDef pause fill:#fbf3dd,stroke:#e0c680,stroke-width:1px,color:#96700f
-  classDef open fill:#ffffff,stroke:#0d3055,stroke-width:2px,color:#0d3055
+  classDef gap  fill:#ffffff,stroke:#111111,stroke-width:1.5px,stroke-dasharray:6 4,color:#111111
+  classDef un   fill:#ffffff,stroke:#111111,stroke-width:1.5px,stroke-dasharray:6 4,color:#111111
 
-  class A,B,C,D,E,F,G,H atra
+  class A,B,C,D,E,F,G,H base
   class S1,S2,S3,S4,S5 skip
-  class W pause
-  class R,Z open
+  class W gap
+  class R,Z un
 
-  linkStyle 11 stroke:#0d3055,stroke-width:3px</code></pre>
+  style U fill:#f0f2f4,stroke:#b6c1cb,stroke-width:1px,color:#6f7a85
+
+  linkStyle 6,7,8,9,10,11 stroke:#b6c1cb,stroke-width:1px
+  linkStyle 12 stroke:#111111,stroke-width:3px</code></pre>
 </details>
 
 <footer>2026-09-15 ／ 飛ばされる 5 手順は日常の再現であり、実測ではありません。削減時間は未計測です。</footer>
