@@ -683,7 +683,36 @@
 
 <!-- 14 -->
 <section class="slide" data-n="14">
-  <p class="eyebrow">4 — ルール</p>
+  <p class="eyebrow">4 — ルール ／ 大原則</p>
+  <h2>グループはどうやってできるのか</h2>
+  <p class="oneline" style="margin-top:0;margin-bottom:28px">人間が <span class="mono">park</span> した単位が、そのままグループになる。<br><strong>機械は順番しか決めない。</strong></p>
+  <div class="cols two">
+    <div>
+      <h3>人間がやること</h3>
+      <ul class="rules" style="margin-top:8px">
+        <li style="grid-template-columns:1fr"><span class="r" style="font-weight:500">作業を止めるとき <kbd>park</kbd> を押す。そのとき開いていたものが1つの箱に入る。</span></li>
+        <li style="grid-template-columns:1fr"><span class="r" style="font-weight:500">これが<strong>唯一のグループ生成経路</strong>。機械が勝手に箱を作ることはない。</span></li>
+        <li style="grid-template-columns:1fr"><span class="r" style="font-weight:500">違っていたら画面7で訂正する。</span></li>
+      </ul>
+    </div>
+    <div>
+      <h3>機械がやること — 2つだけ</h3>
+      <ul class="diff" style="margin-top:8px">
+        <li><span><b>入れ先の候補を出す</b><span>直近に park した箱、同じディレクトリ／リポジトリを含む箱を上位に。</span></span></li>
+        <li><span><b>画面1の並び順を決める</b><span>最終 park 時刻 ＋ 時間帯 ＋ 訂正履歴。</span></span></li>
+      </ul>
+    </div>
+  </div>
+  <div class="verdict" style="margin-top:22px;flex-direction:column;gap:6px">
+    <span style="font-size:12px;letter-spacing:.14em;color:var(--accent)" class="mono">なぜこうするか</span>
+    <span>機械が箱まで作ると、外れたときに<strong>「探す場所」そのものが消える</strong>。箱の境界を人間が持っていれば、推薦が全部外れた日でも作業は止まらない。</span>
+    <span>それに、この形なら<strong>2人で作れる</strong>。箱を当てる機械はまだ作れない。順番を当てる機械なら作れる。</span>
+  </div>
+</section>
+
+<!-- 15 -->
+<section class="slide" data-n="15">
+  <p class="eyebrow">4 — ルール ／ 守るべき7項目</p>
   <h2>守らないと「思い出せる」が壊れるもの</h2>
   <ul class="rules">
     <li><span class="num">01</span><span class="r">グループを確定させるのは人間。AI は候補を出すだけ。</span><span class="why2">勝手に分類されると、外れたときに探す場所が消える</span></li>
@@ -696,8 +725,8 @@
   </ul>
 </section>
 
-<!-- 15 -->
-<section class="slide" data-n="15">
+<!-- 16 -->
+<section class="slide" data-n="16">
   <p class="eyebrow">5 — 必要機能</p>
   <h2>MVP に入れるものだけ</h2>
   <p class="sub">ここに無いものは作りません。</p>
@@ -730,8 +759,8 @@
   </div>
 </section>
 
-<!-- 16 -->
-<section class="slide" data-n="16">
+<!-- 17 -->
+<section class="slide" data-n="17">
   <p class="eyebrow">6 — 出力形式</p>
   <h2>Atra の出力は3つだけ</h2>
   <table class="terms">
@@ -743,8 +772,8 @@
   <p>加えて、グループはローカルに<strong>人間が読める JSON</strong> としても書き出せる。<br>Atra が動かなくなっても中身が取り出せることを保証するため。</p>
 </section>
 
-<!-- 17 -->
-<section class="slide" data-n="17">
+<!-- 18 -->
+<section class="slide" data-n="18">
   <p class="eyebrow">7 — システム構成</p>
   <h2>フロントは作らない。借りる。</h2>
   <div class="cols mock">
@@ -765,8 +794,8 @@
   </div>
 </section>
 
-<!-- 18 -->
-<section class="slide" data-n="18">
+<!-- 19 -->
+<section class="slide" data-n="19">
   <p class="eyebrow">8 — 差別化</p>
   <h2>他と違うのは2点だけ</h2>
   <ol class="diff">
@@ -777,8 +806,8 @@
   <p class="lead" style="margin:0">この2点は V0 で作った考え方を持ち込んでいる。<br><strong>持ち込むのは考え方だけで、V0 の製品方向・語彙・コードは引き継がない。</strong></p>
 </section>
 
-<!-- 19 -->
-<section class="slide" data-n="19">
+<!-- 20 -->
+<section class="slide" data-n="20">
   <p class="eyebrow">9 — 今の状態</p>
   <h2>決まっていること／決めないこと</h2>
   <div class="decide">
@@ -809,7 +838,7 @@
 </div>
 
 <div class="hud">
-  <span class="mono" id="counter">01 / 19</span>
+  <span class="mono" id="counter">01 / 20</span>
   <button id="prev" aria-label="前のスライド">↑</button>
   <button id="next" aria-label="次のスライド">↓</button>
   <button id="print" aria-label="PDF で書き出す">PDF</button>
