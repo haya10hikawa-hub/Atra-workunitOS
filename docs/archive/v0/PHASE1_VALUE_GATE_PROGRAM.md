@@ -1,6 +1,15 @@
 # Phase-1 Value Gate Program
 
-Status: Primary Product / Roadmap Authority, ratified by the human PM.
+> [!IMPORTANT]
+> **SUPERSEDED — HISTORICAL ONLY.** The authority this document claims for itself
+> below is no longer in force. The sole current product-state authority is
+> [`PRODUCT_STATE.md`](../../../PRODUCT_STATE.md) (`Atra V0: FROZEN`,
+> `Current product direction: UNRESOLVED`). Read every "Authority", "owns" and
+> "governs" statement below as a record of what was ratified in 2026-08, not as a
+> current claim. Nothing here authorizes current or future implementation.
+
+Status: HISTORICAL ONLY. Formerly: Primary Product / Roadmap Authority, ratified by
+the human PM. Superseded by the V0 freeze.
 
 Decision token: `ATRA_PHASE1_PLAN_AUTHORITY_RATIFIED_WITH_MODIFICATIONS`
 
@@ -23,7 +32,8 @@ Phase-1 Value Gate Program            (this document)
        └─ technical / domain architecture
 ```
 
-This document is the single Primary Product / Roadmap Authority. It owns:
+At the time of ratification this document was the single Primary Product / Roadmap
+Authority. It then owned:
 
 - what to validate
 - phase order
@@ -32,17 +42,19 @@ This document is the single Primary Product / Roadmap Authority. It owns:
 - the Phase-1 critical path
 - deferred scope
 
-`docs/archive/v0/CANONICAL_WORKUNIT_PIPELINE_REFACTOR_PROGRAM.md` is the ratified subordinate Technical / Domain Architecture Authority. It is subordinate to this document on sequencing and product priority, and it remains authoritative for single canonical product-data truth, record ownership, projection boundaries, composition and dependency rules, the `Candidate != ReviewedWorkUnit` / `Preview != Approval` / `Approval != Execution` boundaries, the architecture ratchets, and bounded WorkUnit review discipline.
+`docs/archive/v0/CANONICAL_WORKUNIT_PIPELINE_REFACTOR_PROGRAM.md` was the ratified subordinate Technical / Domain Architecture Authority. It is now HISTORICAL ONLY on the same terms as this document. It is subordinate to this document on sequencing and product priority, and it remains authoritative for single canonical product-data truth, record ownership, projection boundaries, composition and dependency rules, the `Candidate != ReviewedWorkUnit` / `Preview != Approval` / `Approval != Execution` boundaries, the architecture ratchets, and bounded WorkUnit review discipline.
 
-### What is not Product Authority
+### What was not Product Authority
 
-No other repository document is Primary Product / Roadmap Authority. In particular:
+Under the ratification recorded here, no other repository document was Primary Product /
+Roadmap Authority. That exclusion lapsed with the V0 freeze: no document in
+`docs/archive/v0/` — this one included — is current product authority. In particular:
 
-- The `## Roadmap` list in `README.md` is an unordered engineering-theme list. It carries no phase order, no Gate, and no sequencing authority.
+- The `## Roadmap` list in `README.md` was an unordered engineering-theme list. It carried no phase order, no Gate, and no sequencing authority. That section no longer exists in `README.md`.
 - `docs/architecture/WORKUNIT_OS_ORGANIZATION.md` describes long-range organizational and completion vision. It is not a phase plan and does not sequence Phase-1.
 - Historical `docs/PHASE_*`, `docs/P6_*` and `docs/ALPHA_*` records are evidence of past decisions at their own heads. They are not current sequencing authority.
 
-Where any of those disagree with this document on product priority or phase order, this document governs.
+Under the ratification, where any of those disagreed with this document on product priority or phase order, this document governed. That precedence is historical; `PRODUCT_STATE.md` governs now.
 
 ## Product Hypothesis
 

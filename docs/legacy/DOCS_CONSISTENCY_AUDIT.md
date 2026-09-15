@@ -1,5 +1,17 @@
 # Docs Consistency Audit
 
+> [!IMPORTANT]
+> **SUPERSEDED — HISTORICAL ONLY.** The authority this document claims for itself
+> below is no longer in force. The sole current product-state authority is
+> [`PRODUCT_STATE.md`](../../PRODUCT_STATE.md) (`Atra V0: FROZEN`,
+> `Current product direction: UNRESOLVED`). Read every "Authority", "owns" and
+> "governs" statement below as a record of what was ratified in 2026-08, not as a
+> current claim. Nothing here authorizes current or future implementation.
+
+Status: HISTORICAL ONLY. This is a point-in-time audit record. Its "Canonical
+Decision" and "Fixed Product Principles" sections describe the V0 direction and are
+not current product authority.
+
 ## 1. Scope
 
 Scanned 44 repository Markdown files, excluding generated output and dependencies.
@@ -14,9 +26,9 @@ Primary audit targets:
 - phase scope
 - legacy wording
 
-## 2. Canonical Decision
+## 2. Canonical Decision (historical)
 
-The accepted UI direction is:
+The UI direction accepted at the time of this audit was:
 
 ```txt
 WorkUnit Launcher
@@ -39,7 +51,7 @@ Dashboard / Inbox / three-pane console wording is not canonical product directio
 | Command Palette / graph execution risk | `docs/archive/v0/AI_JUDGMENT_CRITERIA.md`, canonical index | Navigation surfaces must not execute | Reworded Mind Map to WorkUnit Graph and kept execution ban | None |
 | Tool Pin ambiguity | canonical index, Node policy docs | Tool Pin is context/display only | Reaffirmed in canonical index and P0 list | UI implementation must enforce non-executable affordance |
 
-## 4. Fixed Product Principles
+## 4. Fixed Product Principles (historical, V0)
 
 ```txt
 Manage by Node.

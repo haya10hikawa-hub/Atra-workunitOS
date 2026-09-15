@@ -1,6 +1,15 @@
 # Canonical WorkUnit Pipeline Refactor Program
 
-Status: Ratified subordinate Technical / Domain Architecture Authority
+> [!IMPORTANT]
+> **SUPERSEDED — HISTORICAL ONLY.** The authority this document claims for itself
+> below is no longer in force. The sole current product-state authority is
+> [`PRODUCT_STATE.md`](../../../PRODUCT_STATE.md) (`Atra V0: FROZEN`,
+> `Current product direction: UNRESOLVED`). Read every "Authority", "owns" and
+> "governs" statement below as a record of what was ratified in 2026-08, not as a
+> current claim. Nothing here authorizes current or future implementation.
+
+Status: HISTORICAL ONLY. Formerly: Ratified subordinate Technical / Domain
+Architecture Authority. Superseded by the V0 freeze.
 
 Historical status at evidence snapshot `066a43c3df07f3da10a2fc93ff7d90157c732114`:
 Draft for PM and independent security/architecture review. That was the document's current status at
@@ -17,9 +26,9 @@ Execution boundary: WU-00 only. No production path, schema, migration, or provid
 
 ## Authority Position
 
-This document is the ratified subordinate Technical / Domain Architecture Authority. The Primary Product / Roadmap Authority is `docs/archive/v0/PHASE1_VALUE_GATE_PROGRAM.md`, ratified by the human PM as `ATRA_PHASE1_PLAN_AUTHORITY_RATIFIED_WITH_MODIFICATIONS`.
+At the time of ratification this document was the subordinate Technical / Domain Architecture Authority, under `docs/archive/v0/PHASE1_VALUE_GATE_PROGRAM.md` as Primary Product / Roadmap Authority (`ATRA_PHASE1_PLAN_AUTHORITY_RATIFIED_WITH_MODIFICATIONS`). Both are now HISTORICAL ONLY.
 
-The split is exact:
+The split recorded at that time was exact:
 
 - The Phase-1 Value Gate Program owns what to validate, phase order, Gate semantics, investment sequencing, the Phase-1 critical path, and deferred scope.
 - This document owns single canonical product-data truth, record ownership, projection boundaries, composition and dependency rules, the `Candidate != ReviewedWorkUnit` / `Preview != Approval` / `Approval != Execution` boundaries, the architecture ratchets, and bounded WorkUnit review discipline.
