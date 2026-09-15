@@ -4,159 +4,153 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap">
 <style>
   :root{
-    --bg:#f4f6f8; --card:#fff; --panel:#fbfcfd;
-    --ink:#16202b; --ink2:#41505f; --muted:#6d7b8a;
-    --line:#d7dde4; --line2:#e7ecf1;
-    --now:#4a6b8a; --now-bg:#eef3f8; --now-line:#9db6cd;
-    --aft:#2c7a5b; --aft-bg:#eaf5ef; --aft-line:#8bc4a8;
-    --cut:#b0453180; --cut-ink:#a8412f; --cut-bg:#fbeeeb; --cut-line:#e3b5ab;
-    --hold:#8a6a1f; --hold-bg:#fdf3dd; --hold-line:#e0c680;
-    --arrow:#b9c4ce;
+    --bg:#f7f9fa; --card:#ffffff; --ink:#1d2733; --ink2:#4a5866; --muted:#78838f;
+    --blue:#2f7fd1; --blue-bg:#eaf4fd; --blue-line:#a8cdee;
+    --green:#3a9c4d; --green-bg:#edf7ee; --green-line:#a9d9b0;
+    --arrow:#9aa4ad;
+    --red:#e04a3a; --red-bg:#fdeeec; --red-line:#f0b3aa;
+    --t-orange:#f0a030; --t-purple:#8e5bd0; --t-red:#e04a3a;
+    --t-blue:#4a90d9; --t-green:#43a047; --t-grey:#8d99a5;
+    --line:#dde3e8; --dash:#b6c0c9;
+    --hold:#b8860b; --hold-bg:#fdf6e3; --hold-line:#e8d08a;
   }
   @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
-    --bg:#0d1117; --card:#171d25; --panel:#131920;
-    --ink:#e6eaef; --ink2:#b4bfcb; --muted:#8895a4;
-    --line:#2a333d; --line2:#222a33;
-    --now:#8fb3d4; --now-bg:#182430; --now-line:#3a5673;
-    --aft:#6fc79b; --aft-bg:#14271f; --aft-line:#2f6b4f;
-    --cut:#e0857180; --cut-ink:#e08571; --cut-bg:#2c1d1a; --cut-line:#6b3b31;
+    --bg:#0e1319; --card:#1a212a; --ink:#e8edf2; --ink2:#b6c2ce; --muted:#8894a1;
+    --blue:#6fb0ea; --blue-bg:#152534; --blue-line:#2f5b82;
+    --green:#6cc47c; --green-bg:#15281a; --green-line:#2f6b3c;
+    --arrow:#48545f;
+    --red:#ef7f6e; --red-bg:#2e1c19; --red-line:#71382f;
+    --t-orange:#e0a049; --t-purple:#a37ddd; --t-red:#ef7f6e;
+    --t-blue:#5f9fe0; --t-green:#5cb56a; --t-grey:#78848f;
+    --line:#2a333d; --dash:#48545f;
     --hold:#dfb958; --hold-bg:#2a2313; --hold-line:#6b5723;
-    --arrow:#3a444f;
   }}
   :root[data-theme="dark"]{
-    --bg:#0d1117; --card:#171d25; --panel:#131920;
-    --ink:#e6eaef; --ink2:#b4bfcb; --muted:#8895a4;
-    --line:#2a333d; --line2:#222a33;
-    --now:#8fb3d4; --now-bg:#182430; --now-line:#3a5673;
-    --aft:#6fc79b; --aft-bg:#14271f; --aft-line:#2f6b4f;
-    --cut:#e0857180; --cut-ink:#e08571; --cut-bg:#2c1d1a; --cut-line:#6b3b31;
+    --bg:#0e1319; --card:#1a212a; --ink:#e8edf2; --ink2:#b6c2ce; --muted:#8894a1;
+    --blue:#6fb0ea; --blue-bg:#152534; --blue-line:#2f5b82;
+    --green:#6cc47c; --green-bg:#15281a; --green-line:#2f6b3c;
+    --arrow:#48545f;
+    --red:#ef7f6e; --red-bg:#2e1c19; --red-line:#71382f;
+    --t-orange:#e0a049; --t-purple:#a37ddd; --t-red:#ef7f6e;
+    --t-blue:#5f9fe0; --t-green:#5cb56a; --t-grey:#78848f;
+    --line:#2a333d; --dash:#48545f;
     --hold:#dfb958; --hold-bg:#2a2313; --hold-line:#6b5723;
-    --arrow:#3a444f;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
     font-family:'Zen Kaku Gothic New','Hiragino Kaku Gothic ProN','Yu Gothic',Meiryo,system-ui,sans-serif;
     font-size:15px;line-height:1.7;-webkit-font-smoothing:antialiased}
   .mono{font-family:'JetBrains Mono',ui-monospace,Menlo,monospace}
-  .wrap{max-width:1060px;margin:0 auto;padding-block:30px 70px;padding-left:20px;padding-right:20px}
+  .wrap{max-width:720px;margin:0 auto;padding-block:30px 70px;padding-left:18px;padding-right:18px}
 
-  header h1{font-size:clamp(24px,3.6vw,34px);font-weight:900;margin:0 0 8px;letter-spacing:-.01em;text-wrap:balance}
-  header .sub{color:var(--muted);font-size:14px;margin:0 0 4px}
-  header .thesis{font-size:17px;font-weight:500;max-width:56ch;margin:14px 0 0;
-    padding-left:16px;border-left:3px solid var(--aft)}
-  .legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin:22px 0 26px;font-size:12.5px;color:var(--muted)}
+  header .kicker{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.16em;
+    color:var(--muted);margin:0 0 8px}
+  header h1{font-size:clamp(23px,4vw,31px);font-weight:900;margin:0 0 6px;letter-spacing:-.01em}
+  header .sub{color:var(--muted);font-size:13.5px;margin:0}
+  header .thesis{font-size:16px;font-weight:500;margin:16px 0 0;padding-left:14px;
+    border-left:3px solid var(--green);max-width:52ch}
+  .legend{display:flex;flex-wrap:wrap;gap:7px 16px;margin:20px 0 24px;font-size:12px;color:var(--muted)}
   .legend b{display:inline-flex;align-items:center;gap:6px;font-weight:500;color:var(--ink2)}
-  .sw{width:13px;height:13px;border-radius:3px;border:1px solid var(--line);flex:none}
-  .sw.k{background:var(--cut-bg);border-color:var(--cut-line)}
-  .sw.n{background:var(--card)}
-  .sw.h{background:var(--hold-bg);border-color:var(--hold-line)}
+  .sw{width:13px;height:13px;border-radius:3px;border:1px solid var(--line);background:var(--card);flex:none}
+  .sw.k{background:var(--red-bg);border:1px dashed var(--red-line)}
+  .sw.h{background:var(--hold-bg);border:1px dashed var(--hold-line)}
 
-  /* ── comparison grid ── */
-  .cmp{display:grid;grid-template-columns:1fr 1fr;gap:0 22px}
-  @media (max-width:760px){.cmp{grid-template-columns:1fr;gap:0}}
+  /* ===== group box (reference idiom) ===== */
+  .group{border:2px solid;border-radius:12px;padding:16px 18px 20px;background:transparent}
+  .group.g1{border-color:var(--blue);background:color-mix(in srgb,var(--blue-bg) 55%,transparent)}
+  .group.g2{border-color:var(--green);background:color-mix(in srgb,var(--green-bg) 55%,transparent)}
+  .gtitle{font-size:18px;font-weight:900;margin:0 0 14px;letter-spacing:.01em}
+  .g1 .gtitle{color:var(--blue)}
+  .g2 .gtitle{color:var(--green)}
+  .gtitle small{display:block;font-size:12px;font-weight:500;color:var(--muted);margin-top:2px;letter-spacing:0}
 
-  .chead{
-    display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
-    padding:11px 16px;border-radius:9px 9px 0 0;border:2px solid;border-bottom:0;
-    font-weight:900;font-size:17px;position:sticky;top:env(safe-area-inset-top,0px);z-index:3;
-  }
-  .chead .n{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;opacity:.85}
-  .chead.now{color:var(--now);border-color:var(--now-line);background:var(--now-bg)}
-  .chead.aft{color:var(--aft);border-color:var(--aft-line);background:var(--aft-bg)}
+  /* ===== row: card + tile ===== */
+  .row{display:grid;grid-template-columns:1fr 54px;gap:14px;align-items:center}
+  @media (max-width:520px){.row{grid-template-columns:1fr 42px;gap:9px}}
+  .box{background:var(--card);border:1px solid var(--blue-line);border-radius:8px;
+    padding:11px 15px}
+  .g2 .box{border-color:var(--green-line)}
+  .box .t{font-weight:700;font-size:15px;line-height:1.5}
+  .box .d{font-size:12.5px;color:var(--muted);line-height:1.55;margin-top:2px}
 
-  .band{
-    grid-column:1/-1;margin:16px 0 10px;
-    font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.16em;color:var(--muted);
-    display:flex;align-items:center;gap:12px;
-  }
-  .band::after{content:"";flex:1;height:1px;background:var(--line2)}
-  .band.pause{color:var(--hold)}
-  .band.pause::after{background:repeating-linear-gradient(90deg,var(--hold-line) 0 6px,transparent 6px 12px)}
+  .tile{width:54px;height:48px;border-radius:9px;display:grid;place-items:center;font-size:21px;
+    color:#fff}
+  @media (max-width:520px){.tile{width:42px;height:42px;font-size:17px;border-radius:7px}}
+  .tile.o{background:var(--t-orange)} .tile.p{background:var(--t-purple)}
+  .tile.r{background:var(--t-red)}    .tile.b{background:var(--t-blue)}
+  .tile.g{background:var(--t-green)}  .tile.s{background:var(--t-grey)}
+  .tile.none{background:transparent}
 
-  .cell{border:2px solid;border-top:0;border-bottom:0;padding:4px 14px 8px;background:var(--panel)}
-  .cell.now{border-color:var(--now-line)}
-  .cell.aft{border-color:var(--aft-line)}
-  .cell.first{border-top:0}
-  .cell.last{border-bottom:2px solid;border-radius:0 0 9px 9px;padding-bottom:14px}
-  .cell.now.last{border-bottom-color:var(--now-line)}
-  .cell.aft.last{border-bottom-color:var(--aft-line)}
-  .only{display:none;font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.14em;
-    padding:8px 0 2px}
-  @media (max-width:760px){
-    .only{display:block}
-    .cell.now .only{color:var(--now)}
-    .cell.aft .only{color:var(--aft)}
-    .cell{margin-bottom:0}
-    .cell.aft{margin-bottom:10px}
-  }
+  /* thick grey arrow, reference style */
+  .down{display:grid;place-items:center;padding:7px 0}
+  .down svg{display:block}
+  .down.big{padding:14px 0}
 
-  /* ── cards ── */
-  .card{
-    display:grid;grid-template-columns:1fr 34px;gap:10px;align-items:center;
-    background:var(--card);border:1px solid var(--line);border-radius:8px;
-    padding:9px 11px;margin:8px 0;
-  }
-  .card .t{font-weight:700;font-size:14.5px;line-height:1.45}
-  .card .d{font-size:12.5px;color:var(--muted);line-height:1.5;margin-top:1px}
-  .tile{width:34px;height:34px;border-radius:7px;display:grid;place-items:center;
-    font-size:15px;background:var(--now-bg);border:1px solid var(--now-line)}
-  .aft .tile{background:var(--aft-bg);border-color:var(--aft-line)}
+  /* removed step */
+  .box.cut{background:var(--red-bg);border:1px dashed var(--red-line)}
+  .box.cut .t{color:var(--red);text-decoration:line-through;
+    text-decoration-thickness:1.5px;text-decoration-color:color-mix(in srgb,var(--red) 55%,transparent)}
+  .box.cut .d{color:var(--red);opacity:.85}
+  .xmark{display:grid;place-items:center;width:54px;height:48px;color:var(--red);
+    font-size:24px;font-weight:700}
+  @media (max-width:520px){.xmark{width:42px;height:42px;font-size:20px}}
 
-  .card.cut{background:var(--cut-bg);border-color:var(--cut-line);border-style:dashed}
-  .card.cut .t{color:var(--cut-ink);text-decoration:line-through;
-    text-decoration-thickness:1.5px;text-decoration-color:var(--cut)}
-  .card.cut .d{color:var(--cut-ink);opacity:.8}
-  .card.cut .tile{background:transparent;border:0;color:var(--cut-ink);font-weight:700;font-size:17px}
+  /* auto / hold */
+  .box.auto{background:color-mix(in srgb,var(--green-bg) 85%,transparent);border:1px dashed var(--green-line)}
+  .box.auto .t{color:var(--green)}
+  .box.hold{background:var(--hold-bg);border:1px dashed var(--hold-line)}
+  .box.hold .t{color:var(--hold)}
+  .box.hold .d{color:var(--hold);opacity:.9}
 
-  .card.key{border-color:var(--aft-line);border-width:2px;box-shadow:0 1px 0 var(--aft-line)}
-  .card.auto{background:var(--aft-bg);border-style:dashed;border-color:var(--aft-line)}
-  .card.auto .t{color:var(--aft)}
-  .card.hold{background:var(--hold-bg);border-color:var(--hold-line);border-style:dashed}
-  .card.hold .t{color:var(--hold)}
-  .card.hold .d{color:var(--hold);opacity:.85}
-  .card.hold .tile{background:transparent;border:0;color:var(--hold)}
+  /* inline mini-diagram, mirrors 設計図 → 実体 */
+  .mini{display:flex;align-items:center;gap:9px;margin-top:9px;flex-wrap:wrap}
+  .mini .src{border:1px dashed var(--dash);border-radius:6px;padding:4px 9px;
+    font-size:11.5px;color:var(--muted);font-family:'JetBrains Mono',monospace}
+  .mini .to{color:var(--red);font-size:15px;line-height:1}
+  .mini .dst{background:var(--t-red);color:#fff;border-radius:6px;padding:4px 11px;
+    font-size:12px;font-weight:700}
 
-  .arw{display:grid;place-items:center;height:16px;color:var(--arrow);font-size:13px;line-height:1}
-  .none{padding:16px 2px;color:var(--muted);font-size:13px;font-style:normal;
-    border:1px dashed var(--line);border-radius:8px;margin:8px 0;text-align:center}
+  /* pause divider */
+  .pause{display:flex;align-items:center;gap:12px;margin:12px 0;
+    font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.14em;color:var(--muted)}
+  .pause::before,.pause::after{content:"";flex:1;height:0;
+    border-top:2px dashed var(--dash)}
 
-  /* ── collapse marker ── */
-  .collapse{
-    grid-column:1/-1;display:flex;align-items:center;justify-content:center;gap:10px;
-    margin:10px 0 2px;font-size:12.5px;color:var(--cut-ink);
-    font-family:'JetBrains Mono',monospace;letter-spacing:.06em;
-  }
+  .collapse{margin:10px 0 2px;padding:9px 14px;border-radius:7px;
+    background:var(--red-bg);border:1px dashed var(--red-line);
+    font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--red);text-align:center}
 
-  /* ── totals ── */
-  .totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0;
-    border:1px solid var(--line);border-radius:10px;margin:30px 0 0;background:var(--card);overflow:hidden}
-  .tot{padding:16px 18px;border-right:1px solid var(--line2)}
+  /* ===== totals & notes ===== */
+  .totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));
+    border:1px solid var(--line);border-radius:10px;margin:28px 0 0;background:var(--card);overflow:hidden}
+  .tot{padding:15px 18px;border-right:1px solid var(--line)}
   .tot:last-child{border-right:0}
-  @media (max-width:640px){.tot{border-right:0;border-bottom:1px solid var(--line2)}.tot:last-child{border-bottom:0}}
-  .tot b{display:block;font-family:'JetBrains Mono',monospace;font-size:27px;font-weight:700;
+  @media (max-width:600px){.tot{border-right:0;border-bottom:1px solid var(--line)}.tot:last-child{border-bottom:0}}
+  .tot b{display:block;font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;
     line-height:1.15;font-variant-numeric:tabular-nums}
-  .tot span{font-size:12.5px;color:var(--muted)}
-  .tot.a b{color:var(--now)} .tot.b b{color:var(--aft)}
-  .tot.c b{color:var(--cut-ink)} .tot.d b{color:var(--ink)}
+  .tot span{font-size:12px;color:var(--muted)}
+  .tot.a b{color:var(--blue)} .tot.b b{color:var(--green)}
+  .tot.c b{color:var(--red)}  .tot.d b{color:var(--ink)}
 
-  .why{margin:26px 0 0;padding:18px 22px;background:var(--aft-bg);border-left:3px solid var(--aft);
-    border-radius:0 8px 8px 0;max-width:68ch}
-  .why b{display:block;font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.16em;
-    color:var(--aft);margin-bottom:6px;font-weight:500}
+  .why{margin:22px 0 0;padding:16px 20px;background:var(--green-bg);
+    border-left:3px solid var(--green);border-radius:0 8px 8px 0;max-width:60ch}
+  .why b{display:block;font-family:'JetBrains Mono',monospace;font-size:10.5px;
+    letter-spacing:.16em;color:var(--green);margin-bottom:6px;font-weight:500}
   .why p{margin:0;font-size:15px}
-  .open{margin:16px 0 0;padding:16px 20px;background:var(--hold-bg);border-left:3px solid var(--hold);
-    border-radius:0 8px 8px 0;max-width:68ch;font-size:14px;color:var(--ink2)}
-  .open b{display:block;font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.16em;
-    color:var(--hold);margin-bottom:6px;font-weight:500}
+  .open{margin:14px 0 0;padding:15px 20px;background:var(--hold-bg);
+    border-left:3px solid var(--hold);border-radius:0 8px 8px 0;max-width:60ch;
+    font-size:13.5px;color:var(--ink2)}
+  .open b{display:block;font-family:'JetBrains Mono',monospace;font-size:10.5px;
+    letter-spacing:.16em;color:var(--hold);margin-bottom:6px;font-weight:500}
   .open a{color:var(--hold);text-underline-offset:2px}
-  footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line2);
-    font-size:12px;color:var(--muted)}
-  @media print{body{background:#fff}.wrap{padding:0}.chead{position:static}}
+  footer{margin-top:30px;padding-top:14px;border-top:1px solid var(--line);
+    font-size:11.5px;color:var(--muted)}
+  @media print{body{background:#fff}.wrap{padding:0}}
 </style>
 
 <div class="wrap">
 <header>
-  <p class="sub mono">1 と 2 の比較 — 何がショートカットされるか</p>
+  <p class="kicker">1 と 2 の比較 — 何がショートカットされるか</p>
   <h1>中断から再開まで</h1>
   <p class="sub">題材：「管理画面の PR をレビューする」（応募書類の例）</p>
   <p class="thesis">消えるのは <strong>探す・思い出す・読み直す</strong> の6手順。
@@ -164,120 +158,112 @@
 </header>
 
 <div class="legend">
-  <b><span class="sw n"></span>そのまま残る手順</b>
+  <b><span class="sw"></span>そのまま残る</b>
   <b><span class="sw k"></span>消える手順</b>
-  <b><span class="sw h"></span>まだ決めていない範囲</b>
+  <b><span class="sw h"></span>まだ決めていない</b>
 </div>
 
-<div class="cmp">
+<!-- ============ GROUP 1 ============ -->
+<section class="group g1">
+  <h2 class="gtitle">1. 現在の流れ<small>PR レビュー1件あたり 14 手順</small></h2>
 
-  <div class="chead now"><span class="n">1</span><span>現在の流れ</span></div>
-  <div class="chead aft"><span class="n">2</span><span>Atra 導入後</span></div>
+  <div class="row"><div class="box"><div class="t">1-1. レビュー依頼が届く</div>
+    <div class="d">チャットで「#289 見ておいて」と言われる</div></div><div class="tile b">💬</div></div>
+  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
 
-  <!-- phase 0 -->
-  <div class="band">事前 — 一度だけ</div>
-  <div class="cell now first">
-    <div class="only">1 現在の流れ</div>
-    <div class="none">事前の準備はない</div>
-  </div>
-  <div class="cell aft first">
-    <div class="only">2 Atra 導入後</div>
-    <div class="card">
-      <div><div class="t">見る範囲を決める</div>
-        <div class="d">このリポジトリ、このチャンネル。<strong>決めるのは最初の一度だけ</strong></div></div>
-      <div class="tile">🎯</div>
-    </div>
-  </div>
+  <div class="row"><div class="box"><div class="t">1-2.「あとで見ます」と返す</div></div><div class="tile s">↩</div></div>
+  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
 
-  <!-- phase A -->
-  <div class="band">A — 依頼を受ける</div>
-  <div class="cell now">
-    <div class="only">1 現在の流れ</div>
-    <div class="card"><div><div class="t">① レビュー依頼が届く</div></div><div class="tile">💬</div></div>
-    <div class="arw">▼</div>
-    <div class="card"><div><div class="t">②「あとで見ます」と返す</div></div><div class="tile">↩</div></div>
-    <div class="arw">▼</div>
-    <div class="card"><div><div class="t">③ 別の作業に戻る</div></div><div class="tile">⇤</div></div>
-  </div>
-  <div class="cell aft">
-    <div class="only">2 Atra 導入後</div>
-    <div class="card"><div><div class="t">① レビュー依頼が届く</div></div><div class="tile">💬</div></div>
-    <div class="arw">▼</div>
-    <div class="card auto">
-      <div><div class="t">Atra が1つにまとめる</div>
-        <div class="d">PR・Issue・スレッド・期限を拾って作業単位にする。<strong>人の操作なし</strong></div></div>
-      <div class="tile">⚙</div>
-    </div>
-    <div class="arw">▼</div>
-    <div class="card"><div><div class="t">②「あとで見ます」と返す</div></div><div class="tile">↩</div></div>
-    <div class="arw">▼</div>
-    <div class="card"><div><div class="t">③ 別の作業に戻る</div></div><div class="tile">⇤</div></div>
-  </div>
+  <div class="row"><div class="box"><div class="t">1-3. 別の作業に戻る</div></div><div class="tile s">⇤</div></div>
 
-  <!-- pause -->
-  <div class="band pause">④ 中断 — 数時間 〜 数日</div>
+  <div class="pause">1-4. 中断 — 数時間 〜 数日</div>
 
-  <!-- phase B -->
-  <div class="band">B — 再開する　←　ここが変わる</div>
-  <div class="cell now">
-    <div class="only">1 現在の流れ</div>
-    <div class="card"><div><div class="t">⑤ 机に座る</div></div><div class="tile">🪑</div></div>
-    <div class="arw">▼</div>
-    <div class="card cut"><div><div class="t">⑥ 何を頼まれていたか思い出す</div></div><div class="tile">✗</div></div>
-    <div class="arw">▼</div>
-    <div class="card cut"><div><div class="t">⑦ Slack を遡って依頼を探す</div></div><div class="tile">✗</div></div>
-    <div class="arw">▼</div>
-    <div class="card"><div><div class="t">⑧ PR を開く</div></div><div class="tile">🔗</div></div>
-    <div class="arw">▼</div>
-    <div class="card cut"><div><div class="t">⑨ 何のための変更か → Issue を探す</div></div><div class="tile">✗</div></div>
-    <div class="arw">▼</div>
-    <div class="card cut"><div><div class="t">⑩ どこまで見たか → 差分を読み直す</div></div><div class="tile">✗</div></div>
-    <div class="arw">▼</div>
-    <div class="card cut"><div><div class="t">⑪ 期限 → カレンダーを見る</div></div><div class="tile">✗</div></div>
-  </div>
-  <div class="cell aft">
-    <div class="only">2 Atra 導入後</div>
-    <div class="card"><div><div class="t">⑤ 机に座る。Atra を開く</div></div><div class="tile">🪑</div></div>
-    <div class="arw">▼</div>
-    <div class="card key">
-      <div><div class="t">⑥ 一覧から選ぶ</div>
-        <div class="d">依頼・対象の PR・背景の Issue・期限・まだ確認できていない点が<strong>1枚にそろっている</strong></div></div>
-      <div class="tile">📄</div>
-    </div>
-    <div class="arw">▼</div>
-    <div class="card"><div><div class="t">⑦ PR・Issue・スレッドが開く</div></div><div class="tile">🔗</div></div>
-  </div>
+  <div class="row"><div class="box"><div class="t">1-5. 机に座る</div></div><div class="tile o">🪑</div></div>
+  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
 
-  <div class="collapse">現在の 6 手順　→　導入後の 2 手順</div>
+  <div class="row"><div class="box cut"><div class="t">1-6. 何を頼まれていたか思い出す</div></div><div class="xmark">✕</div></div>
+  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
 
-  <!-- phase C -->
-  <div class="band">C — 作業して返す</div>
-  <div class="cell now last">
-    <div class="only">1 現在の流れ</div>
-    <div class="card"><div><div class="t">⑫ 指摘を書く</div></div><div class="tile">✍</div></div>
-    <div class="arw">▼</div>
-    <div class="card cut">
-      <div><div class="t">⑬ 未確認の点をどこかにメモ</div>
-        <div class="d">次に開いたとき見つからない</div></div>
-      <div class="tile">✗</div>
-    </div>
-    <div class="arw">▼</div>
-    <div class="card"><div><div class="t">⑭「見ました」と返す</div></div><div class="tile">↩</div></div>
-  </div>
-  <div class="cell aft last">
-    <div class="only">2 Atra 導入後</div>
-    <div class="card"><div><div class="t">⑧ 指摘を書く</div></div><div class="tile">✍</div></div>
-    <div class="arw">▼</div>
-    <div class="card hold">
-      <div><div class="t">この範囲に Atra はいない</div>
-        <div class="d">作業中に Atra が何をするかは未決定</div></div>
-      <div class="tile">？</div>
-    </div>
-    <div class="arw">▼</div>
-    <div class="card"><div><div class="t">⑨「見ました」と返す</div></div><div class="tile">↩</div></div>
-  </div>
+  <div class="row"><div class="box cut"><div class="t">1-7. チャットを遡って依頼を探す</div></div><div class="xmark">✕</div></div>
+  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
 
-</div>
+  <div class="row"><div class="box"><div class="t">1-8. PR を開く</div></div><div class="tile p">🔗</div></div>
+  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
+
+  <div class="row"><div class="box cut"><div class="t">1-9. 何のための変更か分からない</div>
+    <div class="d">Issue を探しに行く</div></div><div class="xmark">✕</div></div>
+  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
+
+  <div class="row"><div class="box cut"><div class="t">1-10. どこまで見たか分からない</div>
+    <div class="d">差分を最初から読み直す</div></div><div class="xmark">✕</div></div>
+  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
+
+  <div class="row"><div class="box cut"><div class="t">1-11. 期限が分からない</div>
+    <div class="d">カレンダーを見に行く</div></div><div class="xmark">✕</div></div>
+  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
+
+  <div class="row"><div class="box"><div class="t">1-12. 指摘を書く</div></div><div class="tile g">✍</div></div>
+  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
+
+  <div class="row"><div class="box cut"><div class="t">1-13. 未確認の点をどこかにメモ</div>
+    <div class="d">次に開いたとき見つからない</div></div><div class="xmark">✕</div></div>
+  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
+
+  <div class="row"><div class="box"><div class="t">1-14.「見ました」と返す</div></div><div class="tile s">↩</div></div>
+
+  <div class="collapse">✕ の 6 手順では、何も作られていない</div>
+</section>
+
+<!-- big arrow between groups, as in the reference -->
+<div class="down big"><svg width="34" height="42" viewBox="0 0 34 42" aria-hidden="true">
+  <path d="M11 0h12v23h8l-14 19L3 23h8z" fill="#9aa4ad"/></svg></div>
+
+<!-- ============ GROUP 2 ============ -->
+<section class="group g2">
+  <h2 class="gtitle">2. Atra 導入後<small>同じ1件が 9 手順</small></h2>
+
+  <div class="row"><div class="box"><div class="t">2-0. 見る範囲を決める</div>
+    <div class="d">このリポジトリ、このチャンネル。<strong>決めるのは最初の一度だけ</strong></div></div>
+    <div class="tile o">🎯</div></div>
+  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
+
+  <div class="row"><div class="box"><div class="t">2-1. レビュー依頼が届く</div></div><div class="tile b">💬</div></div>
+  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
+
+  <div class="row"><div class="box auto"><div class="t">Atra が1つにまとめる</div>
+    <div class="d">PR・Issue・スレッド・期限を拾って作業単位にする。<strong>人の操作なし</strong></div>
+    <div class="mini"><span class="src">5 か所に散らばった情報</span><span class="to">➜</span><span class="dst">1 枚</span></div>
+    </div><div class="tile g">⚙</div></div>
+  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
+
+  <div class="row"><div class="box"><div class="t">2-2.「あとで見ます」と返す</div></div><div class="tile s">↩</div></div>
+  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
+
+  <div class="row"><div class="box"><div class="t">2-3. 別の作業に戻る</div></div><div class="tile s">⇤</div></div>
+
+  <div class="pause">2-4. 中断 — 数時間 〜 数日</div>
+
+  <div class="row"><div class="box"><div class="t">2-5. 机に座る。Atra を開く</div></div><div class="tile o">🪑</div></div>
+  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
+
+  <div class="row"><div class="box"><div class="t">2-6. 一覧から選ぶ</div>
+    <div class="d">依頼・対象の PR・背景の Issue・期限・まだ確認できていない点が<strong>1枚にそろっている</strong><br>
+    ← 現在の 1-6 / 1-7 / 1-9 / 1-10 / 1-11 がここで消える</div></div>
+    <div class="tile p">📄</div></div>
+  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
+
+  <div class="row"><div class="box"><div class="t">2-7. PR・Issue・スレッドが開く</div></div><div class="tile p">🔗</div></div>
+  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
+
+  <div class="row"><div class="box"><div class="t">2-8. 指摘を書く</div></div><div class="tile g">✍</div></div>
+  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
+
+  <div class="row"><div class="box hold"><div class="t">この範囲に Atra はいない</div>
+    <div class="d">作業中に Atra が何をするかは未決定</div></div><div class="tile none" style="color:var(--hold);font-weight:700">？</div></div>
+  <div class="down"><svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M7 0h8v14h5l-9 12-9-12h5z" fill="#9aa4ad"/></svg></div>
+
+  <div class="row"><div class="box"><div class="t">2-9.「見ました」と返す</div></div><div class="tile s">↩</div></div>
+</section>
 
 <div class="totals">
   <div class="tot a"><b>14</b><span>現在の手順数</span></div>
@@ -293,9 +279,9 @@
 </div>
 
 <div class="open">
-  <b>この図が確定しているのは C の手前まで</b>
-  ①〜⑦ が含んでいるのは <strong>見つける・まとめる・提示する</strong> の2層だけです。
-  作業中（C）に Atra が何をするかは決めていません。
+  <b>この図が確定しているのは 2-7 まで</b>
+  2-0〜2-7 が含んでいるのは <strong>見つける・まとめる・提示する</strong> の2層だけです。
+  作業中（2-8 以降）に Atra が何をするかは決めていません。
   分岐の検討は <a href="https://github.com/haya10hikawa-hub/Atra-workunitOS/issues/257">Issue #257</a> にあります。
 </div>
 
